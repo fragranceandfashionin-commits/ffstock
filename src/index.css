@@ -1,0 +1,57 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    @apply bg-slate-50 text-slate-900 antialiased selection:bg-slate-900 selection:text-white;
+  }
+}
+
+/* Glassmorphism utility */
+.glass-panel {
+  @apply bg-white/85 backdrop-blur-md border border-slate-200/80 shadow-sm;
+}
+
+/* Focus styles */
+.focus-ring {
+  @apply focus:outline-none focus:ring-2 focus:ring-slate-900 focus:ring-offset-2;
+}
+
+/* Custom subtle scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-300 rounded-full hover:bg-slate-400;
+}
+
+/* Sticky column shadow separator */
+.sticky-col-shadow {
+  box-shadow: 4px 0 6px -2px rgba(0, 0, 0, 0.05);
+}
+
+/* Print utilities for factory reports */
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  header, footer, nav, button, .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  .card, table, tr, td, th {
+    break-inside: avoid;
+    box-shadow: none !important;
+  }
+}
