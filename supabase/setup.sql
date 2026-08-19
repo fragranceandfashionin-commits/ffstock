@@ -40,6 +40,10 @@ CREATE TABLE IF NOT EXISTS suppliers (
 CREATE TABLE IF NOT EXISTS items (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text NOT NULL CHECK (char_length(trim(name)) > 0),
+  category text NOT NULL DEFAULT 'Bottle',
+  unit text NOT NULL DEFAULT 'pcs',
+  description text,
+  color text,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -59,6 +63,10 @@ CREATE TABLE IF NOT EXISTS inward_batches (
   qty_received integer NOT NULL CHECK (qty_received > 0),
   location text NOT NULL CHECK (char_length(trim(location)) > 0),
   image_url text,
+  color text,
+  cap_item_id uuid REFERENCES items(id),
+  atomizer_item_id uuid REFERENCES items(id),
+  box_item_id uuid REFERENCES items(id),
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -71,6 +79,12 @@ CREATE TABLE IF NOT EXISTS stage_movements (
   moved_on date NOT NULL DEFAULT current_date,
   cap_name text,
   atomizer_name text,
+  box_name text,
+  color text,
+  printing_design text,
+  cap_item_id uuid REFERENCES items(id),
+  atomizer_item_id uuid REFERENCES items(id),
+  box_item_id uuid REFERENCES items(id),
   location text,
   image_url text,
   remarks text,
@@ -86,16 +100,26 @@ CREATE TABLE IF NOT EXISTS dispatches (
   customer_name text NOT NULL CHECK (char_length(trim(customer_name)) > 0),
   invoice_no text NOT NULL CHECK (char_length(trim(invoice_no)) > 0),
   dispatched_on date NOT NULL DEFAULT current_date,
+  color text,
+  printing_design text,
+  cap_name text,
+  atomizer_name text,
+  box_name text,
+  box_item_id uuid REFERENCES items(id),
+  product_specs text,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS inward_batches_received_on_idx ON inward_batches(received_on DESC);
+CREATE INDEX IF NOT EXISTS inward_batches_box_item_id_idx ON inward_batches(box_item_id);
 CREATE INDEX IF NOT EXISTS stage_movements_batch_id_idx ON stage_movements(batch_id);
+CREATE INDEX IF NOT EXISTS stage_movements_box_item_id_idx ON stage_movements(box_item_id);
 CREATE INDEX IF NOT EXISTS dispatches_batch_id_idx ON dispatches(batch_id);
+CREATE INDEX IF NOT EXISTS dispatches_box_item_id_idx ON dispatches(box_item_id);
 
 INSERT INTO stages (name, sequence_no) VALUES
   ('Raw Stock', 1), ('Coloring', 2), ('Printing', 3), ('Filling', 4),
-  ('Packaging', 5), ('Ready', 6), ('Dispatched', 7)
+  ('Packaging', 5), ('Ready', 6), ('Dispatched', 7), ('Scrap / Defect', 8)
 ON CONFLICT (name) DO NOTHING;
 
 ALTER TABLE suppliers ENABLE ROW LEVEL SECURITY;
@@ -131,13 +155,6 @@ BEGIN
   FROM inward_batches ib WHERE ib.id = NEW.batch_id;
   IF available IS NULL OR NEW.qty_moved > available THEN
     RAISE EXCEPTION 'Not enough stock available for this batch at the selected stage';
-  END IF;
-
-  -- Mandatory Cap Name & Atomizer Name validation when moving from Filling stage
-  IF EXISTS (SELECT 1 FROM stages s WHERE s.id = NEW.from_stage_id AND s.name = 'Filling') THEN
-    IF NEW.cap_name IS NULL OR char_length(trim(NEW.cap_name)) = 0 OR NEW.atomizer_name IS NULL OR char_length(trim(NEW.atomizer_name)) = 0 THEN
-      RAISE EXCEPTION 'Cap Name and Atomizer Name are mandatory when moving bottles from the Filling stage.';
-    END IF;
   END IF;
 
   RETURN NEW;
@@ -227,6 +244,7 @@ CREATE POLICY "shared_insert_suppliers" ON suppliers FOR INSERT TO anon, authent
 CREATE POLICY "shared_delete_suppliers" ON suppliers FOR DELETE TO anon, authenticated USING (true);
 CREATE POLICY "shared_select_items" ON items FOR SELECT TO anon, authenticated USING (true);
 CREATE POLICY "shared_insert_items" ON items FOR INSERT TO anon, authenticated WITH CHECK (true);
+CREATE POLICY "shared_update_items" ON items FOR UPDATE TO anon, authenticated USING (true) WITH CHECK (true);
 CREATE POLICY "shared_delete_items" ON items FOR DELETE TO anon, authenticated USING (true);
 
 -- Ledger tables: the UI only inserts; reads stay open for all roles.
@@ -410,13 +428,6 @@ BEGIN
     RAISE EXCEPTION 'Not enough stock available for this batch at the selected stage';
   END IF;
 
-  -- Mandatory Cap Name & Atomizer Name validation when moving from Filling stage
-  IF EXISTS (SELECT 1 FROM stages s WHERE s.id = NEW.from_stage_id AND s.name = 'Filling') THEN
-    IF NEW.cap_name IS NULL OR char_length(trim(NEW.cap_name)) = 0 OR NEW.atomizer_name IS NULL OR char_length(trim(NEW.atomizer_name)) = 0 THEN
-      RAISE EXCEPTION 'Cap Name and Atomizer Name are mandatory when moving bottles from the Filling stage.';
-    END IF;
-  END IF;
-
   RETURN NEW;
 END;
 $$;
@@ -496,7 +507,7 @@ SELECT
   (CASE WHEN s.sequence_no = 1 THEN ib.qty_received ELSE 0 END
    + COALESCE(m_in.qty, 0)
    - COALESCE(m_out.qty, 0)
-   - CASE WHEN s.name = 'Ready' THEN d.qty ELSE 0 END) AS qty
+   - CASE WHEN s.name = 'Ready' THEN COALESCE(d.qty, 0) ELSE 0 END) AS qty
 FROM inward_batches ib
 CROSS JOIN stages s
 LEFT JOIN (SELECT batch_id, to_stage_id AS stage_id, SUM(qty_moved) AS qty
@@ -604,3 +615,463 @@ CREATE TRIGGER allow_empty_batch_delete_inward_batches
 DROP POLICY IF EXISTS "shared_delete_inward_batches" ON inward_batches;
 CREATE POLICY "shared_delete_inward_batches"
   ON inward_batches FOR DELETE TO anon, authenticated USING (true);
+
+-- ============================================================
+-- PART 6: Scrap / Defect Tracking & Concurrent Stage Movement Validation
+-- ============================================================
+
+INSERT INTO stages (name, sequence_no)
+VALUES ('Scrap / Defect', 8)
+ON CONFLICT (name) DO NOTHING;
+
+CREATE OR REPLACE FUNCTION validate_stage_movement() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  available integer;
+BEGIN
+  -- Serialize concurrent inserts for the same batch
+  PERFORM 1 FROM inward_batches WHERE id = NEW.batch_id FOR UPDATE;
+
+  SELECT
+      -- Units that entered this stage
+      COALESCE((SELECT SUM(sm.qty_moved) FROM stage_movements sm
+                WHERE sm.batch_id = NEW.batch_id AND sm.to_stage_id = NEW.from_stage_id), 0)
+      -- The first stage starts with the received quantity
+      + CASE WHEN EXISTS (SELECT 1 FROM stages s WHERE s.id = NEW.from_stage_id AND s.sequence_no = 1)
+             THEN ib.qty_received ELSE 0 END
+      -- Units that already left this stage
+      - COALESCE((SELECT SUM(sm.qty_moved) FROM stage_movements sm
+                  WHERE sm.batch_id = NEW.batch_id AND sm.from_stage_id = NEW.from_stage_id), 0)
+      -- Units already dispatched (only relevant when moving out of Ready)
+      - CASE WHEN EXISTS (SELECT 1 FROM stages s WHERE s.id = NEW.from_stage_id AND s.name = 'Ready')
+             THEN COALESCE((SELECT SUM(d.qty) FROM dispatches d WHERE d.batch_id = NEW.batch_id), 0)
+             ELSE 0 END
+  INTO available
+  FROM inward_batches ib WHERE ib.id = NEW.batch_id;
+
+  IF available IS NULL OR NEW.qty_moved > available THEN
+    RAISE EXCEPTION 'Not enough stock available for this batch at the selected stage';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+-- ============================================================
+-- PART 7: Idempotent Schema Upgrades for Existing Databases
+-- (Ensures all columns exist even if tables were created previously)
+-- ============================================================
+
+ALTER TABLE items ADD COLUMN IF NOT EXISTS category text NOT NULL DEFAULT 'Bottle';
+ALTER TABLE items ADD COLUMN IF NOT EXISTS unit text NOT NULL DEFAULT 'pcs';
+ALTER TABLE items ADD COLUMN IF NOT EXISTS description text;
+ALTER TABLE items ADD COLUMN IF NOT EXISTS color text;
+
+ALTER TABLE inward_batches ADD COLUMN IF NOT EXISTS image_url text;
+ALTER TABLE inward_batches ADD COLUMN IF NOT EXISTS color text;
+ALTER TABLE inward_batches ADD COLUMN IF NOT EXISTS cap_item_id uuid REFERENCES items(id);
+ALTER TABLE inward_batches ADD COLUMN IF NOT EXISTS atomizer_item_id uuid REFERENCES items(id);
+ALTER TABLE inward_batches ADD COLUMN IF NOT EXISTS box_item_id uuid REFERENCES items(id);
+
+ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS cap_name text;
+ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS atomizer_name text;
+ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS box_name text;
+ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS color text;
+ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS printing_design text;
+ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS cap_item_id uuid REFERENCES items(id);
+ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS atomizer_item_id uuid REFERENCES items(id);
+ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS box_item_id uuid REFERENCES items(id);
+ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS location text;
+ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS image_url text;
+ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS remarks text;
+ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS done_by text;
+
+ALTER TABLE dispatches ADD COLUMN IF NOT EXISTS color text;
+ALTER TABLE dispatches ADD COLUMN IF NOT EXISTS printing_design text;
+ALTER TABLE dispatches ADD COLUMN IF NOT EXISTS cap_name text;
+ALTER TABLE dispatches ADD COLUMN IF NOT EXISTS atomizer_name text;
+ALTER TABLE dispatches ADD COLUMN IF NOT EXISTS box_name text;
+ALTER TABLE dispatches ADD COLUMN IF NOT EXISTS box_item_id uuid REFERENCES items(id);
+ALTER TABLE dispatches ADD COLUMN IF NOT EXISTS product_specs text;
+
+CREATE INDEX IF NOT EXISTS inward_batches_box_item_id_idx ON inward_batches(box_item_id);
+CREATE INDEX IF NOT EXISTS stage_movements_box_item_id_idx ON stage_movements(box_item_id);
+CREATE INDEX IF NOT EXISTS dispatches_box_item_id_idx ON dispatches(box_item_id);
+
+-- Component independent quantity tracking
+ALTER TABLE inward_batches ADD COLUMN IF NOT EXISTS cap_qty integer;
+ALTER TABLE inward_batches ADD COLUMN IF NOT EXISTS atomizer_qty integer;
+ALTER TABLE inward_batches ADD COLUMN IF NOT EXISTS box_qty integer;
+
+ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS cap_qty_used integer;
+ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS atomizer_qty_used integer;
+ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS box_qty_used integer;
+
+-- ============================================================
+-- PART 8: Item Stock Intake & Warehouse Inventory Receipts
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS item_stock_receipts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  item_id uuid NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  supplier_id uuid REFERENCES suppliers(id) ON DELETE SET NULL,
+  qty integer NOT NULL CHECK (qty > 0),
+  received_on date NOT NULL DEFAULT current_date,
+  invoice_no text,
+  location text,
+  remarks text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS item_stock_receipts_item_id_idx ON item_stock_receipts(item_id);
+CREATE INDEX IF NOT EXISTS item_stock_receipts_received_on_idx ON item_stock_receipts(received_on DESC);
+
+ALTER TABLE item_stock_receipts ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+  DROP POLICY IF EXISTS "shared_select_item_stock_receipts" ON item_stock_receipts;
+  DROP POLICY IF EXISTS "shared_insert_item_stock_receipts" ON item_stock_receipts;
+  DROP POLICY IF EXISTS "shared_update_item_stock_receipts" ON item_stock_receipts;
+  DROP POLICY IF EXISTS "shared_delete_item_stock_receipts" ON item_stock_receipts;
+
+  CREATE POLICY "shared_select_item_stock_receipts" ON item_stock_receipts FOR SELECT TO anon, authenticated USING (true);
+  CREATE POLICY "shared_insert_item_stock_receipts" ON item_stock_receipts FOR INSERT TO anon, authenticated WITH CHECK (true);
+  CREATE POLICY "shared_update_item_stock_receipts" ON item_stock_receipts FOR UPDATE TO anon, authenticated USING (true) WITH CHECK (true);
+  CREATE POLICY "shared_delete_item_stock_receipts" ON item_stock_receipts FOR DELETE TO anon, authenticated USING (true);
+END $$;
+
+-- ============================================================
+-- PART 9: Component Stock (BOM) Aggregation View
+-- ============================================================
+
+CREATE OR REPLACE VIEW v_component_stock
+WITH (security_invoker = true) AS
+WITH
+  receipts_agg AS (
+    SELECT item_id, COALESCE(SUM(qty), 0) AS qty, COUNT(id) AS receipt_count
+    FROM item_stock_receipts
+    GROUP BY item_id
+  ),
+  direct_batches_agg AS (
+    SELECT item_id, COALESCE(SUM(qty_received), 0) AS qty, COUNT(id) AS batch_count
+    FROM inward_batches
+    GROUP BY item_id
+  ),
+  attached_caps_agg AS (
+    SELECT cap_item_id AS item_id, COALESCE(SUM(COALESCE(cap_qty, qty_received)), 0) AS qty, COUNT(id) AS batch_count
+    FROM inward_batches
+    WHERE cap_item_id IS NOT NULL AND (item_id IS NULL OR cap_item_id <> item_id)
+    GROUP BY cap_item_id
+  ),
+  attached_atomizers_agg AS (
+    SELECT atomizer_item_id AS item_id, COALESCE(SUM(COALESCE(atomizer_qty, qty_received)), 0) AS qty, COUNT(id) AS batch_count
+    FROM inward_batches
+    WHERE atomizer_item_id IS NOT NULL AND (item_id IS NULL OR atomizer_item_id <> item_id)
+    GROUP BY atomizer_item_id
+  ),
+  attached_boxes_agg AS (
+    SELECT box_item_id AS item_id, COALESCE(SUM(COALESCE(box_qty, qty_received)), 0) AS qty, COUNT(id) AS batch_count
+    FROM inward_batches
+    WHERE box_item_id IS NOT NULL AND (item_id IS NULL OR box_item_id <> item_id)
+    GROUP BY box_item_id
+  ),
+  cap_moves_agg AS (
+    SELECT 
+      sm.cap_item_id AS item_id,
+      COALESCE(SUM(CASE WHEN s_to.name <> 'Scrap / Defect' THEN COALESCE(sm.cap_qty_used, sm.qty_moved) ELSE 0 END), 0) AS qty_used,
+      COALESCE(SUM(CASE WHEN s_to.name = 'Scrap / Defect' THEN COALESCE(sm.cap_qty_used, sm.qty_moved) ELSE 0 END), 0) AS qty_scrapped,
+      COUNT(sm.id) AS movement_count
+    FROM stage_movements sm
+    LEFT JOIN stages s_to ON s_to.id = sm.to_stage_id
+    WHERE sm.cap_item_id IS NOT NULL
+    GROUP BY sm.cap_item_id
+  ),
+  atomizer_moves_agg AS (
+    SELECT 
+      sm.atomizer_item_id AS item_id,
+      COALESCE(SUM(CASE WHEN s_to.name <> 'Scrap / Defect' THEN COALESCE(sm.atomizer_qty_used, sm.qty_moved) ELSE 0 END), 0) AS qty_used,
+      COALESCE(SUM(CASE WHEN s_to.name = 'Scrap / Defect' THEN COALESCE(sm.atomizer_qty_used, sm.qty_moved) ELSE 0 END), 0) AS qty_scrapped,
+      COUNT(sm.id) AS movement_count
+    FROM stage_movements sm
+    LEFT JOIN stages s_to ON s_to.id = sm.to_stage_id
+    WHERE sm.atomizer_item_id IS NOT NULL
+    GROUP BY sm.atomizer_item_id
+  ),
+  box_moves_agg AS (
+    SELECT 
+      sm.box_item_id AS item_id,
+      COALESCE(SUM(CASE WHEN s_to.name <> 'Scrap / Defect' THEN COALESCE(sm.box_qty_used, sm.qty_moved) ELSE 0 END), 0) AS qty_used,
+      COALESCE(SUM(CASE WHEN s_to.name = 'Scrap / Defect' THEN COALESCE(sm.box_qty_used, sm.qty_moved) ELSE 0 END), 0) AS qty_scrapped,
+      COUNT(sm.id) AS movement_count
+    FROM stage_movements sm
+    LEFT JOIN stages s_to ON s_to.id = sm.to_stage_id
+    WHERE sm.box_item_id IS NOT NULL
+    GROUP BY sm.box_item_id
+  ),
+  dispatches_box_agg AS (
+    SELECT box_item_id AS item_id, COALESCE(SUM(qty), 0) AS qty
+    FROM dispatches
+    WHERE box_item_id IS NOT NULL
+    GROUP BY box_item_id
+  )
+SELECT
+  i.id AS item_id,
+  i.name AS item_name,
+  i.category,
+  i.unit,
+  (COALESCE(r.qty, 0) + COALESCE(db.qty, 0) + COALESCE(ac.qty, 0) + COALESCE(aa.qty, 0) + COALESCE(ab.qty, 0)) AS total_inwarded,
+  (COALESCE(r.receipt_count, 0) + COALESCE(db.batch_count, 0) + COALESCE(ac.batch_count, 0) + COALESCE(aa.batch_count, 0) + COALESCE(ab.batch_count, 0)) AS inward_batch_count,
+  (COALESCE(cm.qty_used, 0) + COALESCE(am.qty_used, 0) + COALESCE(bm.qty_used, 0) + (CASE WHEN lower(i.category) = 'bottle' THEN COALESCE(db.qty, 0) ELSE 0 END)) AS total_used,
+  (COALESCE(cm.movement_count, 0) + COALESCE(am.movement_count, 0) + COALESCE(bm.movement_count, 0) + (CASE WHEN lower(i.category) = 'bottle' THEN COALESCE(db.batch_count, 0) ELSE 0 END)) AS used_in_batch_count,
+  (COALESCE(cm.qty_scrapped, 0) + COALESCE(am.qty_scrapped, 0) + COALESCE(bm.qty_scrapped, 0)) AS total_scrapped,
+  COALESCE(dbx.qty, 0) AS total_dispatched,
+  GREATEST(0, (COALESCE(r.qty, 0) + COALESCE(db.qty, 0) + COALESCE(ac.qty, 0) + COALESCE(aa.qty, 0) + COALESCE(ab.qty, 0)) 
+    - (COALESCE(cm.qty_used, 0) + COALESCE(am.qty_used, 0) + COALESCE(bm.qty_used, 0) + (CASE WHEN lower(i.category) = 'bottle' THEN COALESCE(db.qty, 0) ELSE 0 END))
+    - (COALESCE(cm.qty_scrapped, 0) + COALESCE(am.qty_scrapped, 0) + COALESCE(bm.qty_scrapped, 0))) AS available_stock
+FROM items i
+LEFT JOIN receipts_agg r ON r.item_id = i.id
+LEFT JOIN direct_batches_agg db ON db.item_id = i.id
+LEFT JOIN attached_caps_agg ac ON ac.item_id = i.id
+LEFT JOIN attached_atomizers_agg aa ON aa.item_id = i.id
+LEFT JOIN attached_boxes_agg ab ON ab.item_id = i.id
+LEFT JOIN cap_moves_agg cm ON cm.item_id = i.id
+LEFT JOIN atomizer_moves_agg am ON am.item_id = i.id
+LEFT JOIN box_moves_agg bm ON bm.item_id = i.id
+LEFT JOIN dispatches_box_agg dbx ON dbx.item_id = i.id;
+
+-- ============================================================
+-- PART 10: Atomic Movement & Scrap Stored Procedures (RPC)
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION record_split_movement_and_scrap(
+  p_batch_id uuid,
+  p_from_stage_id uuid,
+  p_to_stage_id uuid,
+  p_qty_forward integer,
+  p_qty_scrapped integer DEFAULT 0,
+  p_scrap_reason text DEFAULT 'Defect / Damage on transfer',
+  p_scrap_stage_id uuid DEFAULT NULL,
+  p_cap_name text DEFAULT NULL,
+  p_atomizer_name text DEFAULT NULL,
+  p_box_name text DEFAULT NULL,
+  p_color text DEFAULT NULL,
+  p_printing_design text DEFAULT NULL,
+  p_cap_item_id uuid DEFAULT NULL,
+  p_atomizer_item_id uuid DEFAULT NULL,
+  p_box_item_id uuid DEFAULT NULL,
+  p_cap_qty_used integer DEFAULT NULL,
+  p_atomizer_qty_used integer DEFAULT NULL,
+  p_box_qty_used integer DEFAULT NULL,
+  p_remarks text DEFAULT NULL,
+  p_done_by text DEFAULT NULL,
+  p_moved_on date DEFAULT current_date
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY INVOKER
+AS $$
+DECLARE
+  v_forward_id uuid;
+  v_scrap_id uuid := NULL;
+  v_effective_scrap_stage uuid := p_scrap_stage_id;
+  v_scrap_remark text;
+BEGIN
+  IF p_qty_forward > 0 THEN
+    INSERT INTO stage_movements (
+      batch_id,
+      from_stage_id,
+      to_stage_id,
+      qty_moved,
+      moved_on,
+      cap_name,
+      atomizer_name,
+      box_name,
+      color,
+      printing_design,
+      cap_item_id,
+      atomizer_item_id,
+      box_item_id,
+      cap_qty_used,
+      atomizer_qty_used,
+      box_qty_used,
+      remarks,
+      done_by
+    ) VALUES (
+      p_batch_id,
+      p_from_stage_id,
+      p_to_stage_id,
+      p_qty_forward,
+      COALESCE(p_moved_on, current_date),
+      p_cap_name,
+      p_atomizer_name,
+      p_box_name,
+      p_color,
+      p_printing_design,
+      p_cap_item_id,
+      p_atomizer_item_id,
+      p_box_item_id,
+      p_cap_qty_used,
+      p_atomizer_qty_used,
+      p_box_qty_used,
+      p_remarks,
+      p_done_by
+    ) RETURNING id INTO v_forward_id;
+  END IF;
+
+  IF p_qty_scrapped > 0 THEN
+    IF v_effective_scrap_stage IS NULL THEN
+      SELECT id INTO v_effective_scrap_stage FROM stages WHERE name = 'Scrap / Defect' OR lower(name) LIKE '%scrap%' LIMIT 1;
+    END IF;
+
+    IF v_effective_scrap_stage IS NULL THEN
+      RAISE EXCEPTION 'Scrap / Defect stage not found in stages catalog.';
+    END IF;
+
+    v_scrap_remark := TRIM(CONCAT('[SCRAP: ', COALESCE(p_scrap_reason, 'Loss on transfer'), '] ', COALESCE(p_remarks, '')));
+
+    INSERT INTO stage_movements (
+      batch_id,
+      from_stage_id,
+      to_stage_id,
+      qty_moved,
+      moved_on,
+      remarks,
+      done_by
+    ) VALUES (
+      p_batch_id,
+      p_from_stage_id,
+      v_effective_scrap_stage,
+      p_qty_scrapped,
+      COALESCE(p_moved_on, current_date),
+      v_scrap_remark,
+      p_done_by
+    ) RETURNING id INTO v_scrap_id;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'forward_id', v_forward_id,
+    'scrap_id', v_scrap_id,
+    'qty_forward', p_qty_forward,
+    'qty_scrapped', p_qty_scrapped
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION record_multi_variant_movements(
+  p_batch_id uuid,
+  p_from_stage_id uuid,
+  p_to_stage_id uuid,
+  p_variants jsonb,
+  p_scrapped_qty integer DEFAULT 0,
+  p_scrap_reason text DEFAULT 'Multi-variant split loss',
+  p_scrap_stage_id uuid DEFAULT NULL,
+  p_general_remarks text DEFAULT NULL,
+  p_done_by text DEFAULT NULL,
+  p_moved_on date DEFAULT current_date
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY INVOKER
+AS $$
+DECLARE
+  v_elem jsonb;
+  v_qty integer;
+  v_inserted_ids uuid[] := ARRAY[]::uuid[];
+  v_curr_id uuid;
+  v_scrap_id uuid := NULL;
+  v_effective_scrap_stage uuid := p_scrap_stage_id;
+  v_scrap_remark text;
+  v_combined_remarks text;
+BEGIN
+  FOR v_elem IN SELECT * FROM jsonb_array_elements(p_variants)
+  LOOP
+    v_qty := (v_elem->>'qty')::integer;
+    IF v_qty IS NOT NULL AND v_qty > 0 THEN
+      v_combined_remarks := NULLIF(TRIM(CONCAT_WS(' • ', NULLIF(v_elem->>'remarks', ''), NULLIF(p_general_remarks, ''))), '');
+
+      INSERT INTO stage_movements (
+        batch_id,
+        from_stage_id,
+        to_stage_id,
+        qty_moved,
+        moved_on,
+        color,
+        printing_design,
+        cap_name,
+        atomizer_name,
+        box_name,
+        cap_item_id,
+        atomizer_item_id,
+        box_item_id,
+        cap_qty_used,
+        atomizer_qty_used,
+        box_qty_used,
+        remarks,
+        done_by
+      ) VALUES (
+        p_batch_id,
+        p_from_stage_id,
+        p_to_stage_id,
+        v_qty,
+        COALESCE(p_moved_on, current_date),
+        NULLIF(v_elem->>'color', ''),
+        NULLIF(v_elem->>'printing_design', ''),
+        NULLIF(v_elem->>'cap_name', ''),
+        NULLIF(v_elem->>'atomizer_name', ''),
+        NULLIF(v_elem->>'box_name', ''),
+        (NULLIF(v_elem->>'cap_item_id', ''))::uuid,
+        (NULLIF(v_elem->>'atomizer_item_id', ''))::uuid,
+        (NULLIF(v_elem->>'box_item_id', ''))::uuid,
+        CASE WHEN NULLIF(v_elem->>'cap_item_id', '') IS NOT NULL THEN (COALESCE(v_elem->>'cap_qty_used', v_elem->>'qty'))::integer ELSE NULL END,
+        CASE WHEN NULLIF(v_elem->>'atomizer_item_id', '') IS NOT NULL THEN (COALESCE(v_elem->>'atomizer_qty_used', v_elem->>'qty'))::integer ELSE NULL END,
+        CASE WHEN NULLIF(v_elem->>'box_item_id', '') IS NOT NULL THEN (COALESCE(v_elem->>'box_qty_used', v_elem->>'qty'))::integer ELSE NULL END,
+        v_combined_remarks,
+        p_done_by
+      ) RETURNING id INTO v_curr_id;
+
+      v_inserted_ids := array_append(v_inserted_ids, v_curr_id);
+    END IF;
+  END LOOP;
+
+  IF p_scrapped_qty > 0 THEN
+    IF v_effective_scrap_stage IS NULL THEN
+      SELECT id INTO v_effective_scrap_stage FROM stages WHERE name = 'Scrap / Defect' OR lower(name) LIKE '%scrap%' LIMIT 1;
+    END IF;
+
+    IF v_effective_scrap_stage IS NULL THEN
+      RAISE EXCEPTION 'Scrap / Defect stage not found in stages catalog.';
+    END IF;
+
+    v_scrap_remark := TRIM(CONCAT('[SCRAP: ', COALESCE(p_scrap_reason, 'Multi-variant split loss'), '] ', COALESCE(p_general_remarks, '')));
+
+    INSERT INTO stage_movements (
+      batch_id,
+      from_stage_id,
+      to_stage_id,
+      qty_moved,
+      moved_on,
+      remarks,
+      done_by
+    ) VALUES (
+      p_batch_id,
+      p_from_stage_id,
+      v_effective_scrap_stage,
+      p_scrapped_qty,
+      COALESCE(p_moved_on, current_date),
+      v_scrap_remark,
+      p_done_by
+    ) RETURNING id INTO v_scrap_id;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'movement_ids', to_jsonb(v_inserted_ids),
+    'scrap_id', v_scrap_id,
+    'variant_count', array_length(v_inserted_ids, 1),
+    'scrapped_qty', p_scrapped_qty
+  );
+END;
+$$;
+
+
+
+

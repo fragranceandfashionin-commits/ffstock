@@ -61,9 +61,26 @@ export type Supplier = {
   created_at: string;
 };
 
+export const ITEM_CATEGORIES = [
+  'Bottle',
+  'Cap',
+  'Atomizer',
+  'Packaging',
+  'Label',
+  'Fragrance',
+  'Raw Material',
+  'Other',
+] as const;
+
+export type ItemCategory = (typeof ITEM_CATEGORIES)[number] | string;
+
 export type Item = {
   id: string;
   name: string;
+  category?: string | null;
+  unit?: string | null;
+  description?: string | null;
+  color?: string | null;
   created_at: string;
 };
 
@@ -83,6 +100,13 @@ export type InwardBatch = {
   qty_received: number;
   location: string;
   image_url: string | null;
+  color?: string | null;
+  cap_item_id?: string | null;
+  atomizer_item_id?: string | null;
+  box_item_id?: string | null;
+  cap_qty?: number | null;
+  atomizer_qty?: number | null;
+  box_qty?: number | null;
   created_at: string;
 };
 
@@ -95,6 +119,15 @@ export type StageMovement = {
   moved_on: string;
   cap_name?: string | null;
   atomizer_name?: string | null;
+  box_name?: string | null;
+  color?: string | null;
+  printing_design?: string | null;
+  cap_item_id?: string | null;
+  atomizer_item_id?: string | null;
+  box_item_id?: string | null;
+  cap_qty_used?: number | null;
+  atomizer_qty_used?: number | null;
+  box_qty_used?: number | null;
   location: string | null;
   image_url: string | null;
   remarks: string | null;
@@ -109,15 +142,130 @@ export type Dispatch = {
   customer_name: string;
   invoice_no: string;
   dispatched_on: string;
+  color?: string | null;
+  printing_design?: string | null;
+  cap_name?: string | null;
+  atomizer_name?: string | null;
+  box_name?: string | null;
+  box_item_id?: string | null;
+  product_specs?: string | null;
   created_at: string;
 };
 
 export type BatchWithRelations = InwardBatch & {
   supplier: Supplier | null;
   item: Item | null;
+  cap_item?: Item | null;
+  atomizer_item?: Item | null;
+  box_item?: Item | null;
 };
 
 export type MovementWithRelations = StageMovement & {
   from_stage: Stage | null;
   to_stage: Stage | null;
+  cap_item?: Item | null;
+  atomizer_item?: Item | null;
+  box_item?: Item | null;
 };
+
+export type ComponentOrderUsage = {
+  dispatchId: string;
+  invoiceNo: string;
+  customerName: string;
+  batchId: string;
+  batchNo: string;
+  itemName: string;
+  dispatchedOn: string;
+  qtyUsed: number;
+};
+
+export type ComponentBatchUsage = {
+  batchId: string;
+  batchNo: string;
+  itemName: string;
+  qtyUsed: number;
+  latestStage?: string;
+  movedOn?: string;
+};
+
+export type ItemStockReceipt = {
+  id: string;
+  item_id: string;
+  supplier_id?: string | null;
+  qty: number;
+  received_on: string;
+  invoice_no?: string | null;
+  location?: string | null;
+  remarks?: string | null;
+  created_at: string;
+  item?: Item | null;
+  supplier?: Supplier | null;
+};
+
+export type ComponentStockSummary = {
+  item: Item;
+  category: string;
+  totalInwarded: number;
+  unallocatedWarehouseStock: number;
+  totalUsedInBatches: number;
+  totalInFactoryAssembled: number;
+  totalDispatchedInOrders: number;
+  totalScrapped: number;
+  availableStock: number;
+  stockDeficit: number;
+  inwardBatchCount: number;
+  usedInBatchCount: number;
+  latestUsedDate: string | null;
+  orderUsageList: ComponentOrderUsage[];
+  batchUsageList: ComponentBatchUsage[];
+};
+
+/** Common bottle colors used in fragrance & fashion manufacturing. */
+export const COMMON_COLORS = [
+  'Clear',
+  'Frosted',
+  'Amber',
+  'Cobalt Blue',
+  'Frosted Blue',
+  'Gloss Black',
+  'Matte Black',
+  'Matte White',
+  'Emerald Green',
+  'Rose Gold',
+  'Electroplated Gold',
+  'Electroplated Silver',
+  'Smoke Grey',
+  'Ruby Red',
+] as const;
+
+/** Common printing, artwork & screen print finishes used in bottle decorating. */
+export const COMMON_PRINTING_DESIGNS = [
+  'Gold Foil Stamping',
+  'Silver Foil Stamping',
+  'Silk Screen White Logo',
+  'Silk Screen Black Logo',
+  'Silk Screen Metallic Gold',
+  'UV Spot Varnish Artwork',
+  'Embossed Brand Text',
+  'Gradient Mask Print',
+  'Full Wrap Floral Screen Print',
+  'Custom Customer Artwork',
+] as const;
+
+/** Common production scrap & defect loss reasons */
+export const SCRAP_REASONS = [
+  'Glass Breakage / Cracking',
+  'Screen Print / Foil Misalignment',
+  'Color Coating Unevenness / Blemish',
+  'Filling Leakage / Volume Defect',
+  'Crimping / Atomizer Pump Failure',
+  'Cap Fitting / Thread Defect',
+  'Box / Packaging Scratch or Tear',
+  'Quality Control (QC) Laboratory Rejection',
+  'Machine Jam / Setup Waste',
+  'Other / Unspecified Loss',
+] as const;
+
+export type ScrapReason = (typeof SCRAP_REASONS)[number];
+
+

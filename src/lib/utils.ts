@@ -61,3 +61,42 @@ export function getErrorMessage(err: unknown, fallback = 'Something went wrong')
   if (typeof err === 'string' && err.length > 0) return err;
   return fallback;
 }
+
+/**
+ * Escapes a single cell according to RFC 4180 standards:
+ * wraps in double quotes if it contains commas, quotes, or newlines, and escapes internal quotes.
+ */
+export function escapeCSVField(val: unknown): string {
+  if (val === null || val === undefined) return '';
+  const str = String(val);
+  if (/[",\n\r]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+/**
+ * Generates an RFC 4180 compliant CSV Blob and triggers a clean browser download.
+ * Uses Blob and URL.createObjectURL with UTF-8 BOM to support large datasets (>10k rows)
+ * and prevent browser URL encoding length limits.
+ */
+export function downloadCSV(
+  filename: string,
+  headers: string[],
+  rows: (string | number | null | undefined)[][]
+): void {
+  const headerLine = headers.map(escapeCSVField).join(',');
+  const dataLines = rows.map((row) => row.map(escapeCSVField).join(','));
+  const csvContent = '\uFEFF' + [headerLine, ...dataLines].join('\r\n');
+
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', filename.endsWith('.csv') ? filename : `${filename}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
