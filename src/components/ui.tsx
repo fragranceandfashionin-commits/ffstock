@@ -297,20 +297,22 @@ export function Dropzone({
             alt="Batch preview"
             className="h-28 w-28 rounded-xl object-cover border border-slate-200 shadow-sm"
           />
-          <div className="absolute inset-0 bg-slate-900/40 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+          <div className="absolute inset-0 bg-slate-900/40 rounded-xl opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
             <button
               type="button"
               onClick={() => setModalOpen(true)}
-              className="rounded-lg bg-white/90 p-1.5 text-slate-800 hover:bg-white transition"
+              className="rounded-xl bg-white/95 min-w-[36px] min-h-[36px] flex items-center justify-center text-slate-800 hover:bg-white shadow-xs transition cursor-pointer"
               title="Expand photo"
+              aria-label="Expand photo"
             >
               <Maximize2 className="h-4 w-4" />
             </button>
             <button
               type="button"
               onClick={onClear}
-              className="rounded-lg bg-rose-600 p-1.5 text-white hover:bg-rose-700 transition"
+              className="rounded-xl bg-rose-600 min-w-[36px] min-h-[36px] flex items-center justify-center text-white hover:bg-rose-700 shadow-xs transition cursor-pointer"
               title="Remove photo"
+              aria-label="Remove photo"
             >
               <X className="h-4 w-4" />
             </button>
@@ -409,14 +411,14 @@ export function Modal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className={`relative w-full ${maxWidthClass} rounded-2xl bg-white p-6 shadow-xl border border-slate-200 max-h-[90vh] flex flex-col`}>
-        <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4 shrink-0">
-          <h3 className="text-lg font-bold text-slate-900">{title}</h3>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 sm:backdrop-blur-xs animate-in fade-in duration-200">
+      <div className={`relative w-full ${maxWidthClass} rounded-2xl bg-white p-4 sm:p-6 shadow-2xl border border-slate-200 max-h-[92vh] sm:max-h-[90vh] flex flex-col`}>
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3 sm:pb-4 mb-3 sm:mb-4 shrink-0">
+          <h3 className="text-base sm:text-lg font-bold text-slate-900 truncate pr-2">{title}</h3>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition"
+            className="rounded-xl min-w-[40px] min-h-[40px] flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition cursor-pointer shrink-0"
             aria-label="Close modal"
           >
             <X className="h-5 w-5" />
@@ -468,8 +470,8 @@ export function ConfirmModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className="relative w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl border border-slate-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 sm:backdrop-blur-xs animate-in fade-in duration-200">
+      <div className="relative w-full max-w-md rounded-2xl bg-white p-5 sm:p-6 shadow-2xl border border-slate-200">
         <div className="flex items-start gap-4">
           <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border ${bgIcons[variant]}`}>
             {icons[variant]}
@@ -658,7 +660,7 @@ export function ColorChipsInput({
   return (
     <div className="space-y-2">
       {/* 1-Click Color Chips */}
-      <div className="flex flex-wrap items-center gap-1.5">
+      <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
         {colors.map((c) => {
           const isSelected = value.toLowerCase().trim() === c.toLowerCase().trim();
           const dotCss = colorToCss(c);
@@ -670,13 +672,13 @@ export function ColorChipsInput({
                 setIsCustomMode(false);
                 onChange(isSelected ? '' : c);
               }}
-              className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-bold transition border cursor-pointer ${
+              className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-bold transition border cursor-pointer ${
                 isSelected
                   ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
-                  : 'bg-white text-slate-700 border-slate-200 hover:border-slate-400 hover:bg-slate-50'
+                  : 'bg-white text-slate-700 border-slate-200 hover:border-slate-400 hover:bg-slate-50 active:bg-slate-100'
               }`}
             >
-              <span className={`inline-block h-2 w-2 rounded-full shrink-0 ${isSelected ? 'ring-1 ring-white' : ''} ${dotCss}`} />
+              <span className={`inline-block h-2.5 w-2.5 rounded-full shrink-0 ${isSelected ? 'ring-1 ring-white' : ''} ${dotCss}`} />
               {c}
             </button>
           );
@@ -689,7 +691,7 @@ export function ColorChipsInput({
             setIsCustomMode((prev) => !prev);
             if (isPredefined) onChange('');
           }}
-          className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-bold transition border cursor-pointer ${
+          className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-xs font-bold transition border cursor-pointer ${
             showCustom
               ? 'bg-sky-50 text-sky-700 border-sky-300 shadow-2xs ring-1 ring-sky-200'
               : 'bg-white text-slate-600 border-dashed border-slate-300 hover:border-slate-400 hover:bg-slate-50'
@@ -709,7 +711,6 @@ export function ColorChipsInput({
             value={value}
             onChange={(e) => onChange(e.target.value)}
             placeholder={placeholder}
-            autoFocus
           />
           {value && (
             <button
@@ -721,7 +722,7 @@ export function ColorChipsInput({
               className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
               title="Clear custom color"
             >
-              <X className="h-3 w-3" />
+              <X className="h-3.5 w-3.5" />
             </button>
           )}
         </div>
@@ -851,7 +852,7 @@ export function PrintingChipsInput({
 
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-1.5">
+      <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
         {designs.map((d) => {
           const isSelected = value.toLowerCase().trim() === d.toLowerCase().trim();
           return (
@@ -862,13 +863,13 @@ export function PrintingChipsInput({
                 setIsCustomMode(false);
                 onChange(isSelected ? '' : d);
               }}
-              className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-bold transition border cursor-pointer ${
+              className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-bold transition border cursor-pointer ${
                 isSelected
                   ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs ring-2 ring-indigo-200'
-                  : 'bg-white text-indigo-900 border-indigo-200/80 hover:border-indigo-400 hover:bg-indigo-50/50'
+                  : 'bg-white text-indigo-900 border-indigo-200/80 hover:border-indigo-400 hover:bg-indigo-50/50 active:bg-indigo-100'
               }`}
             >
-              <span className="text-[10px]">✨</span>
+              <span className="text-[11px]">✨</span>
               {d}
             </button>
           );
@@ -881,7 +882,7 @@ export function PrintingChipsInput({
             setIsCustomMode((prev) => !prev);
             if (isPredefined) onChange('');
           }}
-          className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-bold transition border cursor-pointer ${
+          className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-xs font-bold transition border cursor-pointer ${
             showCustom
               ? 'bg-indigo-100 text-indigo-800 border-indigo-300 shadow-2xs ring-1 ring-indigo-200'
               : 'bg-white text-indigo-700 border-dashed border-indigo-200 hover:border-indigo-400 hover:bg-indigo-50/50'
@@ -900,7 +901,6 @@ export function PrintingChipsInput({
             value={value}
             onChange={(e) => onChange(e.target.value)}
             placeholder={placeholder}
-            autoFocus
           />
           {value && (
             <button
@@ -912,7 +912,7 @@ export function PrintingChipsInput({
               className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
               title="Clear custom artwork"
             >
-              <X className="h-3 w-3" />
+              <X className="h-3.5 w-3.5" />
             </button>
           )}
         </div>

@@ -82,7 +82,7 @@ function ToastContainer({ toasts, onRemove }: { toasts: ToastMessage[]; onRemove
   return (
     <div
       aria-live="polite"
-      className="fixed bottom-4 right-4 z-50 flex flex-col gap-2.5 max-w-sm w-full pointer-events-none sm:bottom-6 sm:right-6"
+      className="fixed bottom-20 right-4 left-4 sm:left-auto z-50 flex flex-col gap-2.5 max-w-sm w-auto sm:w-full pointer-events-none sm:bottom-6 sm:right-6"
     >
       {toasts.map((t) => {
         const icons = {
@@ -102,7 +102,7 @@ function ToastContainer({ toasts, onRemove }: { toasts: ToastMessage[]; onRemove
         return (
           <div
             key={t.id}
-            className={`pointer-events-auto flex items-start gap-3 rounded-2xl border p-4 shadow-xl backdrop-blur-md transition-all duration-200 animate-in fade-in slide-in-from-bottom-3 ${borders[t.type]}`}
+            className={`pointer-events-auto flex items-start gap-3 rounded-2xl border p-4 shadow-xl sm:backdrop-blur-md transition-all duration-200 animate-in fade-in slide-in-from-bottom-3 ${borders[t.type]}`}
           >
             {icons[t.type]}
             <div className="flex-1 min-w-0">
@@ -112,7 +112,7 @@ function ToastContainer({ toasts, onRemove }: { toasts: ToastMessage[]; onRemove
             <button
               type="button"
               onClick={() => onRemove(t.id)}
-              className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition shrink-0"
+              className="rounded-xl min-w-[40px] min-h-[40px] flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition shrink-0 cursor-pointer"
               aria-label="Close notification"
             >
               <X className="h-4 w-4" />

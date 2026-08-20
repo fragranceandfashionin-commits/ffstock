@@ -406,8 +406,8 @@ export function BatchInspectionModal({
         </div>
 
         {/* Modal Actions */}
-        <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-200">
-          <div className="flex items-center gap-2">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 pt-3 border-t border-slate-200">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
             <Button
               variant="primary"
               size="sm"
@@ -416,7 +416,7 @@ export function BatchInspectionModal({
                 onClose();
                 onOpenQuickModal(bId, 'move');
               }}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs cursor-pointer"
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs cursor-pointer min-h-[38px] justify-center"
             >
               <Zap className="h-3.5 w-3.5 text-amber-300" />
               Move Stock
@@ -429,7 +429,7 @@ export function BatchInspectionModal({
                 onClose();
                 onOpenQuickModal(bId, 'scrap');
               }}
-              className="font-bold text-xs text-rose-700 bg-rose-50 border-rose-200 cursor-pointer"
+              className="font-bold text-xs text-rose-700 bg-rose-50 border-rose-200 cursor-pointer min-h-[38px] justify-center"
             >
               <Flame className="h-3.5 w-3.5" />
               Record Scrap Defect
@@ -442,15 +442,15 @@ export function BatchInspectionModal({
                 onClose();
                 onOpenQuickModal(bId, 'dispatch');
               }}
-              className="font-bold text-xs text-violet-700 bg-violet-50 border-violet-200 cursor-pointer"
+              className="font-bold text-xs text-violet-700 bg-violet-50 border-violet-200 cursor-pointer min-h-[38px] justify-center"
             >
               <Truck className="h-3.5 w-3.5" />
               Record Dispatch
             </Button>
           </div>
 
-          <div className="flex items-center gap-2">
-            <Button variant="secondary" size="sm" onClick={onClose} className="cursor-pointer">
+          <div className="flex items-center justify-end">
+            <Button variant="secondary" size="sm" onClick={onClose} className="cursor-pointer w-full sm:w-auto min-h-[38px] justify-center">
               Close Batch Passport
             </Button>
           </div>

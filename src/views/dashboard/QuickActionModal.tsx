@@ -354,13 +354,13 @@ export function QuickActionModal({
           {/* Stage Move Fields */}
           {tab === 'move' ? (
             <>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Field label="From Stage" required>
                   <select
                     value={fromStageId}
                     onChange={(e) => {
                       setFromStageId(e.target.value);
-                      const cur = availableStagesForBatch.find((as) => as.stageId === e.target.value);
+                      const cur = availableStagesForBatch.find((as: { stageId: string; stageName: string; sequenceNo: number; qty: number }) => as.stageId === e.target.value);
                       if (cur) {
                         const nextStage = processStages.find((s) => s.sequence_no > cur.sequenceNo);
                         if (nextStage) setToStageId(nextStage.id);
@@ -372,7 +372,7 @@ export function QuickActionModal({
                     {availableStagesForBatch.length === 0 ? (
                       <option value="">No stock in stages</option>
                     ) : (
-                      availableStagesForBatch.map((as) => (
+                      availableStagesForBatch.map((as: { stageId: string; stageName: string; sequenceNo: number; qty: number }) => (
                         <option key={as.stageId} value={as.stageId}>
                           {as.stageName} ({formatNumber(as.qty)} available)
                         </option>
@@ -569,7 +569,7 @@ export function QuickActionModal({
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Field label="Remarks">
                   <input
                     type="text"
@@ -613,7 +613,7 @@ export function QuickActionModal({
                   {availableStagesForBatch.length === 0 ? (
                     <option value="">No stock in stages</option>
                   ) : (
-                    availableStagesForBatch.map((as) => (
+                    availableStagesForBatch.map((as: { stageId: string; stageName: string; sequenceNo: number; qty: number }) => (
                       <option key={as.stageId} value={as.stageId}>
                         {as.stageName} ({formatNumber(as.qty)} available)
                       </option>
@@ -665,7 +665,7 @@ export function QuickActionModal({
                 </select>
               </Field>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Field label="Operator / QC Inspector">
                   <input
                     type="text"
@@ -689,7 +689,7 @@ export function QuickActionModal({
           ) : (
             /* Customer Dispatch */
             <>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Field label="Customer Name" required>
                   <input
                     type="text"

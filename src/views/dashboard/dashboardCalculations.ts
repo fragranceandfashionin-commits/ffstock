@@ -3,18 +3,33 @@ import type { BatchMatrixRow } from './types';
 
 export function calculateDashboardMetrics({
   stages,
-  batches,
-  movements,
-  dispatches,
+  batches: rawBatches,
+  movements: rawMovements,
+  dispatches: rawDispatches,
   componentStocks,
+  asOfDate,
 }: {
   stages: Stage[] | null;
   batches: BatchWithRelations[] | null;
   movements: MovementWithRelations[];
   dispatches: Dispatch[];
   componentStocks: ComponentStockSummary[];
+  asOfDate?: string | null;
 }) {
-  if (!stages || !batches) return null;
+  if (!stages || !rawBatches) return null;
+
+  // Filter entities strictly up to asOfDate if point-in-time mode is active
+  const batches = asOfDate
+    ? rawBatches.filter((b) => b.received_on <= asOfDate)
+    : rawBatches;
+
+  const movements = asOfDate
+    ? rawMovements.filter((m) => m.moved_on <= asOfDate)
+    : rawMovements;
+
+  const dispatches = asOfDate
+    ? rawDispatches.filter((d) => d.dispatched_on <= asOfDate)
+    : rawDispatches;
 
   const processStages = stages.filter((s) => s.name !== 'Dispatched');
   const rawStage = stages.find((s) => s.name === 'Raw Stock');
@@ -41,7 +56,8 @@ export function calculateDashboardMetrics({
     dispatchesByBatch.set(d.batch_id, list);
   }
 
-  const now = new Date();
+  const referenceDate = asOfDate ? new Date(`${asOfDate}T23:59:59`) : new Date();
+
 
   // For every batch, calculate its exact stock in each stage and aging
   const batchMatrix: BatchMatrixRow[] = batches.map((b) => {
@@ -91,7 +107,7 @@ export function calculateDashboardMetrics({
 
     // Real Aging Calculation
     const receivedDate = new Date(b.received_on);
-    const ageInDays = Math.max(0, Math.floor((now.getTime() - receivedDate.getTime()) / (1000 * 60 * 60 * 24)));
+    const ageInDays = Math.max(0, Math.floor((referenceDate.getTime() - receivedDate.getTime()) / (1000 * 60 * 60 * 24)));
     const isStalled = inFactoryQty > 0 && ageInDays >= 7;
 
     const resolvedCapName =
@@ -369,6 +385,7 @@ export function calculateDashboardMetrics({
     totalBoxesDispatched,
     totalBoxesScrapped,
     totalBoxesAvailable,
+    asOfDate: asOfDate || null,
   };
 }
 

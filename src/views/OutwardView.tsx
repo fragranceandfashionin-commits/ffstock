@@ -1,5 +1,5 @@
-import { useEffect, useState, useMemo, useCallback } from 'react';
-import { Boxes, X } from 'lucide-react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import { Boxes, X, Download, FileSpreadsheet } from 'lucide-react';
 import {
   Card,
   PageHeader,
@@ -7,6 +7,7 @@ import {
   EmptyState,
   CardSkeleton,
   TableSkeleton,
+  Button,
 } from '@/components/ui';
 import { useToast } from '@/components/Toast';
 import { DeliveryChallanModal } from '@/components/DeliveryChallanModal';
@@ -31,7 +32,7 @@ import {
 import { supabase, SCRAP_REASONS, COMMON_COLORS, COMMON_PRINTING_DESIGNS } from '@/lib/supabase';
 import type { BatchWithRelations, Stage, MovementWithRelations, Dispatch, Item, ComponentStockSummary } from '@/lib/supabase';
 import type { BatchStock } from '@/lib/types';
-import { getErrorMessage, getTodayDateString, formatNumber } from '@/lib/utils';
+import { getErrorMessage, getTodayDateString, formatNumber, downloadCSV } from '@/lib/utils';
 
 // Outward Subcomponents & Types
 import type { ActiveAction, VariantRow } from './outward/types';
@@ -45,10 +46,15 @@ import { DispatchForm } from './outward/DispatchForm';
 import { MovementAuditTrail } from './outward/MovementAuditTrail';
 import { ReversalModal } from './outward/ReversalModal';
 
-export function OutwardView() {
+export type OutwardViewProps = {
+  initialBatchId?: string;
+  initialMovementId?: string;
+};
+
+export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewProps = {}) {
   const [stages, setStages] = useState<Stage[] | null>(null);
   const [batches, setBatches] = useState<BatchWithRelations[] | null>(null);
-  const [batchId, setBatchId] = useState('');
+  const [batchId, setBatchId] = useState(initialBatchId || '');
   const [stock, setStock] = useState<BatchStock[]>([]);
   const [movements, setMovements] = useState<MovementWithRelations[]>([]);
   const [dispatches, setDispatches] = useState<Dispatch[]>([]);
@@ -57,6 +63,7 @@ export function OutwardView() {
   const [boxes, setBoxes] = useState<Item[]>([]);
   const [stockSummaryMap, setStockSummaryMap] = useState<Map<string, ComponentStockSummary>>(new Map());
 
+  const lastHandledBatchIdRef = useRef<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -965,6 +972,98 @@ export function OutwardView() {
     }
   };
 
+  useEffect(() => {
+    if (initialBatchId && batches && batches.some((b) => b.id === initialBatchId)) {
+      if (lastHandledBatchIdRef.current !== initialBatchId || batchId !== initialBatchId) {
+        lastHandledBatchIdRef.current = initialBatchId;
+        setBatchId(initialBatchId);
+      }
+    }
+  }, [initialBatchId, batches, batchId]);
+
+  // CSV Export Handlers
+  const exportBatchMovementsCSV = () => {
+    if (!movements || movements.length === 0) return;
+    try {
+      const headers = [
+        'Movement Date',
+        'Batch No',
+        'Item Name',
+        'From Stage',
+        'To Stage',
+        'Qty Moved',
+        'Color',
+        'Printing Design',
+        'Cap Used',
+        'Atomizer Used',
+        'Box Used',
+        'Operator',
+        'Remarks',
+      ];
+      const rows = movements.map((m) => [
+        m.moved_on,
+        selectedBatch?.batch_no || 'Batch',
+        selectedBatch?.item?.name || 'Product',
+        m.from_stage?.name ?? '',
+        m.to_stage?.name ?? '',
+        m.qty_moved,
+        m.color || '',
+        m.printing_design || '',
+        m.cap_name || '',
+        m.atomizer_name || '',
+        m.box_name || '',
+        m.done_by || '',
+        m.remarks || '',
+      ]);
+
+      const filename = `ffstock_batch_${selectedBatch?.batch_no || 'all'}_movements_${getTodayDateString()}`;
+      downloadCSV(filename, headers, rows);
+      toast.success('Movement audit history CSV exported successfully', 'Export Complete');
+    } catch (err) {
+      toast.error(getErrorMessage(err), 'Export Failed');
+    }
+  };
+
+  const exportBatchDispatchesCSV = () => {
+    if (!dispatches || dispatches.length === 0) return;
+    try {
+      const headers = [
+        'Invoice No',
+        'Customer Name',
+        'Dispatch Date',
+        'Batch No',
+        'Item SKU',
+        'Dispatched Qty',
+        'Color',
+        'Printing Design',
+        'Cap Name',
+        'Atomizer Name',
+        'Box Name',
+        'Product Specifications',
+      ];
+      const rows = dispatches.map((d) => [
+        d.invoice_no,
+        d.customer_name,
+        d.dispatched_on,
+        selectedBatch?.batch_no || 'Batch',
+        selectedBatch?.item?.name || 'Product',
+        d.qty,
+        d.color || '',
+        d.printing_design || '',
+        d.cap_name || '',
+        d.atomizer_name || '',
+        d.box_name || '',
+        d.product_specs || '',
+      ]);
+
+      const filename = `ffstock_batch_${selectedBatch?.batch_no || 'all'}_dispatches_${getTodayDateString()}`;
+      downloadCSV(filename, headers, rows);
+      toast.success('Dispatches register CSV exported successfully', 'Export Complete');
+    } catch (err) {
+      toast.error(getErrorMessage(err), 'Export Failed');
+    }
+  };
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -986,6 +1085,32 @@ export function OutwardView() {
       <PageHeader
         title="Outward Journey & Pipeline"
         subtitle="Live multi-stage manufacturing and assembly pipeline. Advance stock items and batches through processing stages or customer dispatches."
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            {movements.length > 0 && (
+              <Button
+                variant="outline"
+                onClick={exportBatchMovementsCSV}
+                className="text-xs font-bold text-slate-700 bg-white shadow-2xs hover:bg-slate-50 cursor-pointer"
+                title="Download movement audit trail CSV"
+              >
+                <Download className="h-3.5 w-3.5 text-slate-500" />
+                Movements CSV
+              </Button>
+            )}
+            {dispatches.length > 0 && (
+              <Button
+                variant="outline"
+                onClick={exportBatchDispatchesCSV}
+                className="text-xs font-bold text-slate-700 bg-white shadow-2xs hover:bg-slate-50 cursor-pointer"
+                title="Download dispatches register CSV"
+              >
+                <FileSpreadsheet className="h-3.5 w-3.5 text-slate-500" />
+                Dispatches CSV
+              </Button>
+            )}
+          </div>
+        }
       />
 
       {batches.length === 0 ? (
@@ -1305,6 +1430,7 @@ export function OutwardView() {
                   movements={movements}
                   dispatches={dispatches}
                   unitLabel={unitLabel}
+                  highlightMovementId={initialMovementId}
                   onOpenReversalModal={openReversalModal}
                   onOpenChallanModal={(d) => {
                     setChallanDispatch(d);

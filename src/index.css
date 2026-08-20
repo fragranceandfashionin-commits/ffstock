@@ -33,6 +33,15 @@
   @apply bg-slate-300 rounded-full hover:bg-slate-400;
 }
 
+/* Hide scrollbar utility */
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
 /* Sticky column shadow separator */
 .sticky-col-shadow {
   box-shadow: 4px 0 6px -2px rgba(0, 0, 0, 0.05);

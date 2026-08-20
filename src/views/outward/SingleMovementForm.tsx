@@ -55,8 +55,6 @@ export type SingleMovementFormProps = {
 
 export function SingleMovementForm({
   activeSourceQty,
-  fromStageName: _fromStageName,
-  toStageName: _toStageName,
   isColoringStage,
   isLeavingColoring,
   isPrintingStage,

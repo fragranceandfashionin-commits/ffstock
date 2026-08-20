@@ -510,7 +510,7 @@ export function MilestoneDrilldownModal({
                         </td>
                         <td className="p-2.5">
                           <div className="flex flex-wrap gap-1">
-                            {item.activeStages.map((as) => (
+                            {item.activeStages.map((as: { stageId: string; stageName: string; sequenceNo: number; qty: number }) => (
                               <span
                                 key={as.stageId}
                                 className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
@@ -634,11 +634,11 @@ export function MilestoneDrilldownModal({
         </div>
 
         {/* Modal Actions */}
-        <div className="flex justify-between items-center pt-3 border-t border-slate-100">
+        <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2 pt-3 border-t border-slate-100">
           <span className="text-xs text-slate-400">
-            Data reconciled dynamically from live Postgres database.
+            Data reconciled dynamically from live inventory state.
           </span>
-          <Button variant="secondary" size="sm" onClick={onClose} className="cursor-pointer">
+          <Button variant="secondary" size="sm" onClick={onClose} className="cursor-pointer min-h-[38px] justify-center">
             Close Context Modal
           </Button>
         </div>

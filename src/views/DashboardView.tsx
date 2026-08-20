@@ -1,6 +1,6 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import {
-  ShieldCheck, Download, Printer, RefreshCw, Zap, Package, LayoutDashboard, Layers, ArrowLeftRight, Truck, MapPin, PackageCheck, Filter
+  ShieldCheck, Download, Printer, RefreshCw, Zap, Package, LayoutDashboard, Layers, ArrowLeftRight, Truck, MapPin, PackageCheck, Filter, Clock, RotateCcw, Calendar
 } from 'lucide-react';
 import {
   Button, ErrorBanner, SearchInput, CardSkeleton, TableSkeleton, Modal
@@ -32,6 +32,7 @@ import {
   formatDate,
   getErrorMessage,
   downloadCSV,
+  getTodayDateString,
 } from '@/lib/utils';
 
 // Modular Dashboard Subcomponents & Engine
@@ -49,12 +50,21 @@ import { ReversalModal } from './dashboard/ReversalModal';
 import { MilestoneDrilldownModal } from './dashboard/MilestoneDrilldownModal';
 import { ComponentDrilldownModal } from './dashboard/ComponentDrilldownModal';
 import { BatchInspectionModal } from './dashboard/BatchInspectionModal';
+import type { NavigationContext } from '@/components/AppShell';
 
 export type DashboardViewProps = {
-  onViewChange: (view: View) => void;
+  onViewChange: (view: View, context?: NavigationContext) => void;
+  initialInspectBatch?: BatchWithRelations | null;
+  initialChallanDispatch?: (Dispatch & { batch?: BatchWithRelations; batchNo?: string; itemName?: string; supplierName?: string }) | Dispatch | null;
+  initialBatchId?: string;
 };
 
-export function DashboardView({ onViewChange }: DashboardViewProps) {
+export function DashboardView({
+  onViewChange,
+  initialInspectBatch,
+  initialChallanDispatch,
+  initialBatchId,
+}: DashboardViewProps) {
   const { success, error: toastError } = useToast();
 
   // Raw Database Entity State
@@ -69,6 +79,12 @@ export function DashboardView({ onViewChange }: DashboardViewProps) {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Point-in-Time Historical State (Time-Travel Engine)
+  const [asOfDate, setAsOfDate] = useState<string>('');
+
+  // Export Modal State
+  const [exportModalOpen, setExportModalOpen] = useState(false);
 
   // Tab & Filter State
   const [activeTab, setActiveTab] = useState<DashboardTab>('batch-matrix');
@@ -171,7 +187,7 @@ export function DashboardView({ onViewChange }: DashboardViewProps) {
     };
   }, [loadData]);
 
-  // Pure Calculation Engine
+  // Pure Calculation Engine with Point-in-Time asOfDate
   const calculations = useMemo(() => {
     return calculateDashboardMetrics({
       stages,
@@ -179,8 +195,71 @@ export function DashboardView({ onViewChange }: DashboardViewProps) {
       movements,
       dispatches,
       componentStocks,
+      asOfDate: asOfDate || null,
     });
-  }, [stages, batches, movements, dispatches, componentStocks]);
+  }, [stages, batches, movements, dispatches, componentStocks, asOfDate]);
+
+  const lastHandledBatchRef = useRef<string | null>(null);
+  const lastHandledDispatchRef = useRef<string | null>(null);
+
+  // Initial props inspection sync
+  useEffect(() => {
+    const targetBatchId = initialInspectBatch?.id || initialBatchId;
+    if (!targetBatchId) {
+      if (lastHandledBatchRef.current !== null) {
+        lastHandledBatchRef.current = null;
+        setInspectedBatchItem(null);
+      }
+      return;
+    }
+
+    if (lastHandledBatchRef.current !== targetBatchId) {
+      lastHandledBatchRef.current = targetBatchId;
+
+      if (calculations) {
+        const found = calculations.batchMatrix.find(
+          (bm) => bm.batch.id === targetBatchId || bm.batch.batch_no.toLowerCase() === targetBatchId.toLowerCase()
+        );
+        if (found) {
+          setInspectedBatchItem(found);
+          return;
+        }
+      }
+
+      if (initialInspectBatch) {
+        setInspectedBatchItem({
+          batch: initialInspectBatch,
+          stageQuantities: {},
+          activeStages: [],
+          dispatchedQty: 0,
+          inFactoryQty: initialInspectBatch.qty_received,
+          dispatches: [],
+          movements: [],
+          customerNames: [],
+          isRawOnly: true,
+          isReadyOnly: false,
+          isInProduction: false,
+          ageInDays: 0,
+          isStalled: false,
+          resolvedCapName: null,
+          resolvedAtomizerName: null,
+          resolvedBoxName: null,
+        });
+      }
+    }
+  }, [initialInspectBatch, initialBatchId, calculations]);
+
+  useEffect(() => {
+    if (!initialChallanDispatch) {
+      lastHandledDispatchRef.current = null;
+      return;
+    }
+    if (lastHandledDispatchRef.current !== initialChallanDispatch.id) {
+      lastHandledDispatchRef.current = initialChallanDispatch.id;
+      setChallanDispatch(initialChallanDispatch);
+      setChallanModalOpen(true);
+    }
+  }, [initialChallanDispatch]);
 
   // Derived Component Catalog Lists
   const caps = useMemo(
@@ -244,25 +323,32 @@ export function DashboardView({ onViewChange }: DashboardViewProps) {
     }
   };
 
-  // Export CSV Handler (RFC 4180 & Blob-based)
-  const exportToCSV = () => {
+  // ─── Universal CSV Export Handlers (RFC 4180 & UTF-8 BOM Compliant) ───
+  const dateSuffix = asOfDate || getTodayDateString();
+
+  const exportBatchMatrixCSV = () => {
     if (!calculations) return;
     try {
       const headers = [
         'Batch No',
         'Item',
+        'Category',
         'Supplier',
-        'Location',
+        'Bay Location',
         'Received On',
         'Age (Days)',
         'Inward Total',
-        ...calculations.processStages.map((s) => s.name),
-        'Dispatched',
-        'Factory Balance',
+        ...calculations.processStages.map((s) => `${s.name} Stock`),
+        'Dispatched Qty',
+        'Factory Stock Balance',
+        'Cap Component',
+        'Atomizer Component',
+        'Box Component',
       ];
       const rows = calculations.batchMatrix.map((bm) => [
         bm.batch.batch_no,
         bm.batch.item?.name ?? '',
+        bm.batch.item?.category ?? 'Bottle',
         bm.batch.supplier?.name ?? '',
         bm.batch.location,
         bm.batch.received_on,
@@ -271,11 +357,165 @@ export function DashboardView({ onViewChange }: DashboardViewProps) {
         ...calculations.processStages.map((s) => bm.stageQuantities[s.id] ?? 0),
         bm.dispatchedQty,
         bm.inFactoryQty,
+        bm.resolvedCapName ?? '',
+        bm.resolvedAtomizerName ?? '',
+        bm.resolvedBoxName ?? '',
       ]);
 
-      const filename = `factory_inventory_report_${formatDate(new Date().toISOString()).replace(/\s+/g, '_')}`;
+      const filename = `ffstock_batch_matrix_${dateSuffix}`;
       downloadCSV(filename, headers, rows);
-      success('CSV report downloaded successfully', 'Export complete');
+      success('Batch matrix CSV report downloaded successfully', 'Export Complete');
+      setExportModalOpen(false);
+    } catch (err) {
+      toastError(getErrorMessage(err), 'Export failed');
+    }
+  };
+
+  const exportStagesSummaryCSV = () => {
+    if (!calculations) return;
+    try {
+      const headers = [
+        'Sequence No',
+        'Production Stage',
+        'Total Stage Stock',
+        'Bottles Qty',
+        'Caps Qty',
+        'Atomizers Qty',
+        'Packaging Boxes Qty',
+        'Active Batches Count',
+      ];
+      const rows = calculations.stageBreakdown.map((sb) => [
+        sb.stage.sequence_no,
+        sb.stage.name,
+        sb.totalQty,
+        sb.bottlesQty,
+        sb.capsQty,
+        sb.atomizersQty,
+        sb.boxesQty,
+        sb.batches.length,
+      ]);
+
+      const filename = `ffstock_stages_summary_${dateSuffix}`;
+      downloadCSV(filename, headers, rows);
+      success('Stage breakdown CSV report downloaded successfully', 'Export Complete');
+      setExportModalOpen(false);
+    } catch (err) {
+      toastError(getErrorMessage(err), 'Export failed');
+    }
+  };
+
+  const exportDispatchesCSV = () => {
+    if (!calculations) return;
+    try {
+      const headers = [
+        'Invoice No',
+        'Customer Name',
+        'Dispatched Date',
+        'Batch No',
+        'Item SKU',
+        'Dispatched Qty',
+        'Color Variant',
+        'Cap Name',
+        'Atomizer Name',
+        'Box Name',
+        'Product Specifications',
+      ];
+      const rows = calculations.enrichedDispatches.map((d) => [
+        d.invoice_no,
+        d.customer_name,
+        d.dispatched_on,
+        d.batchNo,
+        d.itemName,
+        d.qty,
+        d.resolvedColor ?? '',
+        d.resolvedCapName ?? '',
+        d.resolvedAtomizerName ?? '',
+        d.resolvedBoxName ?? '',
+        d.product_specs ?? '',
+      ]);
+
+      const filename = `ffstock_dispatches_register_${dateSuffix}`;
+      downloadCSV(filename, headers, rows);
+      success('Customer dispatches CSV report downloaded successfully', 'Export Complete');
+      setExportModalOpen(false);
+    } catch (err) {
+      toastError(getErrorMessage(err), 'Export failed');
+    }
+  };
+
+  const exportMovementsCSV = () => {
+    if (!calculations) return;
+    try {
+      const headers = [
+        'Movement Date',
+        'Batch No',
+        'Item SKU',
+        'From Stage',
+        'To Stage',
+        'Qty Moved',
+        'Cap Used',
+        'Atomizer Used',
+        'Box Used',
+        'Color',
+        'Printing Design',
+        'Operator (Done By)',
+        'Remarks',
+      ];
+      const rows = calculations.enrichedMovements.map((m) => [
+        m.moved_on,
+        m.batchNo,
+        m.itemName,
+        m.from_stage?.name ?? '',
+        m.to_stage?.name ?? '',
+        m.qty_moved,
+        m.cap_name ?? '',
+        m.atomizer_name ?? '',
+        m.box_name ?? '',
+        m.color ?? '',
+        m.printing_design ?? '',
+        m.done_by ?? '',
+        m.remarks ?? '',
+      ]);
+
+      const filename = `ffstock_movements_ledger_${dateSuffix}`;
+      downloadCSV(filename, headers, rows);
+      success('Movements ledger CSV report downloaded successfully', 'Export Complete');
+      setExportModalOpen(false);
+    } catch (err) {
+      toastError(getErrorMessage(err), 'Export failed');
+    }
+  };
+
+  const exportComponentsBOMCSV = () => {
+    if (!componentStocks || componentStocks.length === 0) return;
+    try {
+      const headers = [
+        'Component SKU',
+        'Category',
+        'Unit',
+        'Total Inwarded',
+        'Loose Warehouse Stock',
+        'In-Factory Assembled WIP',
+        'Dispatched in Orders',
+        'Scrapped Defect Qty',
+        'Net Available Balance',
+      ];
+      const rows = componentStocks.map((c) => [
+        c.item.name,
+        c.category,
+        c.item.unit ?? 'pcs',
+        c.totalInwarded,
+        c.unallocatedWarehouseStock,
+        c.totalInFactoryAssembled,
+        c.totalDispatchedInOrders,
+        c.totalScrapped,
+        c.availableStock,
+      ]);
+
+      const filename = `ffstock_components_bom_${dateSuffix}`;
+      downloadCSV(filename, headers, rows);
+      success('Component BOM CSV report downloaded successfully', 'Export Complete');
+      setExportModalOpen(false);
     } catch (err) {
       toastError(getErrorMessage(err), 'Export failed');
     }
@@ -320,7 +560,7 @@ export function DashboardView({ onViewChange }: DashboardViewProps) {
           (item.resolvedCapName ?? '').toLowerCase().includes(q) ||
           (item.resolvedAtomizerName ?? '').toLowerCase().includes(q) ||
           (item.resolvedBoxName ?? '').toLowerCase().includes(q) ||
-          item.customerNames.some((c) => c.toLowerCase().includes(q));
+          item.customerNames.some((c: string) => c.toLowerCase().includes(q));
         if (!match) return false;
       }
 
@@ -346,7 +586,7 @@ export function DashboardView({ onViewChange }: DashboardViewProps) {
             (bItem.resolvedCapName ?? '').toLowerCase().includes(q) ||
             (bItem.resolvedAtomizerName ?? '').toLowerCase().includes(q) ||
             (bItem.resolvedBoxName ?? '').toLowerCase().includes(q) ||
-            bItem.customerNames.some((c) => c.toLowerCase().includes(q));
+            bItem.customerNames.some((c: string) => c.toLowerCase().includes(q));
           if (!match) return false;
         }
         return true;
@@ -442,10 +682,17 @@ export function DashboardView({ onViewChange }: DashboardViewProps) {
             <h1 className="text-2xl font-black tracking-tight text-slate-900">
               Factory Dashboard
             </h1>
-            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700 border border-emerald-200 shadow-2xs">
-              <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
-              Live Verified Stock
-            </span>
+            {asOfDate ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-bold text-amber-800 border border-amber-300 shadow-2xs">
+                <Clock className="h-3.5 w-3.5 text-amber-600" />
+                Snapshot: {formatDate(asOfDate)}
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700 border border-emerald-200 shadow-2xs">
+                <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
+                Live Verified Stock
+              </span>
+            )}
           </div>
           <p className="mt-1 text-xs text-slate-500 max-w-2xl leading-relaxed">
             Live manufacturing overview. Track Bottles, Caps, Atomizers, Packaging, batch movements, factory floor balances, and customer dispatches with 100% accuracy.
@@ -454,11 +701,35 @@ export function DashboardView({ onViewChange }: DashboardViewProps) {
 
         {/* Global Action Strip */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* As-Of Date Selector (Point-in-Time Time Travel) */}
+          <div className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1 text-xs shadow-2xs">
+            <Calendar className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+            <span className="text-[11px] font-bold text-slate-500 hidden xl:inline">As of:</span>
+            <input
+              type="date"
+              value={asOfDate}
+              onChange={(e) => setAsOfDate(e.target.value)}
+              max={getTodayDateString()}
+              className="bg-transparent text-xs font-bold text-slate-800 focus:outline-none cursor-pointer"
+              title="Select historical snapshot date (Time-Travel Mode)"
+            />
+            {asOfDate && (
+              <button
+                type="button"
+                onClick={() => setAsOfDate('')}
+                className="text-[11px] font-bold text-amber-600 hover:text-amber-800 underline ml-1 cursor-pointer"
+                title="Clear filter & return to Live Stock"
+              >
+                Live
+              </button>
+            )}
+          </div>
+
           <Button
             variant="outline"
             size="sm"
-            onClick={exportToCSV}
-            title="Download CSV Report"
+            onClick={() => setExportModalOpen(true)}
+            title="Download CSV Reports"
             className="text-xs font-bold text-slate-700 bg-white shadow-2xs hover:bg-slate-50 cursor-pointer"
           >
             <Download className="h-3.5 w-3.5 text-slate-500" />
@@ -509,6 +780,34 @@ export function DashboardView({ onViewChange }: DashboardViewProps) {
         </div>
       </div>
 
+      {/* Point-in-Time Time Travel Banner */}
+      {asOfDate && (
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 rounded-2xl bg-amber-500/10 border border-amber-400/50 p-4 text-amber-950">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-500 text-white font-bold shadow-2xs">
+              <Clock className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-amber-900">
+                Historical Point-in-Time Snapshot Mode: As of {formatDate(asOfDate)}
+              </p>
+              <p className="text-xs text-amber-700">
+                All batch balances, production stages, customer shipments, and BOM components are recalculated strictly as of this historical date.
+              </p>
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setAsOfDate('')}
+            className="bg-white text-amber-900 hover:bg-amber-100 border-amber-300 font-bold text-xs shrink-0 cursor-pointer shadow-2xs"
+          >
+            <RotateCcw className="h-3.5 w-3.5 mr-1 text-amber-600" />
+            Reset to Live Stock
+          </Button>
+        </div>
+      )}
+
       {error && <ErrorBanner message={error} />}
 
       {/* ─── Executive KPIs, Exception Strip & 4-Pillar Master ─── */}
@@ -524,11 +823,11 @@ export function DashboardView({ onViewChange }: DashboardViewProps) {
       <div className="space-y-3 pt-2">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between border-b border-slate-200 pb-3">
           {/* Tab Switcher */}
-          <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1.5 rounded-2xl border border-slate-200">
+          <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-2xl border border-slate-200 overflow-x-auto flex-nowrap sm:flex-wrap snap-x scrollbar-none pb-1 sm:pb-1.5 max-w-full">
             <button
               type="button"
               onClick={() => setActiveTab('batch-matrix')}
-              className={`flex items-center gap-2 rounded-xl px-3.5 py-1.5 text-xs font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-bold transition-all cursor-pointer shrink-0 snap-start min-h-[38px] ${
                 activeTab === 'batch-matrix'
                   ? 'bg-slate-900 text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
@@ -541,7 +840,7 @@ export function DashboardView({ onViewChange }: DashboardViewProps) {
             <button
               type="button"
               onClick={() => setActiveTab('stages')}
-              className={`flex items-center gap-2 rounded-xl px-3.5 py-1.5 text-xs font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-bold transition-all cursor-pointer shrink-0 snap-start min-h-[38px] ${
                 activeTab === 'stages'
                   ? 'bg-slate-900 text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
@@ -554,7 +853,7 @@ export function DashboardView({ onViewChange }: DashboardViewProps) {
             <button
               type="button"
               onClick={() => setActiveTab('transitions')}
-              className={`flex items-center gap-2 rounded-xl px-3.5 py-1.5 text-xs font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-bold transition-all cursor-pointer shrink-0 snap-start min-h-[38px] ${
                 activeTab === 'transitions'
                   ? 'bg-slate-900 text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
@@ -567,7 +866,7 @@ export function DashboardView({ onViewChange }: DashboardViewProps) {
             <button
               type="button"
               onClick={() => setActiveTab('dispatches')}
-              className={`flex items-center gap-2 rounded-xl px-3.5 py-1.5 text-xs font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-bold transition-all cursor-pointer shrink-0 snap-start min-h-[38px] ${
                 activeTab === 'dispatches'
                   ? 'bg-slate-900 text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
@@ -580,7 +879,7 @@ export function DashboardView({ onViewChange }: DashboardViewProps) {
             <button
               type="button"
               onClick={() => setActiveTab('locations')}
-              className={`flex items-center gap-2 rounded-xl px-3.5 py-1.5 text-xs font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-bold transition-all cursor-pointer shrink-0 snap-start min-h-[38px] ${
                 activeTab === 'locations'
                   ? 'bg-slate-900 text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
@@ -593,7 +892,7 @@ export function DashboardView({ onViewChange }: DashboardViewProps) {
             <button
               type="button"
               onClick={() => setActiveTab('components')}
-              className={`flex items-center gap-2 rounded-xl px-3.5 py-1.5 text-xs font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-bold transition-all cursor-pointer shrink-0 snap-start min-h-[38px] ${
                 activeTab === 'components'
                   ? 'bg-slate-900 text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
@@ -928,6 +1227,130 @@ export function DashboardView({ onViewChange }: DashboardViewProps) {
           dispatch={challanDispatch}
         />
       )}
+
+      {/* Universal Export Modal */}
+      {exportModalOpen && calculations && (
+        <Modal
+          isOpen={exportModalOpen}
+          onClose={() => setExportModalOpen(false)}
+          title={`Export Factory Data Reports (${asOfDate ? `As of ${formatDate(asOfDate)}` : 'Live Ledger'})`}
+          maxWidthClass="max-w-xl"
+        >
+          <div className="space-y-4">
+            <p className="text-xs text-slate-500">
+              Download standard RFC 4180 and UTF-8 BOM compliant CSV spreadsheets for Excel, accounting systems, and compliance audits.
+            </p>
+
+            <div className="grid grid-cols-1 gap-2.5">
+              <button
+                type="button"
+                onClick={exportBatchMatrixCSV}
+                className="flex items-center justify-between p-3 rounded-xl border border-slate-200 hover:border-amber-400 hover:bg-amber-50/50 transition cursor-pointer text-left group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-800 font-bold">
+                    <LayoutDashboard className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-900 group-hover:text-amber-800">
+                      Batch Inventory Matrix ({calculations.batchMatrix.length} batches)
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      Full breakdown of inward quantities, stage-by-stage distribution, aging, and components.
+                    </p>
+                  </div>
+                </div>
+                <Download className="h-4 w-4 text-slate-400 group-hover:text-amber-600 shrink-0" />
+              </button>
+
+              <button
+                type="button"
+                onClick={exportStagesSummaryCSV}
+                className="flex items-center justify-between p-3 rounded-xl border border-slate-200 hover:border-blue-400 hover:bg-blue-50/50 transition cursor-pointer text-left group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-800 font-bold">
+                    <Layers className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-900 group-hover:text-blue-800">
+                      Stages Stock Summary ({calculations.processStages.length} stages)
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      Aggregated floor inventory by production milestone (Bottles, Caps, Pumps, Packaging).
+                    </p>
+                  </div>
+                </div>
+                <Download className="h-4 w-4 text-slate-400 group-hover:text-blue-600 shrink-0" />
+              </button>
+
+              <button
+                type="button"
+                onClick={exportDispatchesCSV}
+                className="flex items-center justify-between p-3 rounded-xl border border-slate-200 hover:border-emerald-400 hover:bg-emerald-50/50 transition cursor-pointer text-left group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-800 font-bold">
+                    <Truck className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-900 group-hover:text-emerald-800">
+                      Customer Dispatches Register ({dispatches.length} shipments)
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      Chronological log of customer invoices, quantities, variants, and product specs.
+                    </p>
+                  </div>
+                </div>
+                <Download className="h-4 w-4 text-slate-400 group-hover:text-emerald-600 shrink-0" />
+              </button>
+
+              <button
+                type="button"
+                onClick={exportMovementsCSV}
+                className="flex items-center justify-between p-3 rounded-xl border border-slate-200 hover:border-indigo-400 hover:bg-indigo-50/50 transition cursor-pointer text-left group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-100 text-indigo-800 font-bold">
+                    <ArrowLeftRight className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-900 group-hover:text-indigo-800">
+                      Movements & Operations Ledger ({movements.length} logs)
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      Complete audit trail of stage transfers, operator names, split variants, and remarks.
+                    </p>
+                  </div>
+                </div>
+                <Download className="h-4 w-4 text-slate-400 group-hover:text-indigo-600 shrink-0" />
+              </button>
+
+              <button
+                type="button"
+                onClick={exportComponentsBOMCSV}
+                className="flex items-center justify-between p-3 rounded-xl border border-slate-200 hover:border-purple-400 hover:bg-purple-50/50 transition cursor-pointer text-left group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-purple-100 text-purple-800 font-bold">
+                    <PackageCheck className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-900 group-hover:text-purple-800">
+                      Component BOM Inventory Balance ({componentStocks.length} components)
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      5-state component reconciliation (Inwarded, Warehouse, Assembled WIP, Dispatched, Scrapped).
+                    </p>
+                  </div>
+                </div>
+                <Download className="h-4 w-4 text-slate-400 group-hover:text-purple-600 shrink-0" />
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
+

@@ -46,8 +46,6 @@ export function MultiVariantSplitMatrix({
   allPrintingSuggestions,
   boxes,
   stockSummaryMap,
-  isColoringStage: _isColoringStage,
-  isLeavingColoring: _isLeavingColoring,
   isPrintingStage,
   isLeavingPrinting,
   isFillingStage,

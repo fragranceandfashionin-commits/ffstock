@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { PackagePlus, Save, Trash2, PlusCircle, AlertTriangle } from 'lucide-react';
+import { PackagePlus, Save, Trash2, PlusCircle, AlertTriangle, Download } from 'lucide-react';
 import {
   Card,
   PageHeader,
@@ -22,7 +22,7 @@ import { useToast } from '@/components/Toast';
 import { fetchBatches, fetchItems, fetchSuppliers, fetchUsedBatchIds, insertItem, fetchCaps, fetchAtomizers, fetchBoxes, insertInwardBatch, fetchComponentStockSummary } from '@/lib/queries';
 import { supabase, COMMON_COLORS } from '@/lib/supabase';
 import type { BatchWithRelations, Item, Supplier, ComponentStockSummary } from '@/lib/supabase';
-import { formatNumber, formatDate, getErrorMessage, getTodayDateString } from '@/lib/utils';
+import { formatNumber, formatDate, getErrorMessage, getTodayDateString, downloadCSV } from '@/lib/utils';
 
 const NEW_OPTION = '__new__';
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -392,18 +392,70 @@ export function InwardView() {
     );
   });
 
+  // CSV Export Handler
+  const exportInwardBatchesCSV = () => {
+    if (!batches || batches.length === 0) return;
+    try {
+      const headers = [
+        'Batch No',
+        'Item SKU',
+        'Category',
+        'Supplier',
+        'Received Date',
+        'Quantity Inwarded',
+        'Storage Bay Location',
+        'Color',
+        'Cap Item',
+        'Atomizer Item',
+        'Box Item',
+        'Image URL',
+      ];
+      const rows = batches.map((b) => [
+        b.batch_no,
+        b.item?.name ?? '',
+        b.item?.category ?? 'Bottle',
+        b.supplier?.name ?? '',
+        b.received_on,
+        b.qty_received,
+        b.location,
+        b.color || '',
+        b.cap_item?.name || '',
+        b.atomizer_item?.name || '',
+        b.box_item?.name || '',
+        b.image_url || '',
+      ]);
+
+      const filename = `ffstock_inward_batches_${getTodayDateString()}`;
+      downloadCSV(filename, headers, rows);
+      toast.success('Inward batches registry CSV exported successfully', 'Export Complete');
+    } catch (err) {
+      toast.error(getErrorMessage(err), 'Export Failed');
+    }
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Inward Stock Receiving"
         subtitle="Log incoming stock for any component (Bottles, Caps, Atomizers, Packaging / Boxes, Labels, Raw Materials) with batch code, supplier, quantity, location, and shipment photo."
+        action={
+          <Button
+            variant="outline"
+            onClick={exportInwardBatchesCSV}
+            className="text-xs font-bold text-slate-700 bg-white shadow-2xs hover:bg-slate-50 cursor-pointer"
+            title="Download inward batches registry CSV"
+          >
+            <Download className="h-3.5 w-3.5 text-slate-500" />
+            Export Batches CSV
+          </Button>
+        }
       />
 
       {error && <ErrorBanner message={error} />}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
         {/* Form Card (5 cols) */}
-        <Card className="lg:col-span-5 h-fit shadow-sm border-slate-200/90 sticky top-20">
+        <Card className="lg:col-span-5 h-fit shadow-sm border-slate-200/90 lg:sticky lg:top-20">
           <form
             onSubmit={handleSubmit}
             onKeyDown={(e) => {
@@ -453,7 +505,6 @@ export function InwardView() {
                 onChange={(e) => setBatchNo(e.target.value)}
                 placeholder="e.g. Royal Club, BATCH-01, CAP-5001"
                 required
-                autoFocus
               />
             </Field>
 
@@ -486,7 +537,7 @@ export function InwardView() {
                   size="sm"
                   onClick={() => setShowSupplierModal(true)}
                   title="Add new supplier"
-                  className="shrink-0"
+                  className="shrink-0 min-w-[40px] min-h-[40px]"
                 >
                   <PlusCircle className="h-4 w-4" />
                 </Button>
@@ -517,7 +568,7 @@ export function InwardView() {
                     const isOutOfStock = unallocated <= 0;
                     return (
                       <option key={i.id} value={i.id}>
-                        [{i.category || 'Bottle'}] {i.name} — {isOutOfStock ? '0 in warehouse [OUT OF STOCK]' : `${formatNumber(unallocated)} ${i.unit || 'units'} available in Items section`}
+                        [{i.category || 'Bottle'}] {i.name} — {isOutOfStock ? '0 in warehouse [OUT OF STOCK]' : `${formatNumber(unallocated)} ${i.unit || 'units'} available`}
                       </option>
                     );
                   })}
@@ -531,7 +582,7 @@ export function InwardView() {
                     setShowItemModal(true);
                   }}
                   title="Add new stock item"
-                  className="shrink-0"
+                  className="shrink-0 min-w-[40px] min-h-[40px]"
                 >
                   <PlusCircle className="h-4 w-4" />
                 </Button>
@@ -570,7 +621,7 @@ export function InwardView() {
               })()}
             </Field>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Received Date" htmlFor="received" required>
                 <input
                   id="received"
@@ -848,102 +899,196 @@ export function InwardView() {
               description={searchQuery ? 'No batches match your search criteria.' : 'Create your first inward batch using the form.'}
             />
           ) : (
-            <TableScrollContainer className="bg-white">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 text-left text-xs font-bold uppercase tracking-wider text-slate-500 border-b border-slate-200">
-                  <tr>
-                    <th className="px-3.5 py-3">Photo</th>
-                    <th className="px-3.5 py-3">Batch / Brand</th>
-                    <th className="px-3.5 py-3">Stock Item</th>
-                    <th className="px-3.5 py-3">Color</th>
-                    <th className="px-3.5 py-3">Components</th>
-                    <th className="px-3.5 py-3">Supplier</th>
-                    <th className="px-3.5 py-3">Location</th>
-                    <th className="px-3.5 py-3">Date</th>
-                    <th className="px-3.5 py-3 text-right">Qty</th>
-                    <th className="px-3.5 py-3 text-right">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 font-medium">
-                  {filteredBatches.map((b) => (
-                    <tr key={b.id} className="transition hover:bg-slate-50/80">
-                      <td className="px-3.5 py-3">
+            <>
+              {/* Mobile View: Cards (< sm) */}
+              <div className="grid grid-cols-1 gap-3 sm:hidden">
+                {filteredBatches.map((b) => (
+                  <Card key={`mobile-inward-batch-${b.id}`} className="p-3.5 border-slate-200 shadow-2xs space-y-3">
+                    <div className="flex items-start justify-between gap-2.5">
+                      <div className="flex items-center gap-2.5">
                         {b.image_url ? (
-                          <a href={b.image_url} target="_blank" rel="noreferrer" title="View photo">
+                          <a href={b.image_url} target="_blank" rel="noreferrer" title="View photo" className="shrink-0">
                             <img
                               src={b.image_url}
                               alt={b.batch_no}
-                              className="h-10 w-10 rounded-xl border border-slate-200 object-cover shadow-xs"
+                              className="h-12 w-12 rounded-xl border border-slate-200 object-cover shadow-2xs"
                             />
                           </a>
                         ) : (
-                          <div className="h-10 w-10 rounded-xl border border-slate-200 bg-slate-100 flex items-center justify-center text-slate-300 text-xs font-bold">
+                          <div className="h-12 w-12 rounded-xl border border-slate-200 bg-slate-100 flex items-center justify-center text-slate-300 text-xs font-bold shrink-0">
                             —
                           </div>
                         )}
-                      </td>
-                      <td className="px-3.5 py-3 font-bold text-slate-900">{b.batch_no}</td>
-                      <td className="px-3.5 py-3">
-                        <div className="flex flex-col gap-1">
-                          <span className="text-slate-800 font-bold">{b.item?.name ?? '—'}</span>
-                          <ItemCategoryBadge category={b.item?.category} />
+                        <div>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-black text-slate-900 text-sm font-mono">{b.batch_no}</span>
+                            <ItemCategoryBadge category={b.item?.category} />
+                            <ColorBadge color={b.color} />
+                          </div>
+                          <p className="font-bold text-slate-800 text-xs mt-0.5">{b.item?.name ?? '—'}</p>
                         </div>
-                      </td>
-                      <td className="px-3.5 py-3">
-                        <ColorBadge color={b.color} />
-                      </td>
-                      <td className="px-3.5 py-3">
-                        <div className="flex flex-col gap-1">
-                          {b.cap_item && (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-violet-700 bg-violet-50 px-1.5 py-0.5 rounded border border-violet-200">
-                              🧴 {b.cap_item.name}
-                              {b.cap_qty != null && <span className="text-violet-500 font-semibold">×{formatNumber(b.cap_qty)}</span>}
-                            </span>
-                          )}
-                          {b.atomizer_item && (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded border border-sky-200">
-                              💨 {b.atomizer_item.name}
-                              {b.atomizer_qty != null && <span className="text-sky-500 font-semibold">×{formatNumber(b.atomizer_qty)}</span>}
-                            </span>
-                          )}
-                          {b.box_item && (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
-                              📦 {b.box_item.name}
-                              {b.box_qty != null && <span className="text-amber-500 font-semibold">×{formatNumber(b.box_qty)}</span>}
-                            </span>
-                          )}
-                          {!b.cap_item && !b.atomizer_item && !b.box_item && (
-                            <span className="text-[10px] text-slate-400">—</span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-3.5 py-3 text-slate-600">{b.supplier?.name ?? '—'}</td>
-                      <td className="px-3.5 py-3 text-slate-600 font-semibold">{b.location}</td>
-                      <td className="px-3.5 py-3 text-slate-500 text-xs">{formatDate(b.received_on)}</td>
-                      <td className="px-3.5 py-3 text-right font-extrabold text-slate-900">
-                        {formatNumber(b.qty_received)} <span className="text-[10px] text-slate-500 font-normal">{b.item?.unit || 'pcs'}</span>
-                      </td>
-                      <td className="px-3.5 py-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() => setDeleteModalBatch(b)}
-                          disabled={usedBatchIds.has(b.id)}
-                          title={
-                            usedBatchIds.has(b.id)
-                              ? 'Batch has movements or dispatches — ledger history cannot be deleted'
-                              : 'Delete batch entry'
-                          }
-                          className="inline-flex items-center gap-1 text-xs font-bold text-rose-600 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-30 cursor-pointer"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </TableScrollContainer>
+                      </div>
+
+                      <div className="text-right shrink-0">
+                        <p className="font-black text-slate-900 text-base leading-tight text-emerald-700">
+                          {formatNumber(b.qty_received)}
+                        </p>
+                        <p className="text-[10px] text-slate-500 font-bold">{b.item?.unit || 'pcs'}</p>
+                      </div>
+                    </div>
+
+                    {/* Components Breakdown */}
+                    {(b.cap_item || b.atomizer_item || b.box_item) && (
+                      <div className="flex flex-wrap gap-1 p-2 bg-slate-50 rounded-xl border border-slate-100">
+                        {b.cap_item && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-violet-700 bg-violet-50 px-1.5 py-0.5 rounded border border-violet-200">
+                            🧴 {b.cap_item.name}
+                            {b.cap_qty != null && <span className="text-violet-500 font-semibold">×{formatNumber(b.cap_qty)}</span>}
+                          </span>
+                        )}
+                        {b.atomizer_item && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded border border-sky-200">
+                            💨 {b.atomizer_item.name}
+                            {b.atomizer_qty != null && <span className="text-sky-500 font-semibold">×{formatNumber(b.atomizer_qty)}</span>}
+                          </span>
+                        )}
+                        {b.box_item && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                            📦 {b.box_item.name}
+                            {b.box_qty != null && <span className="text-amber-500 font-semibold">×{formatNumber(b.box_qty)}</span>}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Metadata Strip & Actions */}
+                    <div className="flex items-center justify-between text-xs text-slate-500 pt-1 border-t border-slate-100">
+                      <div className="flex items-center gap-2 text-[11px] truncate">
+                        <span>🏢 {b.supplier?.name ?? '—'}</span>
+                        <span>•</span>
+                        <span className="font-semibold text-slate-700">📍 {b.location}</span>
+                        <span>•</span>
+                        <span>{formatDate(b.received_on)}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setDeleteModalBatch(b)}
+                        disabled={usedBatchIds.has(b.id)}
+                        title={
+                          usedBatchIds.has(b.id)
+                            ? 'Batch has movements or dispatches — ledger history cannot be deleted'
+                            : 'Delete batch entry'
+                        }
+                        className="rounded-xl min-w-[36px] min-h-[36px] flex items-center justify-center text-rose-600 hover:bg-rose-50 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer shrink-0"
+                        aria-label="Delete batch"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+
+              {/* Desktop View: Table (>= sm) */}
+              <div className="hidden sm:block">
+                <TableScrollContainer className="bg-white">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50 text-left text-xs font-bold uppercase tracking-wider text-slate-500 border-b border-slate-200">
+                      <tr>
+                        <th className="px-3.5 py-3">Photo</th>
+                        <th className="px-3.5 py-3">Batch / Brand</th>
+                        <th className="px-3.5 py-3">Stock Item</th>
+                        <th className="px-3.5 py-3">Color</th>
+                        <th className="px-3.5 py-3">Components</th>
+                        <th className="px-3.5 py-3">Supplier</th>
+                        <th className="px-3.5 py-3">Location</th>
+                        <th className="px-3.5 py-3">Date</th>
+                        <th className="px-3.5 py-3 text-right">Qty</th>
+                        <th className="px-3.5 py-3 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 font-medium">
+                      {filteredBatches.map((b) => (
+                        <tr key={b.id} className="transition hover:bg-slate-50/80">
+                          <td className="px-3.5 py-3">
+                            {b.image_url ? (
+                              <a href={b.image_url} target="_blank" rel="noreferrer" title="View photo">
+                                <img
+                                  src={b.image_url}
+                                  alt={b.batch_no}
+                                  className="h-10 w-10 rounded-xl border border-slate-200 object-cover shadow-xs"
+                                />
+                              </a>
+                            ) : (
+                              <div className="h-10 w-10 rounded-xl border border-slate-200 bg-slate-100 flex items-center justify-center text-slate-300 text-xs font-bold">
+                                —
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-3.5 py-3 font-bold text-slate-900">{b.batch_no}</td>
+                          <td className="px-3.5 py-3">
+                            <div className="flex flex-col gap-1">
+                              <span className="text-slate-800 font-bold">{b.item?.name ?? '—'}</span>
+                              <ItemCategoryBadge category={b.item?.category} />
+                            </div>
+                          </td>
+                          <td className="px-3.5 py-3">
+                            <ColorBadge color={b.color} />
+                          </td>
+                          <td className="px-3.5 py-3">
+                            <div className="flex flex-col gap-1">
+                              {b.cap_item && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-violet-700 bg-violet-50 px-1.5 py-0.5 rounded border border-violet-200">
+                                  🧴 {b.cap_item.name}
+                                  {b.cap_qty != null && <span className="text-violet-500 font-semibold">×{formatNumber(b.cap_qty)}</span>}
+                                </span>
+                              )}
+                              {b.atomizer_item && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded border border-sky-200">
+                                  💨 {b.atomizer_item.name}
+                                  {b.atomizer_qty != null && <span className="text-sky-500 font-semibold">×{formatNumber(b.atomizer_qty)}</span>}
+                                </span>
+                              )}
+                              {b.box_item && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                                  📦 {b.box_item.name}
+                                  {b.box_qty != null && <span className="text-amber-500 font-semibold">×{formatNumber(b.box_qty)}</span>}
+                                </span>
+                              )}
+                              {!b.cap_item && !b.atomizer_item && !b.box_item && (
+                                <span className="text-[10px] text-slate-400">—</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-3.5 py-3 text-slate-600">{b.supplier?.name ?? '—'}</td>
+                          <td className="px-3.5 py-3 text-slate-600 font-semibold">{b.location}</td>
+                          <td className="px-3.5 py-3 text-slate-500 text-xs">{formatDate(b.received_on)}</td>
+                          <td className="px-3.5 py-3 text-right font-extrabold text-slate-900">
+                            {formatNumber(b.qty_received)} <span className="text-[10px] text-slate-500 font-normal">{b.item?.unit || 'pcs'}</span>
+                          </td>
+                          <td className="px-3.5 py-3 text-right">
+                            <button
+                              type="button"
+                              onClick={() => setDeleteModalBatch(b)}
+                              disabled={usedBatchIds.has(b.id)}
+                              title={
+                                usedBatchIds.has(b.id)
+                                  ? 'Batch has movements or dispatches — ledger history cannot be deleted'
+                                  : 'Delete batch entry'
+                              }
+                              className="inline-flex items-center gap-1 text-xs font-bold text-rose-600 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-30 cursor-pointer"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </TableScrollContainer>
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -973,7 +1118,6 @@ export function InwardView() {
               placeholder="e.g. Apex Glassworks Ltd"
               value={newSupplierName}
               onChange={(e) => setNewSupplierName(e.target.value)}
-              autoFocus
               required
             />
           </Field>
@@ -1061,12 +1205,11 @@ export function InwardView() {
               }
               value={newItemName}
               onChange={(e) => setNewItemName(e.target.value)}
-              autoFocus
               required
             />
           </Field>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Field label="Unit of Measure" required>
               <input
                 className={inputClass}

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Tag, Save, Trash2, Edit2, Plus, CheckCircle2, X, Zap, Truck, Eye, PackagePlus } from 'lucide-react';
+import { useEffect, useState, useRef } from 'react';
+import { Tag, Save, Trash2, Edit2, Plus, CheckCircle2, X, Zap, Truck, Eye, PackagePlus, Download, FileSpreadsheet } from 'lucide-react';
 import {
   Card,
   PageHeader,
@@ -19,14 +19,18 @@ import {
   TableScrollContainer,
 } from '@/components/ui';
 import { useToast } from '@/components/Toast';
-import { fetchItems, insertItem, updateItem, fetchComponentStockSummary, fetchSuppliers, insertItemStockReceipt } from '@/lib/queries';
+import { fetchItems, insertItem, updateItem, fetchComponentStockSummary, fetchSuppliers, insertItemStockReceipt, fetchItemStockReceipts } from '@/lib/queries';
 import { supabase, ITEM_CATEGORIES, COMMON_COLORS } from '@/lib/supabase';
 import type { Item, ComponentStockSummary, Supplier } from '@/lib/supabase';
-import { getErrorMessage, formatNumber, formatDate, getTodayDateString } from '@/lib/utils';
+import { getErrorMessage, formatNumber, formatDate, getTodayDateString, downloadCSV } from '@/lib/utils';
 
 const COMMON_UNITS = ['pcs', 'units', 'boxes', 'sets', 'kg', 'ml', 'L'] as const;
 
-export function ItemsView() {
+export type ItemsViewProps = {
+  initialItemId?: string;
+};
+
+export function ItemsView({ initialItemId }: ItemsViewProps = {}) {
   const [items, setItems] = useState<Item[] | null>(null);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [stockSummaryMap, setStockSummaryMap] = useState<Map<string, ComponentStockSummary>>(new Map());
@@ -75,6 +79,7 @@ export function ItemsView() {
 
   // Selected item for 360 journey inspection
   const [inspectedItemSummary, setInspectedItemSummary] = useState<ComponentStockSummary | null>(null);
+  const lastHandledItemIdRef = useRef<string | null>(null);
 
   const toast = useToast();
 
@@ -92,12 +97,24 @@ export function ItemsView() {
       const sMap = new Map<string, ComponentStockSummary>();
       for (const s of summary) sMap.set(s.item.id, s);
       setStockSummaryMap(sMap);
+
+      if (initialItemId && lastHandledItemIdRef.current !== initialItemId && sMap.has(initialItemId)) {
+        lastHandledItemIdRef.current = initialItemId;
+        setInspectedItemSummary(sMap.get(initialItemId) || null);
+      }
     } catch (err) {
       setError(getErrorMessage(err, 'Failed to load items catalogue'));
     } finally {
       if (!isSilent) setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (initialItemId && lastHandledItemIdRef.current !== initialItemId && stockSummaryMap.has(initialItemId)) {
+      lastHandledItemIdRef.current = initialItemId;
+      setInspectedItemSummary(stockSummaryMap.get(initialItemId) || null);
+    }
+  }, [initialItemId, stockSummaryMap]);
 
   useEffect(() => {
     load();
@@ -333,6 +350,87 @@ export function ItemsView() {
     return { icon: '⚙️', label: cat, border: 'border-slate-200', bg: 'bg-slate-50/60', text: 'text-slate-900', activeRing: 'ring-slate-500' };
   };
 
+  // CSV Export Handlers
+  const exportItemsCatalogCSV = () => {
+    if (!items || items.length === 0) return;
+    try {
+      const headers = [
+        'Item Name',
+        'Category',
+        'Unit',
+        'Color',
+        'Description',
+        'Total Inward Intake',
+        'Warehouse Buffer Stock',
+        'In-Factory Assembled WIP',
+        'Dispatched to Customers',
+        'Total Scrapped Defect',
+        'Total Net Available',
+      ];
+      const rows = items.map((item) => {
+        const sum = stockSummaryMap.get(item.id);
+        return [
+          item.name,
+          item.category || 'Bottle',
+          item.unit || 'pcs',
+          item.color || '',
+          item.description || '',
+          sum?.totalInwarded ?? 0,
+          sum?.unallocatedWarehouseStock ?? 0,
+          sum?.totalInFactoryAssembled ?? 0,
+          sum?.totalDispatchedInOrders ?? 0,
+          sum?.totalScrapped ?? 0,
+          sum?.availableStock ?? 0,
+        ];
+      });
+
+      const filename = `ffstock_items_inventory_${getTodayDateString()}`;
+      downloadCSV(filename, headers, rows);
+      toast.success('Items inventory balance CSV exported successfully', 'Export Complete');
+    } catch (err) {
+      toast.error(getErrorMessage(err), 'Export Failed');
+    }
+  };
+
+  const exportStockReceiptsLedgerCSV = async () => {
+    try {
+      const receipts = await fetchItemStockReceipts();
+      const headers = [
+        'Receipt Date',
+        'Item Name',
+        'Category',
+        'Supplier',
+        'Invoice No',
+        'Warehouse Bay',
+        'Quantity Received',
+        'Remarks',
+      ];
+      const itemMap = new Map(items?.map((i) => [i.id, i]) || []);
+      const suppMap = new Map(suppliers?.map((s) => [s.id, s]) || []);
+
+      const rows = receipts.map((r) => {
+        const itm = itemMap.get(r.item_id);
+        const supp = r.supplier_id ? suppMap.get(r.supplier_id) : null;
+        return [
+          r.received_on,
+          itm?.name ?? 'Unknown Item',
+          itm?.category ?? 'Bottle',
+          supp?.name ?? '—',
+          r.invoice_no ?? '',
+          r.location ?? '',
+          r.qty,
+          r.remarks ?? '',
+        ];
+      });
+
+      const filename = `ffstock_stock_receipts_ledger_${getTodayDateString()}`;
+      downloadCSV(filename, headers, rows);
+      toast.success('Stock receipts ledger CSV exported successfully', 'Export Complete');
+    } catch (err) {
+      toast.error(getErrorMessage(err), 'Export Failed');
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* PAGE HEADER */}
@@ -340,7 +438,25 @@ export function ItemsView() {
         title="Stock Item Master Catalogue & Live Inventory"
         subtitle="Live reconciled inventory ledger across Bottles, Caps, Atomizers, Packaging Boxes, Labels, and Fragrances."
         action={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={exportItemsCatalogCSV}
+              className="text-xs font-bold text-slate-700 bg-white shadow-2xs hover:bg-slate-50 cursor-pointer"
+              title="Download full items inventory balance CSV"
+            >
+              <Download className="h-3.5 w-3.5 text-slate-500" />
+              Export Inventory CSV
+            </Button>
+            <Button
+              variant="outline"
+              onClick={exportStockReceiptsLedgerCSV}
+              className="text-xs font-bold text-slate-700 bg-white shadow-2xs hover:bg-slate-50 cursor-pointer"
+              title="Download stock receipts intake ledger CSV"
+            >
+              <FileSpreadsheet className="h-3.5 w-3.5 text-slate-500" />
+              Receipts Ledger CSV
+            </Button>
             <Button
               variant="primary"
               onClick={() => openReceiveModal()}
@@ -540,114 +656,42 @@ export function ItemsView() {
             />
           </div>
         ) : (
-          <TableScrollContainer className="border-0 rounded-none">
-            <table className="w-full text-left border-collapse min-w-[1050px]">
-              <thead className="bg-slate-100/90 text-slate-700 text-[11px] font-black uppercase tracking-wider border-b border-slate-200 sticky top-0 z-10">
-                <tr>
-                  <th className="px-3.5 py-3 w-10 text-center text-slate-400">#</th>
-                  <th className="px-4 py-3 min-w-[220px]">Item Specification / SKU</th>
-                  <th className="px-3 py-3">Category</th>
-                  <th className="px-3 py-3">Color / Finish</th>
-                  <th className="px-3.5 py-3 text-right">1. Received</th>
-                  <th className="px-3.5 py-3 text-right bg-emerald-50/80 text-emerald-900 font-black">2. In Buffer</th>
-                  <th className="px-3.5 py-3 text-right bg-indigo-50/50 text-indigo-900 font-black">3. In Factory</th>
-                  <th className="px-3.5 py-3 text-right bg-violet-50/50 text-violet-900 font-black">4. Shipped</th>
-                  <th className="px-3 py-3 text-right text-rose-700 font-bold">Scrap</th>
-                  <th className="px-3 py-3 text-center">UOM</th>
-                  <th className="px-3.5 py-3 text-center">Floor Status</th>
-                  <th className="px-4 py-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-xs font-medium bg-white">
-                {filteredItems.map((i, index) => {
-                  const sum = stockSummaryMap.get(i.id);
-                  const inwarded = sum?.totalInwarded ?? 0;
-                  const available = sum?.availableStock ?? 0;
-                  const inFactory = sum?.totalInFactoryAssembled ?? 0;
-                  const shipped = sum?.totalDispatchedInOrders ?? 0;
-                  const scrapped = sum?.totalScrapped ?? 0;
-                  const isNotYetInwarded = inwarded === 0;
+          <div>
+            {/* ─── Mobile View: Item Cards (< sm) ─── */}
+            <div className="p-3.5 space-y-3 sm:hidden">
+              {filteredItems.map((i) => {
+                const sum = stockSummaryMap.get(i.id);
+                const inwarded = sum?.totalInwarded ?? 0;
+                const available = sum?.availableStock ?? 0;
+                const inFactory = sum?.totalInFactoryAssembled ?? 0;
+                const shipped = sum?.totalDispatchedInOrders ?? 0;
+                const scrapped = sum?.totalScrapped ?? 0;
+                const isNotYetInwarded = inwarded === 0;
 
-                  return (
-                    <tr key={i.id} className="hover:bg-slate-50/90 transition-colors group">
-                      <td className="px-3.5 py-3 text-center font-bold text-slate-400 text-[11px]">
-                        {index + 1}
-                      </td>
-
-                      <td className="px-4 py-3">
-                        <div className="flex flex-col">
-                          <p className="font-black text-slate-950 text-sm leading-tight group-hover:text-indigo-600 transition-colors">
-                            {i.name}
-                          </p>
-                          {i.description && (
-                            <p className="text-[11px] text-slate-500 font-normal mt-0.5 leading-snug">
-                              {i.description}
-                            </p>
-                          )}
-                        </div>
-                      </td>
-
-                      <td className="px-3 py-3 whitespace-nowrap">
-                        <ItemCategoryBadge category={i.category} />
-                      </td>
-
-                      <td className="px-3 py-3 whitespace-nowrap">
-                        <ColorBadge color={i.color} />
-                      </td>
-
-                      <td className="px-3.5 py-3 text-right whitespace-nowrap">
-                        <span className="inline-block font-black text-slate-950 bg-slate-100 border border-slate-300 px-2.5 py-1 rounded-lg text-xs shadow-2xs">
-                          {formatNumber(inwarded)}
-                        </span>
-                      </td>
-
-                      <td className="px-3.5 py-3 text-right bg-emerald-50/30 whitespace-nowrap">
-                        <span className={`inline-block font-black px-2.5 py-1 rounded-lg text-xs border shadow-2xs ${
-                          available > 0
-                            ? 'text-emerald-950 bg-emerald-100 border-emerald-300'
-                            : 'text-slate-400 bg-slate-50 border-slate-200'
-                        }`}>
-                          {formatNumber(available)}
-                        </span>
-                      </td>
-
-                      <td className="px-3.5 py-3 text-right bg-indigo-50/20 whitespace-nowrap">
-                        <span className={`inline-block font-black px-2.5 py-1 rounded-lg text-xs border shadow-2xs ${
-                          inFactory > 0
-                            ? 'text-indigo-950 bg-indigo-100 border-indigo-300'
-                            : 'text-slate-400 bg-slate-50 border-slate-200'
-                        }`}>
-                          {formatNumber(inFactory)}
-                        </span>
-                      </td>
-
-                      <td className="px-3.5 py-3 text-right bg-violet-50/20 whitespace-nowrap">
-                        <span className={`inline-block font-black px-2.5 py-1 rounded-lg text-xs border shadow-2xs ${
-                          shipped > 0
-                            ? 'text-violet-950 bg-violet-100 border-violet-300'
-                            : 'text-slate-400 bg-slate-50 border-slate-200'
-                        }`}>
-                          {formatNumber(shipped)}
-                        </span>
-                      </td>
-
-                      <td className="px-3 py-3 text-right whitespace-nowrap">
-                        {scrapped > 0 ? (
-                          <span className="inline-block font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded text-xs">
-                            {formatNumber(scrapped)}
+                return (
+                  <Card key={`mobile-item-${i.id}`} className="p-4 border-slate-200 shadow-2xs space-y-3">
+                    {/* Header */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <ItemCategoryBadge category={i.category} />
+                          <ColorBadge color={i.color} />
+                          <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                            {i.unit || 'pcs'}
                           </span>
-                        ) : (
-                          <span className="text-slate-400 text-xs">0</span>
+                        </div>
+                        <h3 className="font-black text-slate-950 text-base mt-1 leading-snug">
+                          {i.name}
+                        </h3>
+                        {i.description && (
+                          <p className="text-xs text-slate-500 font-normal mt-0.5 leading-snug">
+                            {i.description}
+                          </p>
                         )}
-                      </td>
+                      </div>
 
-                      <td className="px-3 py-3 text-center whitespace-nowrap">
-                        <span className="inline-block font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded text-[11px]">
-                          {i.unit || 'pcs'}
-                        </span>
-                      </td>
-
-                      <td className="px-3.5 py-3 text-center whitespace-nowrap">
+                      {/* Floor Status */}
+                      <div className="shrink-0">
                         {isNotYetInwarded ? (
                           <span className="inline-flex items-center gap-1 font-bold text-[10px] text-slate-500 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">
                             <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
@@ -669,17 +713,46 @@ export function ItemsView() {
                             Dispatched
                           </span>
                         )}
-                      </td>
+                      </div>
+                    </div>
 
-                      <td className="px-4 py-3 text-right whitespace-nowrap space-x-1.5">
+                    {/* Stock Metrics (4-Box Grid) */}
+                    <div className="grid grid-cols-4 gap-1.5 bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-center">
+                      <div className="p-1">
+                        <p className="text-[9px] uppercase font-bold text-slate-500">1. Inward</p>
+                        <p className="font-black text-slate-900 text-xs mt-0.5">{formatNumber(inwarded)}</p>
+                      </div>
+                      <div className="p-1 bg-emerald-50 rounded-lg border border-emerald-200">
+                        <p className="text-[9px] uppercase font-black text-emerald-800">2. Buffer</p>
+                        <p className="font-black text-emerald-900 text-xs mt-0.5">{formatNumber(available)}</p>
+                      </div>
+                      <div className="p-1 bg-indigo-50 rounded-lg border border-indigo-200">
+                        <p className="text-[9px] uppercase font-black text-indigo-800">3. Factory</p>
+                        <p className="font-black text-indigo-900 text-xs mt-0.5">{formatNumber(inFactory)}</p>
+                      </div>
+                      <div className="p-1 bg-violet-50 rounded-lg border border-violet-200">
+                        <p className="text-[9px] uppercase font-black text-violet-800">4. Ship</p>
+                        <p className="font-black text-violet-900 text-xs mt-0.5">{formatNumber(shipped)}</p>
+                      </div>
+                    </div>
+
+                    {scrapped > 0 && (
+                      <div className="flex items-center justify-between text-xs font-bold text-rose-700 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200">
+                        <span>Defect / Scrap Loss:</span>
+                        <span>{formatNumber(scrapped)} {i.unit || 'pcs'}</span>
+                      </div>
+                    )}
+
+                    {/* Actions */}
+                    <div className="flex items-center justify-between gap-1.5 pt-2 border-t border-slate-100">
+                      <div className="flex items-center gap-1.5">
                         <Button
                           variant="outline"
                           size="sm"
                           onClick={() => openReceiveModal(i)}
-                          className="text-[11px] py-1 px-2.5 font-bold text-emerald-800 border-emerald-300 bg-emerald-50/80 hover:bg-emerald-100 shadow-2xs"
-                          title="Receive incoming stock for this item"
+                          className="text-xs font-bold text-emerald-800 border-emerald-300 bg-emerald-50 hover:bg-emerald-100 min-h-[36px]"
                         >
-                          <PackagePlus className="h-3 w-3 mr-1 text-emerald-600" />
+                          <PackagePlus className="h-3.5 w-3.5 mr-1 text-emerald-600" />
                           Receive Stock
                         </Button>
                         {sum && (
@@ -687,38 +760,223 @@ export function ItemsView() {
                             variant="outline"
                             size="sm"
                             onClick={() => setInspectedItemSummary(sum)}
-                            className="text-[11px] py-1 px-2.5 font-bold text-indigo-700 border-indigo-300 bg-indigo-50/70 hover:bg-indigo-100 shadow-2xs"
-                            title="Inspect 360° lifecycle audit"
+                            className="text-xs font-bold text-indigo-700 border-indigo-300 bg-indigo-50 hover:bg-indigo-100 min-h-[36px]"
                           >
-                            <Eye className="h-3 w-3 mr-1" />
+                            <Eye className="h-3.5 w-3.5 mr-1" />
                             Audit
                           </Button>
                         )}
-                        <Button
-                          variant="outline"
-                          size="sm"
+                      </div>
+
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
                           onClick={() => openEditModal(i)}
-                          className="text-[11px] py-1 px-2 font-bold text-slate-700 border-slate-300 hover:bg-slate-100 shadow-2xs"
-                          title="Edit item specifications"
+                          className="rounded-xl min-w-[36px] min-h-[36px] flex items-center justify-center text-slate-600 hover:bg-slate-100 border border-slate-200 cursor-pointer"
+                          title="Edit item"
+                          aria-label={`Edit ${i.name}`}
                         >
-                          <Edit2 className="h-3 w-3" />
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
+                          <Edit2 className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => setDeleteModalItem({ id: i.id, name: i.name })}
-                          className="text-[11px] py-1 px-2 font-bold text-rose-600 border-rose-300 hover:bg-rose-50 shadow-2xs"
+                          className="rounded-xl min-w-[36px] min-h-[36px] flex items-center justify-center text-rose-600 hover:bg-rose-50 border border-rose-200 cursor-pointer"
                           title="Delete item"
+                          aria-label={`Delete ${i.name}`}
                         >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </td>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+
+            {/* ─── Desktop View: 12-Column Table (>= sm) ─── */}
+            <div className="hidden sm:block">
+              <TableScrollContainer className="border-0 rounded-none">
+                <table className="w-full text-left border-collapse min-w-[1050px]">
+                  <thead className="bg-slate-100/90 text-slate-700 text-[11px] font-black uppercase tracking-wider border-b border-slate-200 sticky top-0 z-10">
+                    <tr>
+                      <th className="px-3.5 py-3 w-10 text-center text-slate-400">#</th>
+                      <th className="px-4 py-3 min-w-[220px]">Item Specification / SKU</th>
+                      <th className="px-3 py-3">Category</th>
+                      <th className="px-3 py-3">Color / Finish</th>
+                      <th className="px-3.5 py-3 text-right">1. Received</th>
+                      <th className="px-3.5 py-3 text-right bg-emerald-50/80 text-emerald-900 font-black">2. In Buffer</th>
+                      <th className="px-3.5 py-3 text-right bg-indigo-50/50 text-indigo-900 font-black">3. In Factory</th>
+                      <th className="px-3.5 py-3 text-right bg-violet-50/50 text-violet-900 font-black">4. Shipped</th>
+                      <th className="px-3.5 py-3 text-right text-rose-700 font-bold">Scrap</th>
+                      <th className="px-3.5 py-3 text-center">UOM</th>
+                      <th className="px-3.5 py-3 text-center">Floor Status</th>
+                      <th className="px-4 py-3 text-right">Actions</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </TableScrollContainer>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-xs font-medium bg-white">
+                    {filteredItems.map((i, index) => {
+                      const sum = stockSummaryMap.get(i.id);
+                      const inwarded = sum?.totalInwarded ?? 0;
+                      const available = sum?.availableStock ?? 0;
+                      const inFactory = sum?.totalInFactoryAssembled ?? 0;
+                      const shipped = sum?.totalDispatchedInOrders ?? 0;
+                      const scrapped = sum?.totalScrapped ?? 0;
+                      const isNotYetInwarded = inwarded === 0;
+
+                      return (
+                        <tr key={i.id} className="hover:bg-slate-50/90 transition-colors group">
+                          <td className="px-3.5 py-3 text-center font-bold text-slate-400 text-[11px]">
+                            {index + 1}
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <div className="flex flex-col">
+                              <p className="font-black text-slate-950 text-sm leading-tight group-hover:text-indigo-600 transition-colors">
+                                {i.name}
+                              </p>
+                              {i.description && (
+                                <p className="text-[11px] text-slate-500 font-normal mt-0.5 leading-snug">
+                                  {i.description}
+                                </p>
+                              )}
+                            </div>
+                          </td>
+
+                          <td className="px-3 py-3 whitespace-nowrap">
+                            <ItemCategoryBadge category={i.category} />
+                          </td>
+
+                          <td className="px-3 py-3 whitespace-nowrap">
+                            <ColorBadge color={i.color} />
+                          </td>
+
+                          <td className="px-3.5 py-3 text-right whitespace-nowrap">
+                            <span className="inline-block font-black text-slate-950 bg-slate-100 border border-slate-300 px-2.5 py-1 rounded-lg text-xs shadow-2xs">
+                              {formatNumber(inwarded)}
+                            </span>
+                          </td>
+
+                          <td className="px-3.5 py-3 text-right bg-emerald-50/30 whitespace-nowrap">
+                            <span className={`inline-block font-black px-2.5 py-1 rounded-lg text-xs border shadow-2xs ${
+                              available > 0
+                                ? 'text-emerald-950 bg-emerald-100 border-emerald-300'
+                                : 'text-slate-400 bg-slate-50 border-slate-200'
+                            }`}>
+                              {formatNumber(available)}
+                            </span>
+                          </td>
+
+                          <td className="px-3.5 py-3 text-right bg-indigo-50/20 whitespace-nowrap">
+                            <span className={`inline-block font-black px-2.5 py-1 rounded-lg text-xs border shadow-2xs ${
+                              inFactory > 0
+                                ? 'text-indigo-950 bg-indigo-100 border-indigo-300'
+                                : 'text-slate-400 bg-slate-50 border-slate-200'
+                            }`}>
+                              {formatNumber(inFactory)}
+                            </span>
+                          </td>
+
+                          <td className="px-3.5 py-3 text-right bg-violet-50/20 whitespace-nowrap">
+                            <span className={`inline-block font-black px-2.5 py-1 rounded-lg text-xs border shadow-2xs ${
+                              shipped > 0
+                                ? 'text-violet-950 bg-violet-100 border-violet-300'
+                                : 'text-slate-400 bg-slate-50 border-slate-200'
+                            }`}>
+                              {formatNumber(shipped)}
+                            </span>
+                          </td>
+
+                          <td className="px-3.5 py-3 text-right whitespace-nowrap">
+                            {scrapped > 0 ? (
+                              <span className="inline-block font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded text-xs">
+                                {formatNumber(scrapped)}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 text-xs">0</span>
+                            )}
+                          </td>
+
+                          <td className="px-3 py-3 text-center whitespace-nowrap">
+                            <span className="inline-block font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded text-[11px]">
+                              {i.unit || 'pcs'}
+                            </span>
+                          </td>
+
+                          <td className="px-3.5 py-3 text-center whitespace-nowrap">
+                            {isNotYetInwarded ? (
+                              <span className="inline-flex items-center gap-1 font-bold text-[10px] text-slate-500 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">
+                                <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+                                Unreceived
+                              </span>
+                            ) : available > 0 ? (
+                              <span className="inline-flex items-center gap-1 font-extrabold text-[10px] text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-full">
+                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-600 animate-pulse" />
+                                In Stock
+                              </span>
+                            ) : inFactory > 0 ? (
+                              <span className="inline-flex items-center gap-1 font-extrabold text-[10px] text-indigo-800 bg-indigo-100 border border-indigo-300 px-2 py-0.5 rounded-full">
+                                <span className="h-1.5 w-1.5 rounded-full bg-indigo-600" />
+                                On Floor
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 font-extrabold text-[10px] text-violet-800 bg-violet-100 border border-violet-300 px-2 py-0.5 rounded-full">
+                                <span className="h-1.5 w-1.5 rounded-full bg-violet-600" />
+                                Dispatched
+                              </span>
+                            )}
+                          </td>
+
+                          <td className="px-4 py-3 text-right whitespace-nowrap space-x-1.5">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => openReceiveModal(i)}
+                              className="text-[11px] py-1 px-2.5 font-bold text-emerald-800 border-emerald-300 bg-emerald-50/80 hover:bg-emerald-100 shadow-2xs"
+                              title="Receive incoming stock for this item"
+                            >
+                              <PackagePlus className="h-3 w-3 mr-1 text-emerald-600" />
+                              Receive Stock
+                            </Button>
+                            {sum && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setInspectedItemSummary(sum)}
+                                className="text-[11px] py-1 px-2.5 font-bold text-indigo-700 border-indigo-300 bg-indigo-50/70 hover:bg-indigo-100 shadow-2xs"
+                                title="Inspect 360° lifecycle audit"
+                              >
+                                <Eye className="h-3 w-3 mr-1" />
+                                Audit
+                              </Button>
+                            )}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => openEditModal(i)}
+                              className="text-[11px] py-1 px-2 font-bold text-slate-700 border-slate-300 hover:bg-slate-100 shadow-2xs"
+                              title="Edit item specifications"
+                            >
+                              <Edit2 className="h-3 w-3" />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setDeleteModalItem({ id: i.id, name: i.name })}
+                              className="text-[11px] py-1 px-2 font-bold text-rose-600 border-rose-300 hover:bg-rose-50 shadow-2xs"
+                              title="Delete item"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </TableScrollContainer>
+            </div>
+          </div>
         )}
       </Card>
 
@@ -791,11 +1049,10 @@ export function ItemsView() {
                     : '100ml Clear Boston Round Glass Bottle'
                 }
                 required
-                autoFocus
               />
             </Field>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Unit of Measure (UOM)" htmlFor="unit" required>
                 <select
                   id="unit"
@@ -887,7 +1144,6 @@ export function ItemsView() {
                 value={receiveItemId}
                 onChange={(e) => setReceiveItemId(e.target.value)}
                 required
-                autoFocus
               >
                 <option value="">Select stock item…</option>
                 {items?.map((itm) => (
@@ -1158,7 +1414,7 @@ export function ItemsView() {
               />
             </Field>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Unit of Measure (UOM)" htmlFor="edit-unit" required>
                 <select
                   id="edit-unit"

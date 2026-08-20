@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { ArrowLeftRight, ArrowRight, Undo2, Truck, Printer } from 'lucide-react';
 import { Card, Badge, ColorBadge, PrintingBadge, Button } from '@/components/ui';
 import type { MovementWithRelations, Dispatch } from '@/lib/supabase';
@@ -7,6 +8,7 @@ export type MovementAuditTrailProps = {
   movements: MovementWithRelations[];
   dispatches: Dispatch[];
   unitLabel: string;
+  highlightMovementId?: string;
   onOpenReversalModal: (m: MovementWithRelations) => void;
   onOpenChallanModal: (d: Dispatch) => void;
 };
@@ -15,9 +17,21 @@ export function MovementAuditTrail({
   movements,
   dispatches,
   unitLabel,
+  highlightMovementId,
   onOpenReversalModal,
   onOpenChallanModal,
 }: MovementAuditTrailProps) {
+  const scrolledRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (highlightMovementId && movements.length > 0 && scrolledRef.current !== highlightMovementId) {
+      const el = document.getElementById(`movement-row-${highlightMovementId}`);
+      if (el) {
+        scrolledRef.current = highlightMovementId;
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  }, [highlightMovementId, movements]);
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
       {/* Movement History */}
@@ -39,21 +53,27 @@ export function MovementAuditTrail({
             {movements.map((m) => {
               const isScrap = (m.remarks ?? '').startsWith('[SCRAP') || m.to_stage?.name === 'Scrap / Defect';
               const isReversal = (m.remarks ?? '').startsWith('[REVERSAL');
+              const isHighlighted = highlightMovementId === m.id;
 
               return (
-                <li key={m.id} className="relative">
+                <li key={m.id} id={`movement-row-${m.id}`} className="relative scroll-mt-24">
                   <span
                     className={`absolute -left-[27px] top-1.5 flex h-3.5 w-3.5 items-center justify-center rounded-full ring-4 ring-white ${
-                      isScrap ? 'bg-rose-600' : isReversal ? 'bg-amber-500' : 'bg-slate-900'
+                      isScrap ? 'bg-rose-600' : isReversal ? 'bg-amber-500' : isHighlighted ? 'bg-amber-600 ring-amber-200 animate-pulse' : 'bg-slate-900'
                     }`}
                   />
-                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs bg-slate-50 p-3 rounded-xl border border-slate-200/70">
+                  <div className={`flex flex-wrap items-center justify-between gap-2 text-xs p-3 rounded-xl border transition-all duration-300 ${
+                    isHighlighted
+                      ? 'bg-amber-50/90 border-amber-400 ring-2 ring-amber-300/80 shadow-md'
+                      : 'bg-slate-50 border-slate-200/70'
+                  }`}>
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <span className={`font-bold ${isScrap ? 'text-rose-900' : isReversal ? 'text-amber-900' : 'text-slate-900'}`}>
                         {m.from_stage?.name ?? '—'}{' '}
                         <ArrowRight className="mx-1 inline h-3 w-3 text-slate-400" />{' '}
                         {m.to_stage?.name ?? '—'}
                       </span>
+                      {isHighlighted && <Badge label="Search Match" variant="amber" size="sm" />}
                       {isScrap && <Badge label="Scrap Loss" variant="rose" size="sm" />}
                       {isReversal && <Badge label="Reversal Entry" variant="amber" size="sm" />}
                     </div>
@@ -120,66 +140,125 @@ export function MovementAuditTrail({
             No customer dispatches recorded for this batch yet.
           </p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="bg-slate-50 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                <tr>
-                  <th className="px-3 py-2">Date</th>
-                  <th className="px-3 py-2">Customer</th>
-                  <th className="px-3 py-2">Invoice #</th>
-                  <th className="px-3 py-2">Specs & Packaging</th>
-                  <th className="px-3 py-2 text-right">Quantity</th>
-                  <th className="px-3 py-2 text-right">Delivery Document</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 font-medium">
-                {dispatches.map((d) => (
-                  <tr key={d.id} className="hover:bg-slate-50/50 transition">
-                    <td className="px-3 py-2.5 text-slate-500">{formatDate(d.dispatched_on)}</td>
-                    <td className="px-3 py-2.5 font-bold text-slate-800">{d.customer_name}</td>
-                    <td className="px-3 py-2.5 text-slate-600">{d.invoice_no}</td>
-                    <td className="px-3 py-2.5">
-                      <div className="flex flex-wrap gap-1">
-                        <ColorBadge color={d.color} />
-                        {d.printing_design && <PrintingBadge design={d.printing_design} />}
-                        {d.cap_name && (
-                          <span className="text-[10px] font-bold text-violet-700 bg-violet-50 px-1.5 py-0.5 rounded border border-violet-200">
-                            🧴 {d.cap_name}
-                          </span>
-                        )}
-                        {d.atomizer_name && (
-                          <span className="text-[10px] font-bold text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded border border-sky-200">
-                            💨 {d.atomizer_name}
-                          </span>
-                        )}
-                        {d.box_name && (
-                          <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
-                            📦 {d.box_name}
-                          </span>
-                        )}
-                        {d.product_specs && (
-                          <span className="text-[10px] text-slate-500">{d.product_specs}</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2.5 text-right font-black text-slate-900">
-                      {formatNumber(d.qty)} {unitLabel}
-                    </td>
-                    <td className="px-3 py-2.5 text-right">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => onOpenChallanModal(d)}
-                        className="text-[11px] font-bold text-violet-700 bg-violet-50/50 border-violet-200 cursor-pointer"
-                      >
-                        <Printer className="h-3 w-3 mr-1" />
-                        Challan
-                      </Button>
-                    </td>
+          <div>
+            {/* Mobile View: Cards (< sm) */}
+            <div className="space-y-2.5 sm:hidden">
+              {dispatches.map((d) => (
+                <div key={`mob-audit-dispatch-${d.id}`} className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <span className="font-mono font-bold text-slate-700 bg-white px-1.5 py-0.5 rounded border border-slate-200 text-[10px]">
+                        #{d.invoice_no}
+                      </span>
+                      <h4 className="font-extrabold text-slate-900 text-sm mt-1">{d.customer_name}</h4>
+                      <p className="text-[10px] text-slate-400">{formatDate(d.dispatched_on)}</p>
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      <p className="font-black text-slate-900 text-base">{formatNumber(d.qty)}</p>
+                      <p className="text-[10px] text-slate-500 font-bold">{unitLabel}</p>
+                    </div>
+                  </div>
+
+                  {(d.color || d.printing_design || d.cap_name || d.atomizer_name || d.box_name) && (
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {d.color && <ColorBadge color={d.color} />}
+                      {d.printing_design && <PrintingBadge design={d.printing_design} />}
+                      {d.cap_name && (
+                        <span className="text-[10px] font-bold text-violet-700 bg-violet-50 px-1.5 py-0.5 rounded border border-violet-200">
+                          🧴 {d.cap_name}
+                        </span>
+                      )}
+                      {d.atomizer_name && (
+                        <span className="text-[10px] font-bold text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded border border-sky-200">
+                          💨 {d.atomizer_name}
+                        </span>
+                      )}
+                      {d.box_name && (
+                        <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                          📦 {d.box_name}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="pt-1.5 border-t border-slate-200 flex justify-end">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => onOpenChallanModal(d)}
+                      className="text-xs font-bold text-violet-700 bg-white border-violet-200 min-h-[34px] px-3"
+                    >
+                      <Printer className="h-3 w-3 mr-1" />
+                      Challan
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop View: Table (>= sm) */}
+            <div className="hidden sm:block overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-50 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2">Date</th>
+                    <th className="px-3 py-2">Customer</th>
+                    <th className="px-3 py-2">Invoice #</th>
+                    <th className="px-3 py-2">Specs & Packaging</th>
+                    <th className="px-3 py-2 text-right">Quantity</th>
+                    <th className="px-3 py-2 text-right">Delivery Document</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-medium">
+                  {dispatches.map((d) => (
+                    <tr key={d.id} className="hover:bg-slate-50/50 transition">
+                      <td className="px-3 py-2.5 text-slate-500">{formatDate(d.dispatched_on)}</td>
+                      <td className="px-3 py-2.5 font-bold text-slate-800">{d.customer_name}</td>
+                      <td className="px-3 py-2.5 text-slate-600">{d.invoice_no}</td>
+                      <td className="px-3 py-2.5">
+                        <div className="flex flex-wrap gap-1">
+                          <ColorBadge color={d.color} />
+                          {d.printing_design && <PrintingBadge design={d.printing_design} />}
+                          {d.cap_name && (
+                            <span className="text-[10px] font-bold text-violet-700 bg-violet-50 px-1.5 py-0.5 rounded border border-violet-200">
+                              🧴 {d.cap_name}
+                            </span>
+                          )}
+                          {d.atomizer_name && (
+                            <span className="text-[10px] font-bold text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded border border-sky-200">
+                              💨 {d.atomizer_name}
+                            </span>
+                          )}
+                          {d.box_name && (
+                            <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                              📦 {d.box_name}
+                            </span>
+                          )}
+                          {d.product_specs && (
+                            <span className="text-[10px] text-slate-500">{d.product_specs}</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-black text-slate-900">
+                        {formatNumber(d.qty)} {unitLabel}
+                      </td>
+                      <td className="px-3 py-2.5 text-right">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onOpenChallanModal(d)}
+                          className="text-[11px] font-bold text-violet-700 bg-violet-50/50 border-violet-200 cursor-pointer"
+                        >
+                          <Printer className="h-3 w-3 mr-1" />
+                          Challan
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </Card>

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Boxes, Save, Trash2, Plus, Phone } from 'lucide-react';
+import { useEffect, useState, useRef } from 'react';
+import { Boxes, Save, Trash2, Plus, Phone, Download } from 'lucide-react';
 import {
   Card,
   PageHeader,
@@ -17,9 +17,13 @@ import { useToast } from '@/components/Toast';
 import { fetchSuppliers } from '@/lib/queries';
 import { supabase } from '@/lib/supabase';
 import type { Supplier } from '@/lib/supabase';
-import { getErrorMessage, formatDate } from '@/lib/utils';
+import { getErrorMessage, formatDate, downloadCSV, getTodayDateString } from '@/lib/utils';
 
-export function SuppliersView() {
+export type SuppliersViewProps = {
+  initialSupplierId?: string;
+};
+
+export function SuppliersView({ initialSupplierId }: SuppliersViewProps = {}) {
   const [suppliers, setSuppliers] = useState<Supplier[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -34,19 +38,34 @@ export function SuppliersView() {
   const [deleteModalSupplier, setDeleteModalSupplier] = useState<Supplier | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  const lastHandledSupplierIdRef = useRef<string | null>(null);
   const toast = useToast();
 
   const load = async (isSilent = false) => {
     if (!isSilent) setLoading(true);
     setError(null);
     try {
-      setSuppliers(await fetchSuppliers());
+      const data = await fetchSuppliers();
+      setSuppliers(data);
+      if (initialSupplierId && lastHandledSupplierIdRef.current !== initialSupplierId) {
+        lastHandledSupplierIdRef.current = initialSupplierId;
+        const found = data.find((s) => s.id === initialSupplierId);
+        if (found) setSearchQuery(found.name);
+      }
     } catch (err) {
       setError(getErrorMessage(err, 'Failed to load suppliers'));
     } finally {
       if (!isSilent) setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (initialSupplierId && suppliers && lastHandledSupplierIdRef.current !== initialSupplierId) {
+      lastHandledSupplierIdRef.current = initialSupplierId;
+      const found = suppliers.find((s) => s.id === initialSupplierId);
+      if (found) setSearchQuery(found.name);
+    }
+  }, [initialSupplierId, suppliers]);
 
   useEffect(() => {
     load();
@@ -127,18 +146,48 @@ export function SuppliersView() {
     return s.name.toLowerCase().includes(q) || (s.contact ?? '').toLowerCase().includes(q);
   });
 
+  // CSV Export Handler
+  const exportSuppliersCSV = () => {
+    if (!suppliers || suppliers.length === 0) return;
+    try {
+      const headers = ['Supplier Name', 'Contact Details', 'Registered Date'];
+      const rows = suppliers.map((s) => [
+        s.name,
+        s.contact || '',
+        s.created_at ? formatDate(s.created_at) : '',
+      ]);
+
+      const filename = `ffstock_suppliers_directory_${getTodayDateString()}`;
+      downloadCSV(filename, headers, rows);
+      toast.success('Suppliers directory CSV exported successfully', 'Export Complete');
+    } catch (err) {
+      toast.error(getErrorMessage(err), 'Export Failed');
+    }
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Suppliers"
         subtitle="Manage verified raw material suppliers, packaging vendors, and component fabricators."
+        action={
+          <Button
+            variant="outline"
+            onClick={exportSuppliersCSV}
+            className="text-xs font-bold text-slate-700 bg-white shadow-2xs hover:bg-slate-50 cursor-pointer"
+            title="Download suppliers directory CSV"
+          >
+            <Download className="h-3.5 w-3.5 text-slate-500" />
+            Export Suppliers CSV
+          </Button>
+        }
       />
 
       {error && <ErrorBanner message={error} />}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 items-start">
         {/* Add Supplier Form */}
-        <Card className="lg:col-span-1 border-slate-200/90 shadow-sm sticky top-20">
+        <Card className="lg:col-span-1 border-slate-200/90 shadow-sm lg:sticky lg:top-20">
           <div className="flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-900 text-white shadow-2xs">
               <Plus className="h-4 w-4" />
@@ -157,7 +206,6 @@ export function SuppliersView() {
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Apex Glass & Packaging Co."
                 disabled={submitting}
-                autoFocus
               />
             </Field>
 
@@ -176,7 +224,7 @@ export function SuppliersView() {
             </Field>
 
             <div className="pt-2">
-              <Button type="submit" loading={submitting} className="w-full" variant="primary">
+              <Button type="submit" loading={submitting} className="w-full min-h-[44px]" variant="primary">
                 <Save className="h-4 w-4" />
                 <span>Save Supplier</span>
                 <kbd className="hidden sm:inline-block ml-1.5 px-1.5 py-0.5 text-[10px] font-mono bg-slate-800 text-slate-300 rounded">Ctrl+Enter</kbd>
@@ -209,53 +257,95 @@ export function SuppliersView() {
               description={searchQuery ? 'No suppliers match your search filter.' : 'Add your first supplier using the form on the left.'}
             />
           ) : (
-            <TableScrollContainer>
-              <table className="w-full text-left text-sm">
-                <thead className="bg-slate-50 border-b border-slate-200/80 text-xs font-bold uppercase tracking-wider text-slate-600">
-                  <tr>
-                    <th className="px-4 py-3">Supplier Name</th>
-                    <th className="px-4 py-3">Contact</th>
-                    <th className="px-4 py-3">Added Date</th>
-                    <th className="px-4 py-3 text-right">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 bg-white">
-                  {filteredSuppliers.map((s) => (
-                    <tr key={s.id} className="transition hover:bg-slate-50/80 group">
-                      <td className="px-4 py-3.5 font-bold text-slate-900">
-                        <div className="flex items-center gap-2">
-                          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-700 text-xs font-bold shrink-0">
-                            {s.name.charAt(0).toUpperCase()}
-                          </span>
-                          <span>{s.name}</span>
+            <>
+              {/* Mobile View: Cards (< sm) */}
+              <div className="grid grid-cols-1 gap-2.5 sm:hidden">
+                {filteredSuppliers.map((s) => (
+                  <Card key={`mobile-supplier-${s.id}`} className="p-3.5 border-slate-200 shadow-2xs space-y-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2.5">
+                        <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-900 text-white text-xs font-bold shrink-0 shadow-2xs">
+                          {s.name.charAt(0).toUpperCase()}
+                        </span>
+                        <div>
+                          <p className="font-bold text-slate-900 text-sm">{s.name}</p>
+                          <p className="text-[11px] text-slate-500">{formatDate(s.created_at)}</p>
                         </div>
-                      </td>
-                      <td className="px-4 py-3.5 text-slate-600 text-xs">
-                        {s.contact ? (
-                          <span className="font-medium text-slate-700">{s.contact}</span>
-                        ) : (
-                          <span className="text-slate-400 italic">No contact info</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3.5 text-xs text-slate-500 whitespace-nowrap">
-                        {formatDate(s.created_at)}
-                      </td>
-                      <td className="px-4 py-3.5 text-right">
-                        <button
-                          type="button"
-                          onClick={() => setDeleteModalSupplier(s)}
-                          className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition cursor-pointer"
-                          title="Delete supplier"
-                          aria-label={`Delete ${s.name}`}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </TableScrollContainer>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setDeleteModalSupplier(s)}
+                        className="rounded-xl min-w-[38px] min-h-[38px] flex items-center justify-center text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition cursor-pointer"
+                        title="Delete supplier"
+                        aria-label={`Delete ${s.name}`}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    {s.contact ? (
+                      <div className="flex items-center gap-2 text-xs font-medium text-slate-700 bg-slate-50 p-2 rounded-xl border border-slate-100">
+                        <Phone className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                        <span className="break-all">{s.contact}</span>
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-slate-400 italic">No contact details registered</p>
+                    )}
+                  </Card>
+                ))}
+              </div>
+
+              {/* Desktop View: Table (>= sm) */}
+              <div className="hidden sm:block">
+                <TableScrollContainer>
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-50 border-b border-slate-200/80 text-xs font-bold uppercase tracking-wider text-slate-600">
+                      <tr>
+                        <th className="px-4 py-3">Supplier Name</th>
+                        <th className="px-4 py-3">Contact</th>
+                        <th className="px-4 py-3">Added Date</th>
+                        <th className="px-4 py-3 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {filteredSuppliers.map((s) => (
+                        <tr key={s.id} className="transition hover:bg-slate-50/80 group">
+                          <td className="px-4 py-3.5 font-bold text-slate-900">
+                            <div className="flex items-center gap-2">
+                              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-700 text-xs font-bold shrink-0">
+                                {s.name.charAt(0).toUpperCase()}
+                              </span>
+                              <span>{s.name}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3.5 text-slate-600 text-xs">
+                            {s.contact ? (
+                              <span className="font-medium text-slate-700">{s.contact}</span>
+                            ) : (
+                              <span className="text-slate-400 italic">No contact info</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3.5 text-xs text-slate-500 whitespace-nowrap">
+                            {formatDate(s.created_at)}
+                          </td>
+                          <td className="px-4 py-3.5 text-right">
+                            <button
+                              type="button"
+                              onClick={() => setDeleteModalSupplier(s)}
+                              className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition cursor-pointer"
+                              title="Delete supplier"
+                              aria-label={`Delete ${s.name}`}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </TableScrollContainer>
+              </div>
+            </>
           )}
         </div>
       </div>

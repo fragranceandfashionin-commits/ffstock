@@ -99,34 +99,58 @@ export function ComponentDrilldownModal({
               No customer orders have dispatched this component yet.
             </p>
           ) : (
-            <div className="overflow-x-auto border border-slate-200 rounded-xl">
-              <table className="w-full text-xs">
-                <thead className="bg-slate-100 font-bold text-slate-700 border-b border-slate-200">
-                  <tr>
-                    <th className="p-2.5 text-left">Invoice No</th>
-                    <th className="p-2.5 text-left">Customer Account</th>
-                    <th className="p-2.5 text-left">Dispatch Date</th>
-                    <th className="p-2.5 text-left">Origin Batch & Product</th>
-                    <th className="p-2.5 text-right font-black text-violet-900">Quantity Consumed</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {selectedComponent.orderUsageList.map((ord, idx) => (
-                    <tr key={`modal-ord-${idx}`} className="hover:bg-slate-50">
-                      <td className="p-2.5 font-black text-slate-800">{ord.invoiceNo}</td>
-                      <td className="p-2.5 font-bold text-slate-900">{ord.customerName}</td>
-                      <td className="p-2.5 text-slate-500">{formatDate(ord.dispatchedOn)}</td>
-                      <td className="p-2.5">
-                        <span className="font-bold text-indigo-700">{ord.batchNo}</span>
-                        <span className="text-slate-500 ml-1">({ord.itemName})</span>
-                      </td>
-                      <td className="p-2.5 text-right font-black text-violet-700 text-sm">
-                        {formatNumber(ord.qtyUsed)} <span className="text-[10px] font-normal text-slate-500">pcs</span>
-                      </td>
+            <div>
+              {/* Mobile View: Cards (< sm) */}
+              <div className="space-y-2 sm:hidden">
+                {selectedComponent.orderUsageList.map((ord, idx) => (
+                  <div key={`modal-ord-mob-${idx}`} className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <span className="font-mono font-black text-slate-900 text-xs">#{ord.invoiceNo}</span>
+                        <p className="font-bold text-slate-800 text-sm mt-0.5">{ord.customerName}</p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="font-black text-violet-800 text-sm">{formatNumber(ord.qtyUsed)} pcs</span>
+                        <p className="text-[10px] text-slate-400">{formatDate(ord.dispatchedOn)}</p>
+                      </div>
+                    </div>
+                    <div className="text-[11px] text-slate-600 bg-white p-1.5 rounded-lg border border-slate-100 font-mono">
+                      Batch {ord.batchNo} • {ord.itemName}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Desktop View: Table (>= sm) */}
+              <div className="hidden sm:block overflow-x-auto border border-slate-200 rounded-xl">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-100 font-bold text-slate-700 border-b border-slate-200">
+                    <tr>
+                      <th className="p-2.5 text-left">Invoice No</th>
+                      <th className="p-2.5 text-left">Customer Account</th>
+                      <th className="p-2.5 text-left">Dispatch Date</th>
+                      <th className="p-2.5 text-left">Origin Batch & Product</th>
+                      <th className="p-2.5 text-right font-black text-violet-900">Quantity Consumed</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {selectedComponent.orderUsageList.map((ord, idx) => (
+                      <tr key={`modal-ord-${idx}`} className="hover:bg-slate-50">
+                        <td className="p-2.5 font-black text-slate-800">{ord.invoiceNo}</td>
+                        <td className="p-2.5 font-bold text-slate-900">{ord.customerName}</td>
+                        <td className="p-2.5 text-slate-500">{formatDate(ord.dispatchedOn)}</td>
+                        <td className="p-2.5">
+                          <span className="font-bold text-indigo-700">{ord.batchNo}</span>
+                          <span className="text-slate-500 ml-1">({ord.itemName})</span>
+                        </td>
+                        <td className="p-2.5 text-right font-black text-violet-700 text-sm">
+                          {formatNumber(ord.qtyUsed)} <span className="text-[10px] font-normal text-slate-500">pcs</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>
@@ -142,39 +166,60 @@ export function ComponentDrilldownModal({
               No active floor batches assembling this component yet.
             </p>
           ) : (
-            <div className="overflow-x-auto border border-slate-200 rounded-xl">
-              <table className="w-full text-xs">
-                <thead className="bg-slate-100 font-bold text-slate-700 border-b border-slate-200">
-                  <tr>
-                    <th className="p-2.5 text-left">Batch No</th>
-                    <th className="p-2.5 text-left">Product Item</th>
-                    <th className="p-2.5 text-left">Assembly Date</th>
-                    <th className="p-2.5 text-right font-black text-indigo-900">Quantity Attached</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {selectedComponent.batchUsageList.map((bat, idx) => (
-                    <tr key={`modal-bat-${idx}`} className="hover:bg-slate-50">
-                      <td className="p-2.5 font-bold text-indigo-700">{bat.batchNo}</td>
-                      <td className="p-2.5 font-medium text-slate-800">{bat.itemName}</td>
-                      <td className="p-2.5 text-slate-500">{bat.movedOn ? formatDate(bat.movedOn) : '—'}</td>
-                      <td className="p-2.5 text-right font-black text-indigo-700 text-sm">
-                        {formatNumber(bat.qtyUsed)} <span className="text-[10px] font-normal text-slate-500">pcs</span>
-                      </td>
+            <div>
+              {/* Mobile View: Cards (< sm) */}
+              <div className="space-y-2 sm:hidden">
+                {selectedComponent.batchUsageList.map((bat, idx) => (
+                  <div key={`modal-bat-mob-${idx}`} className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <span className="font-mono font-bold text-indigo-700 text-xs">{bat.batchNo}</span>
+                        <p className="font-medium text-slate-800 mt-0.5">{bat.itemName}</p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="font-black text-indigo-700 text-sm">{formatNumber(bat.qtyUsed)} pcs</span>
+                        <p className="text-[10px] text-slate-400">{bat.movedOn ? formatDate(bat.movedOn) : '—'}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Desktop View: Table (>= sm) */}
+              <div className="hidden sm:block overflow-x-auto border border-slate-200 rounded-xl">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-100 font-bold text-slate-700 border-b border-slate-200">
+                    <tr>
+                      <th className="p-2.5 text-left">Batch No</th>
+                      <th className="p-2.5 text-left">Product Item</th>
+                      <th className="p-2.5 text-left">Assembly Date</th>
+                      <th className="p-2.5 text-right font-black text-indigo-900">Quantity Attached</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {selectedComponent.batchUsageList.map((bat, idx) => (
+                      <tr key={`modal-bat-${idx}`} className="hover:bg-slate-50">
+                        <td className="p-2.5 font-bold text-indigo-700">{bat.batchNo}</td>
+                        <td className="p-2.5 font-medium text-slate-800">{bat.itemName}</td>
+                        <td className="p-2.5 text-slate-500">{bat.movedOn ? formatDate(bat.movedOn) : '—'}</td>
+                        <td className="p-2.5 text-right font-black text-indigo-700 text-sm">
+                          {formatNumber(bat.qtyUsed)} <span className="text-[10px] font-normal text-slate-500">pcs</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>
 
         {/* Modal Actions */}
-        <div className="flex justify-between items-center pt-3 border-t border-slate-100">
+        <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2 pt-3 border-t border-slate-100">
           <span className="text-xs text-slate-400">
             Live inventory tracking data.
           </span>
-          <Button variant="secondary" size="sm" onClick={onClose} className="cursor-pointer">
+          <Button variant="secondary" size="sm" onClick={onClose} className="cursor-pointer min-h-[38px] justify-center">
             Close Details
           </Button>
         </div>
