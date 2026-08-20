@@ -105,6 +105,27 @@ export async function insertSupplier(payload: {
   return data as Supplier;
 }
 
+export async function insertSuppliers(
+  payloads: Array<{
+    name: string;
+    contact?: string | null;
+  }>
+): Promise<Supplier[]> {
+  if (!payloads || payloads.length === 0) return [];
+  const cleaned = payloads
+    .map((p) => ({
+      name: p.name.trim(),
+      contact: p.contact?.trim() || null,
+    }))
+    .filter((p) => p.name.length > 0);
+
+  if (cleaned.length === 0) return [];
+
+  const { data, error } = await supabase.from('suppliers').insert(cleaned).select('*');
+  if (error) throw error;
+  return (data ?? []) as Supplier[];
+}
+
 export async function fetchItems() {
   const { data, error } = await supabase.from('items').select('*').order('name');
   if (error) throw error;
@@ -217,6 +238,52 @@ export async function insertItem(payload: {
       .single();
     if (fallbackRes.error) throw fallbackRes.error;
     return fallbackRes.data as { id: string };
+  }
+
+  throw error;
+}
+
+export async function insertItems(
+  payloads: Array<{
+    name: string;
+    category?: string;
+    unit?: string;
+    description?: string | null;
+    color?: string | null;
+  }>
+): Promise<Item[]> {
+  if (!payloads || payloads.length === 0) return [];
+  const cleaned = payloads
+    .map((p) => ({
+      name: p.name.trim(),
+      category: p.category?.trim() || 'Bottle',
+      unit: p.unit?.trim() || 'pcs',
+      description: p.description?.trim() || null,
+      color: p.color?.trim() || null,
+    }))
+    .filter((p) => p.name.length > 0);
+
+  if (cleaned.length === 0) return [];
+
+  const { data, error } = await supabase.from('items').insert(cleaned).select('*');
+  if (!error && data) {
+    return data as Item[];
+  }
+
+  // Graceful fallback if any columns are missing in legacy schemas
+  if (
+    error &&
+    (error.code === 'PGRST204' ||
+      error.message?.toLowerCase().includes('column') ||
+      error.message?.toLowerCase().includes('schema cache') ||
+      error.code === '42703')
+  ) {
+    const fallbackRes = await supabase
+      .from('items')
+      .insert(cleaned.map((p) => ({ name: p.name })))
+      .select('*');
+    if (fallbackRes.error) throw fallbackRes.error;
+    return (fallbackRes.data ?? []) as Item[];
   }
 
   throw error;
@@ -567,6 +634,56 @@ export async function insertInwardBatch(payload: {
   const res = await resilientInsert(
     'inward_batches',
     fullPayload,
+    ['batch_no', 'supplier_id', 'item_id', 'received_on', 'qty_received', 'location']
+  );
+
+  if (res.error) {
+    throw res.error;
+  }
+  return res.data;
+}
+
+export async function insertInwardBatches(
+  payloads: Array<{
+    batch_no: string;
+    brand_name?: string | null;
+    supplier_id: string;
+    item_id: string;
+    received_on: string;
+    qty_received: number;
+    location: string;
+    image_url?: string | null;
+    color?: string | null;
+    cap_item_id?: string | null;
+    atomizer_item_id?: string | null;
+    box_item_id?: string | null;
+    cap_qty?: number | null;
+    atomizer_qty?: number | null;
+    box_qty?: number | null;
+  }>
+) {
+  if (!payloads || payloads.length === 0) return [];
+  const fullPayloads: Record<string, unknown>[] = payloads.map((payload) => ({
+    batch_no: payload.batch_no.trim(),
+    brand_name: payload.brand_name?.trim() || null,
+    supplier_id: payload.supplier_id,
+    item_id: payload.item_id,
+    received_on: payload.received_on,
+    qty_received: payload.qty_received,
+    location: payload.location.trim(),
+    image_url: payload.image_url || null,
+    color: payload.color?.trim() || null,
+    cap_item_id: payload.cap_item_id || null,
+    atomizer_item_id: payload.atomizer_item_id || null,
+    box_item_id: payload.box_item_id || null,
+    cap_qty: payload.cap_qty || null,
+    atomizer_qty: payload.atomizer_qty || null,
+    box_qty: payload.box_qty || null,
+  }));
+
+  const res = await resilientBatchInsert(
+    'inward_batches',
+    fullPayloads,
     ['batch_no', 'supplier_id', 'item_id', 'received_on', 'qty_received', 'location']
   );
 
