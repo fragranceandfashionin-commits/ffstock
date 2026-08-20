@@ -94,6 +94,7 @@ export type Stage = {
 export type InwardBatch = {
   id: string;
   batch_no: string;
+  brand_name?: string | null;
   supplier_id: string;
   item_id: string;
   received_on: string;

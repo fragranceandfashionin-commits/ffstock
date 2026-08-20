@@ -504,6 +504,21 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
           setFormError(`Row #${i + 1} must have a printing / artwork specification specified when advancing from Printing.`);
           return;
         }
+        if (isLeavingFilling) {
+          const rowCapId = (row.cap_item_id || moveCapItemId || selectedBatch?.cap_item_id || '').trim();
+          const rowCapName = (row.cap_name?.trim() || capName.trim() || selectedBatch?.cap_item?.name || '').trim();
+          if (!rowCapId && !rowCapName) {
+            setFormError(`Row #${i + 1} (${row.color || 'Variant'}) must have a Cap / Closure specified when advancing from the Filling stage. Bottles cannot move without caps.`);
+            return;
+          }
+
+          const rowAtomId = (row.atomizer_item_id || moveAtomizerItemId || selectedBatch?.atomizer_item_id || '').trim();
+          const rowAtomName = (row.atomizer_name?.trim() || atomizerName.trim() || selectedBatch?.atomizer_item?.name || '').trim();
+          if (!rowAtomId && !rowAtomName) {
+            setFormError(`Row #${i + 1} (${row.color || 'Variant'}) must have an Atomizer / Pump specified when advancing from the Filling stage. Bottles cannot move without atomizers.`);
+            return;
+          }
+        }
       }
 
       const totalVariantQty = variantRows.reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
@@ -624,6 +639,20 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     if (isLeavingPrinting && !movePrintingDesign.trim()) {
       setFormError('Printing / artwork specification is mandatory when advancing from the Printing stage.');
       return;
+    }
+
+    if (isLeavingFilling) {
+      const hasCap = Boolean(moveCapItemId || capName.trim() || selectedBatch?.cap_item_id || selectedBatch?.cap_item?.name);
+      if (!hasCap) {
+        setFormError('Cap closure specification or warehouse item selection is mandatory when advancing from the Filling stage. Bottles cannot move without caps.');
+        return;
+      }
+
+      const hasAtomizer = Boolean(moveAtomizerItemId || atomizerName.trim() || selectedBatch?.atomizer_item_id || selectedBatch?.atomizer_item?.name);
+      if (!hasAtomizer) {
+        setFormError('Atomizer / pump specification or warehouse item selection is mandatory when advancing from the Filling stage. Bottles cannot move without atomizers.');
+        return;
+      }
     }
 
     setSubmitting(true);
@@ -987,6 +1016,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     try {
       const headers = [
         'Movement Date',
+        'Brand Name',
         'Batch No',
         'Item Name',
         'From Stage',
@@ -1002,6 +1032,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
       ];
       const rows = movements.map((m) => [
         m.moved_on,
+        selectedBatch?.brand_name || '—',
         selectedBatch?.batch_no || 'Batch',
         selectedBatch?.item?.name || 'Product',
         m.from_stage?.name ?? '',
@@ -1031,6 +1062,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
         'Invoice No',
         'Customer Name',
         'Dispatch Date',
+        'Brand Name',
         'Batch No',
         'Item SKU',
         'Dispatched Qty',
@@ -1045,6 +1077,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
         d.invoice_no,
         d.customer_name,
         d.dispatched_on,
+        selectedBatch?.brand_name || '—',
         selectedBatch?.batch_no || 'Batch',
         selectedBatch?.item?.name || 'Product',
         d.qty,
@@ -1229,6 +1262,8 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
                               unitLabel={unitLabel}
                               allColorSuggestions={allColorSuggestions}
                               allPrintingSuggestions={allPrintingSuggestions}
+                              caps={caps}
+                              atomizers={atomizers}
                               boxes={boxes}
                               stockSummaryMap={stockSummaryMap}
                               isColoringStage={isColoringStage}

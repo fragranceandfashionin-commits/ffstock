@@ -34,7 +34,7 @@ export function BatchInspectionModal({
     <Modal
       isOpen={Boolean(inspectedBatchItem)}
       onClose={onClose}
-      title={`Batch Details: ${inspectedBatchItem.batch.batch_no} [${inspectedBatchItem.batch.item?.name ?? '—'}]`}
+      title={`Batch Details: ${inspectedBatchItem.batch.brand_name ? `[${inspectedBatchItem.batch.brand_name}] ` : ''}${inspectedBatchItem.batch.batch_no} [${inspectedBatchItem.batch.item?.name ?? '—'}]`}
       maxWidthClass="max-w-5xl"
     >
       <div className="space-y-5">
@@ -70,6 +70,11 @@ export function BatchInspectionModal({
             )}
             <div>
               <div className="flex flex-wrap items-center gap-2">
+                {inspectedBatchItem.batch.brand_name && (
+                  <span className="text-xs font-black text-indigo-300 bg-indigo-950/80 px-2.5 py-1 rounded-lg border border-indigo-700 shadow-2xs">
+                    🏢 {inspectedBatchItem.batch.brand_name}
+                  </span>
+                )}
                 <span className="text-lg font-black text-amber-400 font-mono tracking-tight">
                   {inspectedBatchItem.batch.batch_no}
                 </span>

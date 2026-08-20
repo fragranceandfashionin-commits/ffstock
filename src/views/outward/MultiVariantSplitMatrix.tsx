@@ -13,6 +13,8 @@ export type MultiVariantSplitMatrixProps = {
   unitLabel: string;
   allColorSuggestions: string[];
   allPrintingSuggestions: string[];
+  caps: Item[];
+  atomizers: Item[];
   boxes: Item[];
   stockSummaryMap: Map<string, ComponentStockSummary>;
   isColoringStage: boolean;
@@ -44,8 +46,12 @@ export function MultiVariantSplitMatrix({
   unitLabel,
   allColorSuggestions,
   allPrintingSuggestions,
+  caps,
+  atomizers,
   boxes,
   stockSummaryMap,
+  isColoringStage,
+  isLeavingColoring,
   isPrintingStage,
   isLeavingPrinting,
   isFillingStage,
@@ -149,7 +155,9 @@ export function MultiVariantSplitMatrix({
                 {/* Color Selection & Typing */}
                 <div
                   className={
-                    (isLeavingPackaging || isPackagingStage) && (isLeavingPrinting || isPrintingStage || isFillingStage || isLeavingFilling)
+                    (isFillingStage || isLeavingFilling)
+                      ? 'sm:col-span-3'
+                      : (isLeavingPackaging || isPackagingStage) && (isLeavingPrinting || isPrintingStage)
                       ? 'sm:col-span-3'
                       : (isLeavingPackaging || isPackagingStage) || (isLeavingPrinting || isPrintingStage)
                       ? 'sm:col-span-4'
@@ -157,7 +165,7 @@ export function MultiVariantSplitMatrix({
                   }
                 >
                   <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">
-                    🎨 Color / Finish
+                    🎨 Color / Finish {(isColoringStage || isLeavingColoring) && <span className="text-rose-600">*</span>}
                   </label>
                   <ColorSelect
                     size="sm"
@@ -177,13 +185,15 @@ export function MultiVariantSplitMatrix({
                 {(isLeavingPrinting || isPrintingStage || isFillingStage || isLeavingFilling || isPackagingStage || isLeavingPackaging) && (
                   <div
                     className={
-                      isLeavingPackaging || isPackagingStage
+                      (isFillingStage || isLeavingFilling)
+                        ? 'sm:col-span-3'
+                        : isLeavingPackaging || isPackagingStage
                         ? 'sm:col-span-3'
                         : 'sm:col-span-4'
                     }
                   >
                     <label className="text-[10px] font-bold uppercase tracking-wider text-indigo-700 mb-1 block">
-                      🖨️ Printing / Artwork
+                      🖨️ Printing / Artwork {isLeavingPrinting && <span className="text-rose-600">*</span>}
                     </label>
                     <PrintingSelect
                       size="sm"
@@ -196,6 +206,162 @@ export function MultiVariantSplitMatrix({
                       }}
                       placeholder="Select Artwork / Print…"
                       customPlaceholder="Type custom artwork…"
+                    />
+                  </div>
+                )}
+
+                {/* Caps Closure Option (Filling Stage) */}
+                {(isFillingStage || isLeavingFilling) && (
+                  <div className="sm:col-span-3 space-y-1">
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-violet-900 mb-1 block">
+                      🧴 Cap / Closure {isLeavingFilling && <span className="text-rose-600 font-extrabold">*</span>}
+                    </label>
+                    <select
+                      className={`${inputClass} text-xs font-bold border-violet-200 bg-violet-50/40 ${
+                        isLeavingFilling && !row.cap_item_id && !row.cap_name?.trim() ? 'border-amber-400 bg-amber-50/50' : ''
+                      }`}
+                      value={row.cap_item_id || ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        const selectedCap = caps.find((c) => c.id === val);
+                        setVariantRows((prev) =>
+                          prev.map((r) =>
+                            r.id === row.id
+                              ? {
+                                  ...r,
+                                  cap_item_id: val,
+                                  cap_name: selectedCap ? selectedCap.name : (val ? r.cap_name : ''),
+                                }
+                              : r
+                          )
+                        );
+                      }}
+                    >
+                      <option value="">Select Cap from Stock…</option>
+                      {caps.map((c) => {
+                        const avail = stockSummaryMap.get(c.id)?.availableStock ?? 0;
+                        const isOutOfStock = avail <= 0;
+                        return (
+                          <option key={c.id} value={c.id}>
+                            {c.name}{c.color ? ` (${c.color})` : ''} ({isOutOfStock ? '0 - OUT OF STOCK' : `${formatNumber(avail)} in stock`})
+                          </option>
+                        );
+                      })}
+                    </select>
+                    {row.cap_item_id && (() => {
+                      const sum = stockSummaryMap.get(row.cap_item_id);
+                      const avail = sum?.availableStock ?? 0;
+                      const rowQ = Number(row.qty) || 0;
+                      if (avail <= 0) {
+                        return (
+                          <div className="text-[10px] font-bold text-red-600 flex items-center gap-0.5">
+                            <span>⚠️ Out of stock (0 available)</span>
+                          </div>
+                        );
+                      }
+                      if (rowQ > avail) {
+                        return (
+                          <div className="text-[10px] font-bold text-amber-700 flex items-center gap-0.5">
+                            <span>⚠️ Exceeds stock (only {formatNumber(avail)} available)</span>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
+                    {isLeavingFilling && !row.cap_item_id && !row.cap_name?.trim() && (
+                      <div className="text-[10px] font-bold text-rose-600 flex items-center gap-0.5">
+                        <span>⚠️ Cap closure required</span>
+                      </div>
+                    )}
+                    <input
+                      type="text"
+                      value={row.cap_name || ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setVariantRows((prev) =>
+                          prev.map((r) => (r.id === row.id ? { ...r, cap_name: val } : r))
+                        );
+                      }}
+                      placeholder="Or custom cap spec…"
+                      className={`${inputClass} text-[11px] font-medium py-1 px-2`}
+                    />
+                  </div>
+                )}
+
+                {/* Atomizers Pump Option (Filling Stage) */}
+                {(isFillingStage || isLeavingFilling) && (
+                  <div className="sm:col-span-3 space-y-1">
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-sky-900 mb-1 block">
+                      💨 Atomizer / Pump {isLeavingFilling && <span className="text-rose-600 font-extrabold">*</span>}
+                    </label>
+                    <select
+                      className={`${inputClass} text-xs font-bold border-sky-200 bg-sky-50/40 ${
+                        isLeavingFilling && !row.atomizer_item_id && !row.atomizer_name?.trim() ? 'border-amber-400 bg-amber-50/50' : ''
+                      }`}
+                      value={row.atomizer_item_id || ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        const selectedAtom = atomizers.find((a) => a.id === val);
+                        setVariantRows((prev) =>
+                          prev.map((r) =>
+                            r.id === row.id
+                              ? {
+                                  ...r,
+                                  atomizer_item_id: val,
+                                  atomizer_name: selectedAtom ? selectedAtom.name : (val ? r.atomizer_name : ''),
+                                }
+                              : r
+                          )
+                        );
+                      }}
+                    >
+                      <option value="">Select Atomizer from Stock…</option>
+                      {atomizers.map((a) => {
+                        const avail = stockSummaryMap.get(a.id)?.availableStock ?? 0;
+                        const isOutOfStock = avail <= 0;
+                        return (
+                          <option key={a.id} value={a.id}>
+                            {a.name}{a.color ? ` (${a.color})` : ''} ({isOutOfStock ? '0 - OUT OF STOCK' : `${formatNumber(avail)} in stock`})
+                          </option>
+                        );
+                      })}
+                    </select>
+                    {row.atomizer_item_id && (() => {
+                      const sum = stockSummaryMap.get(row.atomizer_item_id);
+                      const avail = sum?.availableStock ?? 0;
+                      const rowQ = Number(row.qty) || 0;
+                      if (avail <= 0) {
+                        return (
+                          <div className="text-[10px] font-bold text-red-600 flex items-center gap-0.5">
+                            <span>⚠️ Out of stock (0 available)</span>
+                          </div>
+                        );
+                      }
+                      if (rowQ > avail) {
+                        return (
+                          <div className="text-[10px] font-bold text-amber-700 flex items-center gap-0.5">
+                            <span>⚠️ Exceeds stock (only {formatNumber(avail)} available)</span>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
+                    {isLeavingFilling && !row.atomizer_item_id && !row.atomizer_name?.trim() && (
+                      <div className="text-[10px] font-bold text-rose-600 flex items-center gap-0.5">
+                        <span>⚠️ Atomizer pump required</span>
+                      </div>
+                    )}
+                    <input
+                      type="text"
+                      value={row.atomizer_name || ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setVariantRows((prev) =>
+                          prev.map((r) => (r.id === row.id ? { ...r, atomizer_name: val } : r))
+                        );
+                      }}
+                      placeholder="Or custom atomizer spec…"
+                      className={`${inputClass} text-[11px] font-medium py-1 px-2`}
                     />
                   </div>
                 )}
@@ -274,7 +440,9 @@ export function MultiVariantSplitMatrix({
                 {/* Quantity Input */}
                 <div
                   className={
-                    (isLeavingPackaging || isPackagingStage) && (isLeavingPrinting || isPrintingStage || isFillingStage || isLeavingFilling)
+                    (isFillingStage || isLeavingFilling)
+                      ? 'sm:col-span-3'
+                      : (isLeavingPackaging || isPackagingStage) && (isLeavingPrinting || isPrintingStage)
                       ? 'sm:col-span-3'
                       : (isLeavingPackaging || isPackagingStage) || (isLeavingPrinting || isPrintingStage)
                       ? 'sm:col-span-4'
@@ -282,7 +450,7 @@ export function MultiVariantSplitMatrix({
                   }
                 >
                   <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">
-                    Quantity ({unitLabel})
+                    Quantity ({unitLabel}) *
                   </label>
                   <div className="relative">
                     <input

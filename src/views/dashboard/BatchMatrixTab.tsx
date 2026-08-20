@@ -120,6 +120,11 @@ export function BatchMatrixTab({
                       )}
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
+                          {item.batch.brand_name && (
+                            <span className="font-extrabold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md text-xs">
+                              🏢 {item.batch.brand_name}
+                            </span>
+                          )}
                           <span className="font-black text-slate-900 font-mono text-sm tracking-tight">
                             {item.batch.batch_no}
                           </span>
@@ -438,7 +443,14 @@ export function BatchMatrixTab({
                             </div>
                           )}
                           <div>
-                            <span className="font-mono font-black">{item.batch.batch_no}</span>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {item.batch.brand_name && (
+                                <span className="font-black text-indigo-900 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded text-[11px] leading-tight">
+                                  🏢 {item.batch.brand_name}
+                                </span>
+                              )}
+                              <span className="font-mono font-black">{item.batch.batch_no}</span>
+                            </div>
                             <div className="flex items-center gap-1 mt-0.5">
                               <ColorBadge color={item.batch.color} />
                             </div>

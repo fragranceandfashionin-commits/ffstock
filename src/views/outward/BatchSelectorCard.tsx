@@ -34,6 +34,14 @@ export function BatchSelectorCard({
           </label>
           {selectedBatch && (
             <div className="flex items-center gap-2 text-xs text-slate-500 font-medium flex-wrap">
+              {selectedBatch.brand_name && (
+                <span className="font-black text-indigo-900 bg-indigo-50 border border-indigo-200 px-2.5 py-0.5 rounded-md text-xs shadow-2xs">
+                  🏢 {selectedBatch.brand_name}
+                </span>
+              )}
+              <span className="font-mono font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+                {selectedBatch.batch_no}
+              </span>
               <ItemCategoryBadge category={selectedBatch.item?.category} />
               <ColorBadge color={selectedBatch.color} />
               <span>
@@ -52,7 +60,7 @@ export function BatchSelectorCard({
           <option value="">Select Stock Batch / Brand…</option>
           {batches.map((b) => (
             <option key={b.id} value={b.id}>
-              [{b.item?.category || 'Item'}] {b.batch_no} — {b.item?.name ?? 'Stock Item'} (Supplier: {b.supplier?.name ?? 'Unknown'} • {formatNumber(b.qty_received)} {b.item?.unit || 'pcs'} received)
+              [{b.item?.category || 'Item'}] {b.brand_name ? `[${b.brand_name}] Batch ${b.batch_no}` : `Batch ${b.batch_no}`} — {b.item?.name ?? 'Stock Item'} (Supplier: {b.supplier?.name ?? 'Unknown'} • {formatNumber(b.qty_received)} {b.item?.unit || 'pcs'} received)
             </option>
           ))}
         </select>

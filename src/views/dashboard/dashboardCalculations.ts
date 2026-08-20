@@ -224,6 +224,7 @@ export function calculateDashboardMetrics({
       ...m,
       batch: b,
       batchNo: b?.batch_no ?? 'Unknown',
+      brandName: b?.brand_name || null,
       itemName: b?.item?.name ?? 'Unknown Item',
       supplierName: b?.supplier?.name ?? 'Unknown Supplier',
     };
@@ -262,6 +263,7 @@ export function calculateDashboardMetrics({
       ...d,
       batch: b,
       batchNo: b?.batch_no ?? 'Unknown',
+      brandName: b?.brand_name || null,
       itemName: b?.item?.name ?? 'Unknown Item',
       supplierName: b?.supplier?.name ?? 'Unknown Supplier',
       resolvedCapName,
@@ -385,6 +387,7 @@ export function calculateDashboardMetrics({
     totalBoxesDispatched,
     totalBoxesScrapped,
     totalBoxesAvailable,
+    componentStocks,
     asOfDate: asOfDate || null,
   };
 }

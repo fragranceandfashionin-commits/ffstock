@@ -1,0 +1,442 @@
+import { useState, useMemo } from 'react';
+import { Boxes, PackagePlus, Download, Maximize2, Send, Trash2 } from 'lucide-react';
+import {
+  Card,
+  Button,
+  SearchInput,
+  ItemCategoryBadge,
+  ColorBadge,
+  TableSkeleton,
+  TableScrollContainer,
+  EmptyState,
+  Modal,
+} from '@/components/ui';
+import type { BatchWithRelations } from '@/lib/supabase';
+import type { View } from '@/lib/types';
+import type { NavigationContext } from '@/components/AppShell';
+import { formatNumber, formatDate, downloadCSV, getTodayDateString } from '@/lib/utils';
+import { useToast } from '@/components/Toast';
+
+export type InwardBatchesTabProps = {
+  batches: BatchWithRelations[];
+  usedBatchIds: Set<string>;
+  searchQuery: string;
+  onSearchQueryChange: (q: string) => void;
+  loading: boolean;
+  onOpenInwardModal: () => void;
+  onOpenDeleteBatchModal: (batch: BatchWithRelations) => void;
+  onViewChange?: (view: View, context?: NavigationContext) => void;
+};
+
+export function InwardBatchesTab({
+  batches,
+  usedBatchIds,
+  searchQuery,
+  onSearchQueryChange,
+  loading,
+  onOpenInwardModal,
+  onOpenDeleteBatchModal,
+  onViewChange,
+}: InwardBatchesTabProps) {
+  const [zoomImage, setZoomImage] = useState<{ url: string; title: string; batchNo?: string } | null>(null);
+  const toast = useToast();
+
+  const filteredBatches = useMemo(() => {
+    return batches.filter((b) => {
+      const q = searchQuery.toLowerCase().trim();
+      if (!q) return true;
+      return (
+        b.batch_no.toLowerCase().includes(q) ||
+        (b.brand_name ?? '').toLowerCase().includes(q) ||
+        (b.supplier?.name ?? '').toLowerCase().includes(q) ||
+        (b.item?.name ?? '').toLowerCase().includes(q) ||
+        (b.item?.category ?? '').toLowerCase().includes(q) ||
+        (b.location ?? '').toLowerCase().includes(q) ||
+        (b.color ?? '').toLowerCase().includes(q)
+      );
+    });
+  }, [batches, searchQuery]);
+
+  const exportInwardBatchesCSV = () => {
+    if (batches.length === 0) return;
+    try {
+      const headers = [
+        'Brand / Party Name',
+        'Batch No',
+        'Item SKU',
+        'Category',
+        'Supplier',
+        'Received Date',
+        'Quantity Inwarded',
+        'Storage Bay Location',
+        'Color',
+        'Cap Item',
+        'Atomizer Item',
+        'Box Item',
+        'Image URL',
+      ];
+      const rows = batches.map((b) => [
+        b.brand_name || '',
+        b.batch_no,
+        b.item?.name ?? '',
+        b.item?.category ?? 'Bottle',
+        b.supplier?.name ?? '',
+        b.received_on,
+        b.qty_received,
+        b.location,
+        b.color || '',
+        b.cap_item?.name || '',
+        b.atomizer_item?.name || '',
+        b.box_item?.name || '',
+        b.image_url || '',
+      ]);
+
+      const filename = `ffstock_inward_batches_${getTodayDateString()}`;
+      downloadCSV(filename, headers, rows);
+      toast.success('Inward batches registry CSV exported successfully', 'Export Complete');
+    } catch (err) {
+      toast.error('Failed to export batches CSV', 'Export Failed');
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card className="p-0 overflow-hidden shadow-xs border-slate-200 bg-white">
+        {/* Header Controls */}
+        <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div className="space-y-0.5">
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-black text-slate-950 flex items-center gap-2">
+                <Boxes className="h-5 w-5 text-emerald-600" />
+                Inward Batches & Receipts Ledger
+              </h2>
+              <span className="bg-emerald-100 text-emerald-950 font-black text-xs px-2.5 py-0.5 rounded-full border border-emerald-200">
+                {filteredBatches.length} Batches Logged
+              </span>
+            </div>
+            <p className="text-xs text-slate-500">
+              Every received shipment batch with its Client / Brand name, lot code, warehouse bay, and 1-click launch into the Outward Journey pipeline.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={exportInwardBatchesCSV}
+              className="text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 shadow-2xs cursor-pointer"
+              title="Download inward batches CSV"
+            >
+              <Download className="h-3.5 w-3.5 mr-1 text-slate-500" />
+              Export CSV
+            </Button>
+            <div className="w-64">
+              <SearchInput
+                value={searchQuery}
+                onChange={onSearchQueryChange}
+                placeholder="Search brand, batch #, supplier…"
+              />
+            </div>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={onOpenInwardModal}
+              className="text-xs font-bold py-1.5 px-3 bg-emerald-600 text-white hover:bg-emerald-700 shadow-2xs shrink-0 cursor-pointer"
+            >
+              <PackagePlus className="h-3.5 w-3.5 mr-1 text-emerald-100" />
+              + Inward Stock
+            </Button>
+          </div>
+        </div>
+
+        {loading ? (
+          <TableSkeleton rows={6} cols={6} />
+        ) : filteredBatches.length === 0 ? (
+          <div className="p-12 text-center">
+            <EmptyState
+              icon={Boxes}
+              title="No Inward Batches Found"
+              description={
+                searchQuery
+                  ? 'No batches match your active search filter. Try clearing the search box.'
+                  : 'No inward stock batches have been logged yet. Use the "+ Inward Stock" button above to log your first shipment.'
+              }
+            />
+          </div>
+        ) : (
+          <div>
+            {/* ─── Mobile View: Batches Cards (< sm) ─── */}
+            <div className="p-3.5 space-y-3 sm:hidden">
+              {filteredBatches.map((b) => {
+                const isUsed = usedBatchIds.has(b.id);
+                return (
+                  <Card key={`mobile-batch-${b.id}`} className="p-4 border-slate-200 shadow-2xs space-y-3">
+                    <div className="flex items-start justify-between gap-2.5">
+                      <div className="flex items-start gap-2.5">
+                        {b.image_url ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setZoomImage({
+                                url: b.image_url!,
+                                title: b.item?.name ?? 'Shipment Photo',
+                                batchNo: b.batch_no,
+                              })
+                            }
+                            className="relative group shrink-0 cursor-pointer"
+                          >
+                            <img
+                              src={b.image_url}
+                              alt={b.batch_no}
+                              className="h-12 w-12 rounded-xl object-cover border border-slate-200 shadow-2xs"
+                            />
+                            <div className="absolute inset-0 bg-black/30 rounded-xl flex items-center justify-center opacity-0 group-hover:opacity-100 transition">
+                              <Maximize2 className="h-3.5 w-3.5 text-white" />
+                            </div>
+                          </button>
+                        ) : (
+                          <div className="h-12 w-12 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center text-[10px] font-bold text-slate-400 shrink-0">
+                            IMG
+                          </div>
+                        )}
+
+                        <div>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {b.brand_name && (
+                              <span className="font-extrabold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md text-xs">
+                                🏢 {b.brand_name}
+                              </span>
+                            )}
+                            <span className="font-mono font-black text-slate-900 text-sm">
+                              {b.batch_no}
+                            </span>
+                          </div>
+                          <p className="font-bold text-slate-950 text-xs mt-1">
+                            {b.item?.name ?? 'Stock Item'}
+                          </p>
+                          <p className="text-[11px] text-slate-500 mt-0.5">
+                            Supplier: <strong>{b.supplier?.name ?? '—'}</strong> • Bay: <strong>{b.location}</strong>
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="text-right shrink-0">
+                        <p className="text-base font-black text-emerald-700">
+                          {formatNumber(b.qty_received)}
+                        </p>
+                        <p className="text-[10px] font-bold text-slate-500">{b.item?.unit || 'pcs'}</p>
+                      </div>
+                    </div>
+
+                    {/* BOM Components Row if attached */}
+                    {(b.cap_item || b.atomizer_item || b.box_item) && (
+                      <div className="flex flex-wrap gap-1 p-2 bg-slate-50 rounded-xl border border-slate-100 text-[11px] font-medium text-slate-700">
+                        {b.cap_item && <span>🧴 Cap: {b.cap_item.name} ({formatNumber(b.cap_qty || b.qty_received)})</span>}
+                        {b.atomizer_item && <span>💨 Atomizer: {b.atomizer_item.name} ({formatNumber(b.atomizer_qty || b.qty_received)})</span>}
+                        {b.box_item && <span>📦 Box: {b.box_item.name} ({formatNumber(b.box_qty || b.qty_received)})</span>}
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
+                      <span className="text-[11px] text-slate-500 font-medium">
+                        Received {formatDate(b.received_on)}
+                      </span>
+
+                      <div className="flex items-center gap-1.5">
+                        {onViewChange && (
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            onClick={() => onViewChange('outward', { batchId: b.id })}
+                            className="text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white min-h-[34px] cursor-pointer"
+                          >
+                            <Send className="h-3 w-3 mr-1" />
+                            Pipeline ➔
+                          </Button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => onOpenDeleteBatchModal(b)}
+                          className="rounded-xl min-w-[34px] min-h-[34px] flex items-center justify-center text-rose-600 hover:bg-rose-50 border border-rose-200 cursor-pointer"
+                          title={isUsed ? 'Cannot delete batch with movement history' : 'Delete batch'}
+                          aria-label={`Delete batch ${b.batch_no}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+
+            {/* ─── Desktop View: Batches Table (>= sm) ─── */}
+            <div className="hidden sm:block">
+              <TableScrollContainer className="border-0 rounded-none">
+                <table className="w-full text-left border-collapse min-w-[1100px]">
+                  <thead className="bg-slate-100/90 text-slate-700 text-[11px] font-black uppercase tracking-wider border-b border-slate-200 sticky top-0 z-10">
+                    <tr>
+                      <th className="px-3.5 py-3 w-10 text-center text-slate-400">#</th>
+                      <th className="px-3.5 py-3">Photo</th>
+                      <th className="px-4 py-3">Brand / Party</th>
+                      <th className="px-4 py-3 font-mono">Batch No</th>
+                      <th className="px-4 py-3 min-w-[200px]">Primary Stock Item</th>
+                      <th className="px-3.5 py-3">Supplier</th>
+                      <th className="px-3.5 py-3 text-right">Qty Received</th>
+                      <th className="px-3.5 py-3">Warehouse Bay</th>
+                      <th className="px-3.5 py-3 min-w-[180px]">BOM Components</th>
+                      <th className="px-3.5 py-3">Date</th>
+                      <th className="px-4 py-3 text-right">Production Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-xs font-medium bg-white">
+                    {filteredBatches.map((b, index) => {
+                      const isUsed = usedBatchIds.has(b.id);
+                      return (
+                        <tr key={b.id} className="hover:bg-slate-50/90 transition-colors group">
+                          <td className="px-3.5 py-3 text-center font-bold text-slate-400 text-[11px]">
+                            {index + 1}
+                          </td>
+
+                          <td className="px-3.5 py-3">
+                            {b.image_url ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setZoomImage({
+                                    url: b.image_url!,
+                                    title: b.item?.name ?? 'Shipment Photo',
+                                    batchNo: b.batch_no,
+                                  })
+                                }
+                                className="relative group/img shrink-0 cursor-pointer block"
+                                title="Click to zoom image"
+                              >
+                                <img
+                                  src={b.image_url}
+                                  alt={b.batch_no}
+                                  className="h-10 w-10 rounded-lg object-cover border border-slate-200 shadow-2xs group-hover/img:scale-105 transition"
+                                />
+                                <div className="absolute inset-0 bg-black/30 rounded-lg opacity-0 group-hover/img:opacity-100 flex items-center justify-center transition">
+                                  <Maximize2 className="h-3 w-3 text-white" />
+                                </div>
+                              </button>
+                            ) : (
+                              <div className="h-10 w-10 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center text-[9px] font-bold text-slate-400">
+                                —
+                              </div>
+                            )}
+                          </td>
+
+                          <td className="px-4 py-3">
+                            {b.brand_name ? (
+                              <span className="inline-flex items-center gap-1 font-black text-indigo-900 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-lg text-xs shadow-2xs">
+                                🏢 {b.brand_name}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 italic">In-House</span>
+                            )}
+                          </td>
+
+                          <td className="px-4 py-3 font-mono font-black text-slate-900 text-xs whitespace-nowrap">
+                            <span className="bg-slate-100 border border-slate-300 px-2 py-0.5 rounded-md">
+                              {b.batch_no}
+                            </span>
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <div className="flex flex-col">
+                              <p className="font-bold text-slate-950 text-xs leading-snug">
+                                {b.item?.name ?? 'Stock Item'}
+                              </p>
+                              <div className="flex items-center gap-1 mt-0.5">
+                                <ItemCategoryBadge category={b.item?.category} />
+                                <ColorBadge color={b.color} />
+                              </div>
+                            </div>
+                          </td>
+
+                          <td className="px-3.5 py-3 whitespace-nowrap font-medium text-slate-700">
+                            {b.supplier?.name ?? '—'}
+                          </td>
+
+                          <td className="px-3.5 py-3 text-right whitespace-nowrap">
+                            <span className="font-black text-emerald-950 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg text-xs shadow-2xs">
+                              {formatNumber(b.qty_received)} <span className="text-[10px] font-normal text-slate-500">{b.item?.unit || 'pcs'}</span>
+                            </span>
+                          </td>
+
+                          <td className="px-3.5 py-3 whitespace-nowrap font-semibold text-slate-700">
+                            {b.location}
+                          </td>
+
+                          <td className="px-3.5 py-3">
+                            {(b.cap_item || b.atomizer_item || b.box_item) ? (
+                              <div className="flex flex-col gap-0.5 text-[11px] text-slate-600">
+                                {b.cap_item && <span>🧴 {b.cap_item.name}</span>}
+                                {b.atomizer_item && <span>💨 {b.atomizer_item.name}</span>}
+                                {b.box_item && <span>📦 {b.box_item.name}</span>}
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 text-xs">—</span>
+                            )}
+                          </td>
+
+                          <td className="px-3.5 py-3 whitespace-nowrap text-slate-600">
+                            {formatDate(b.received_on)}
+                          </td>
+
+                          <td className="px-4 py-3 text-right whitespace-nowrap space-x-1.5">
+                            {onViewChange && (
+                              <Button
+                                variant="primary"
+                                size="sm"
+                                onClick={() => onViewChange('outward', { batchId: b.id })}
+                                className="text-[11px] py-1 px-3 font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-2xs cursor-pointer"
+                                title="Open batch directly in Outward Journey Pipeline"
+                              >
+                                <Send className="h-3 w-3 mr-1" />
+                                Launch Pipeline ➔
+                              </Button>
+                            )}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => onOpenDeleteBatchModal(b)}
+                              className="text-[11px] py-1 px-2 font-bold text-rose-700 border-rose-300 bg-rose-50/50 hover:bg-rose-100 shadow-2xs cursor-pointer"
+                              title={isUsed ? 'Cannot delete batch with movement history' : 'Delete inward batch'}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </TableScrollContainer>
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {/* Image Zoom Modal */}
+      {zoomImage && (
+        <Modal
+          isOpen={Boolean(zoomImage)}
+          onClose={() => setZoomImage(null)}
+          title={`${zoomImage.batchNo ? `Batch ${zoomImage.batchNo} — ` : ''}${zoomImage.title}`}
+          maxWidthClass="max-w-3xl"
+        >
+          <div className="flex flex-col items-center justify-center p-2">
+            <img
+              src={zoomImage.url}
+              alt={zoomImage.title}
+              className="max-h-[70vh] w-auto rounded-2xl object-contain shadow-xl border border-slate-200"
+            />
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}

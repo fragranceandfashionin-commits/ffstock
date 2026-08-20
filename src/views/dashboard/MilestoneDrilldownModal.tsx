@@ -482,11 +482,18 @@ export function MilestoneDrilldownModal({
                               onClose();
                               onSetInspectedBatchItem(item);
                             }}
-                            className="font-extrabold font-mono text-indigo-700 hover:underline cursor-pointer flex items-center gap-1"
+                            className="font-extrabold font-mono text-indigo-700 hover:underline cursor-pointer flex flex-col items-start gap-0.5"
                             title="Click to open 360° Batch Journey"
                           >
-                            {item.batch.batch_no}
-                            <Maximize2 className="h-2.5 w-2.5 text-indigo-400" />
+                            {item.batch.brand_name && (
+                              <span className="font-black text-indigo-900 bg-indigo-50 border border-indigo-200 px-1.5 py-0.2 rounded text-[10px]">
+                                🏢 {item.batch.brand_name}
+                              </span>
+                            )}
+                            <span className="flex items-center gap-1">
+                              {item.batch.batch_no}
+                              <Maximize2 className="h-2.5 w-2.5 text-indigo-400" />
+                            </span>
                           </div>
                           <span className="inline-flex items-center gap-1 text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded font-semibold mt-0.5">
                             <MapPin className="h-2.5 w-2.5 text-slate-400" />

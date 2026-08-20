@@ -146,18 +146,19 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
     if (activeCategory === 'ALL' || activeCategory === 'batch') {
       for (const b of batches) {
         const matchBatchNo = b.batch_no.toLowerCase().includes(q);
+        const matchBrand = (b.brand_name || '').toLowerCase().includes(q);
         const matchItem = (b.item?.name || '').toLowerCase().includes(q);
         const matchSupplier = (b.supplier?.name || '').toLowerCase().includes(q);
         const matchLocation = (b.location || '').toLowerCase().includes(q);
         const matchColor = (b.color || '').toLowerCase().includes(q);
 
-        if (matchBatchNo || matchItem || matchSupplier || matchLocation || matchColor) {
+        if (matchBatchNo || matchBrand || matchItem || matchSupplier || matchLocation || matchColor) {
           res.push({
             type: 'batch',
             id: `batch-${b.id}`,
-            title: b.batch_no,
+            title: b.brand_name ? `${b.brand_name} • Batch ${b.batch_no}` : `Batch ${b.batch_no}`,
             subtitle: `${b.item?.name || 'Product'} • Supplier: ${b.supplier?.name || '—'} • ${formatNumber(b.qty_received)} pcs`,
-            tag: b.color || b.location,
+            tag: b.brand_name ? `🏢 ${b.brand_name}` : (b.color || b.location),
             meta: `Received ${formatDate(b.received_on)} • Bay ${b.location}`,
             batch: b,
           });

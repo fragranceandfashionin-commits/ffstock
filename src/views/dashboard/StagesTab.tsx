@@ -116,6 +116,11 @@ export function StagesTab({
                         )}
                         <div>
                           <div className="flex items-center gap-1.5 flex-wrap">
+                            {bItem.batch.brand_name && (
+                              <span className="font-extrabold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md text-xs">
+                                🏢 {bItem.batch.brand_name}
+                              </span>
+                            )}
                             <span className="font-mono font-black text-slate-900 text-sm">{bItem.batch.batch_no}</span>
                             {bItem.category && (
                               <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
@@ -236,7 +241,14 @@ export function StagesTab({
                               </div>
                             )}
                             <div>
-                              <span>{bItem.batch.batch_no}</span>
+                              <div className="flex items-center gap-1 flex-wrap">
+                                {bItem.batch.brand_name && (
+                                  <span className="font-black text-indigo-900 bg-indigo-50 border border-indigo-200 px-1.5 py-0.2 rounded text-[10px]">
+                                    🏢 {bItem.batch.brand_name}
+                                  </span>
+                                )}
+                                <span className="font-mono font-bold text-slate-900">{bItem.batch.batch_no}</span>
+                              </div>
                               {bItem.category && (
                                 <span className="block text-[10px] font-semibold text-slate-400">
                                   {bItem.category}

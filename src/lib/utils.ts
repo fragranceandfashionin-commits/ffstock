@@ -100,3 +100,103 @@ export function downloadCSV(
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/**
+ * Normalizes an item name for duplicate and fuzzy matching:
+ * collapses spaces around units ("20 ml" -> "20ml"), removes special characters, and lowercases.
+ */
+export function normalizeItemName(name: string): string {
+  if (!name) return '';
+  return name
+    .toLowerCase()
+    .replace(/(\d+)\s*(ml|mm|gm|g|kg|l|oz|cl|pcs|pc|ctn|carton)\b/gi, '$1$2')
+    .replace(/[^a-z0-9]/gi, '')
+    .trim();
+}
+
+/**
+ * Computes Levenshtein edit distance between two strings.
+ */
+export function levenshteinDistance(a: string, b: string): number {
+  const an = a ? a.length : 0;
+  const bn = b ? b.length : 0;
+  if (an === 0) return bn;
+  if (bn === 0) return an;
+  const matrix: number[][] = Array.from({ length: bn + 1 }, () => new Array(an + 1).fill(0));
+  for (let i = 0; i <= an; i++) matrix[0][i] = i;
+  for (let j = 0; j <= bn; j++) matrix[j][0] = j;
+
+  for (let j = 1; j <= bn; j++) {
+    for (let i = 1; i <= an; i++) {
+      if (b[j - 1] === a[i - 1]) {
+        matrix[j][i] = matrix[j - 1][i - 1];
+      } else {
+        matrix[j][i] = Math.min(
+          matrix[j - 1][i] + 1, // insertion
+          matrix[j][i - 1] + 1, // deletion
+          matrix[j - 1][i - 1] + 1 // substitution
+        );
+      }
+    }
+  }
+  return matrix[bn][an];
+}
+
+export type SimilarItemMatch = {
+  item: { id: string; name: string; category?: string | null; color?: string | null };
+  matchType: 'exact' | 'normalized' | 'fuzzy';
+  confidence: number;
+};
+
+/**
+ * Identifies existing items that closely match a given name to prevent stock fragmentation.
+ */
+export function findSimilarItems(
+  name: string,
+  category: string,
+  existingItems: Array<{ id: string; name: string; category?: string | null; color?: string | null }>
+): SimilarItemMatch[] {
+  const clean = name.trim();
+  if (!clean || clean.length < 2) return [];
+
+  const cleanLower = clean.toLowerCase();
+  const norm = normalizeItemName(clean);
+  const matches: SimilarItemMatch[] = [];
+
+  for (const itm of existingItems) {
+    const itmClean = (itm.name || '').trim();
+    if (!itmClean) continue;
+    const itmLower = itmClean.toLowerCase();
+    const itmNorm = normalizeItemName(itmClean);
+
+    // 1. Exact case-insensitive match
+    if (itmLower === cleanLower) {
+      matches.push({ item: itm, matchType: 'exact', confidence: 1.0 });
+      continue;
+    }
+
+    // 2. Normalized match (e.g. "20 ml luck" vs "20ml luck", "50-ML-Square" vs "50ml square")
+    if (itmNorm === norm && norm.length > 0) {
+      matches.push({ item: itm, matchType: 'normalized', confidence: 0.95 });
+      continue;
+    }
+
+    // 3. Fuzzy Levenshtein match on normalized string
+    if (norm.length >= 4 && itmNorm.length >= 4) {
+      const dist = levenshteinDistance(norm, itmNorm);
+      const maxLen = Math.max(norm.length, itmNorm.length);
+      const similarity = 1 - dist / maxLen;
+
+      if (dist <= 2 || similarity >= 0.75) {
+        matches.push({
+          item: itm,
+          matchType: 'fuzzy',
+          confidence: Math.round(similarity * 100) / 100,
+        });
+      }
+    }
+  }
+
+  return matches.sort((a, b) => b.confidence - a.confidence);
+}
+
+

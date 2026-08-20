@@ -72,7 +72,12 @@ export function TransitionsTab({
 
                   <div className="flex items-start justify-between gap-2 pt-1">
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {m.brandName && (
+                          <span className="font-extrabold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md text-xs">
+                            🏢 {m.brandName}
+                          </span>
+                        )}
                         <span className="font-mono font-black text-slate-900 text-sm">{m.batchNo}</span>
                       </div>
                       <p className="font-bold text-slate-800 text-xs mt-0.5">{m.itemName}</p>
@@ -151,7 +156,16 @@ export function TransitionsTab({
                   return (
                     <tr key={m.id} className="transition hover:bg-slate-50/80">
                       <td className="px-4 py-3 text-xs font-medium text-slate-500">{formatDate(m.moved_on)}</td>
-                      <td className="px-4 py-3 font-bold text-slate-900">{m.batchNo}</td>
+                      <td className="px-4 py-3 font-bold text-slate-900">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {m.brandName && (
+                            <span className="font-black text-indigo-900 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded text-[10px] shadow-2xs">
+                              🏢 {m.brandName}
+                            </span>
+                          )}
+                          <span className="font-mono">{m.batchNo}</span>
+                        </div>
+                      </td>
                       <td className="px-4 py-3 font-semibold text-slate-800">{m.itemName}</td>
                       <td className="px-4 py-3 text-slate-600">{m.supplierName}</td>
                       <td className="px-4 py-3">

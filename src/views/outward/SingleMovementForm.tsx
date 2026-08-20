@@ -186,21 +186,42 @@ export function SingleMovementForm({
 
       {/* CAPS & ATOMIZERS SECTION */}
       {(isFillingStage || isLeavingFilling) && (
-        <div className="rounded-xl border border-violet-200 bg-gradient-to-r from-violet-50/80 to-sky-50/50 p-3.5 space-y-3 shadow-2xs">
+        <div className={`rounded-xl border p-3.5 space-y-3 shadow-2xs ${
+          isLeavingFilling ? 'border-violet-300 bg-gradient-to-r from-violet-50/90 to-sky-50/70 ring-1 ring-violet-200' : 'border-violet-200 bg-gradient-to-r from-violet-50/80 to-sky-50/50'
+        }`}>
           <div className="flex items-center justify-between">
             <span className="text-xs font-black uppercase tracking-wider text-violet-900 flex items-center gap-1.5">
               🧴 Caps & 💨 Atomizers Assembly (Filling Stage)
+              {isLeavingFilling && <span className="text-rose-600 font-extrabold text-sm">*</span>}
             </span>
-            <Badge label="Live BOM Stock" variant="violet" size="sm" />
+            {isLeavingFilling ? (
+              <Badge label="Mandatory for Advance" variant="rose" size="sm" />
+            ) : (
+              <Badge label="Live BOM Stock" variant="violet" size="sm" />
+            )}
           </div>
-          <p className="text-[11px] text-violet-700 font-medium leading-relaxed">
-            Select cap closures and atomizer pumps from live warehouse inventory. Available balances are displayed in real time.
+          <p className="text-[11px] text-violet-800 font-medium leading-relaxed">
+            {isLeavingFilling ? (
+              <span className="font-semibold text-violet-900">
+                ⚠️ Perfume bottles <strong className="underline decoration-rose-400 font-black">cannot advance from the Filling stage</strong> without assembling an Atomizer pump and Cap closure. Select from warehouse inventory or specify custom components.
+              </span>
+            ) : (
+              'Select cap closures and atomizer pumps from live warehouse inventory. Available balances are displayed in real time.'
+            )}
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="Cap / Closure (Warehouse Stock)" htmlFor="cap-item-select">
+            <Field
+              label={`Cap / Closure (Warehouse Stock)${isLeavingFilling ? ' *' : ''}`}
+              htmlFor="cap-item-select"
+              required={isLeavingFilling}
+            >
               <select
                 id="cap-item-select"
-                className={inputClass}
+                className={`${inputClass} ${
+                  isLeavingFilling && !moveCapItemId && !capName.trim()
+                    ? 'border-amber-300 bg-amber-50/30'
+                    : ''
+                }`}
                 value={moveCapItemId}
                 onChange={(e) => {
                   setMoveCapItemId(e.target.value);
@@ -241,11 +262,25 @@ export function SingleMovementForm({
                 }
                 return null;
               })()}
+              {isLeavingFilling && !moveCapItemId && !capName.trim() && (
+                <div className="mt-1 text-[11px] font-semibold text-rose-600 flex items-center gap-1">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>Cap closure required to advance from Filling.</span>
+                </div>
+              )}
             </Field>
-            <Field label="Atomizer / Pump (Warehouse Stock)" htmlFor="atomizer-item-select">
+            <Field
+              label={`Atomizer / Pump (Warehouse Stock)${isLeavingFilling ? ' *' : ''}`}
+              htmlFor="atomizer-item-select"
+              required={isLeavingFilling}
+            >
               <select
                 id="atomizer-item-select"
-                className={inputClass}
+                className={`${inputClass} ${
+                  isLeavingFilling && !moveAtomizerItemId && !atomizerName.trim()
+                    ? 'border-amber-300 bg-amber-50/30'
+                    : ''
+                }`}
                 value={moveAtomizerItemId}
                 onChange={(e) => {
                   setMoveAtomizerItemId(e.target.value);
@@ -286,10 +321,16 @@ export function SingleMovementForm({
                 }
                 return null;
               })()}
+              {isLeavingFilling && !moveAtomizerItemId && !atomizerName.trim() && (
+                <div className="mt-1 text-[11px] font-semibold text-rose-600 flex items-center gap-1">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>Atomizer pump required to advance from Filling.</span>
+                </div>
+              )}
             </Field>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="Cap Custom Specification" htmlFor="cap-name">
+            <Field label="Cap Custom Specification (If Not from Warehouse)" htmlFor="cap-name">
               <input
                 id="cap-name"
                 className={`${inputClass} font-semibold`}
@@ -299,7 +340,7 @@ export function SingleMovementForm({
                 disabled={submitting}
               />
             </Field>
-            <Field label="Atomizer Custom Specification" htmlFor="atomizer-name">
+            <Field label="Atomizer Custom Specification (If Not from Warehouse)" htmlFor="atomizer-name">
               <input
                 id="atomizer-name"
                 className={`${inputClass} font-semibold`}

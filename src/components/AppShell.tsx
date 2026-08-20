@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import type { ReactNode } from 'react';
-import { LayoutDashboard, PackagePlus, Send, Boxes, Tag, Menu, X, CheckCircle2, Search } from 'lucide-react';
+import { LayoutDashboard, Send, Boxes, Tag, Menu, X, CheckCircle2, Search } from 'lucide-react';
 import type { View } from '@/lib/types';
 import { classNames } from '@/lib/utils';
 import { ToastProvider } from '@/components/Toast';
@@ -11,9 +11,8 @@ type NavItem = { id: View; label: string; icon: typeof LayoutDashboard };
 
 const NAV_ITEMS: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { id: 'items', label: 'Items', icon: Tag },
+  { id: 'items', label: 'Items & Stock', icon: Tag },
   { id: 'suppliers', label: 'Suppliers', icon: Boxes },
-  { id: 'inward', label: 'Inward Entry', icon: PackagePlus },
   { id: 'outward', label: 'Outward Journey', icon: Send },
 ];
 
@@ -25,6 +24,8 @@ export type NavigationContext = {
   movementId?: string;
   inspectBatch?: BatchWithRelations;
   openChallan?: Dispatch;
+  openInwardModal?: boolean;
+  activeTab?: 'catalogue' | 'batches';
 };
 
 type AppShellProps = {
@@ -245,7 +246,7 @@ export function AppShell({ view, onViewChange, children }: AppShellProps) {
                     <Icon className="h-4 w-4" />
                   </div>
                   <span className="text-[10px] mt-0.5 truncate max-w-full leading-tight">
-                    {item.id === 'outward' ? 'Outward' : item.id === 'inward' ? 'Inward' : item.label}
+                    {item.id === 'outward' ? 'Outward' : item.id === 'items' ? 'Items' : item.label}
                   </span>
                 </button>
               );

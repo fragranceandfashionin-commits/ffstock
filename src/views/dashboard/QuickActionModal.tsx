@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Zap, Flame, Truck, CheckCircle2 } from 'lucide-react';
+import { Zap, Flame, Truck, CheckCircle2, AlertTriangle, AlertCircle } from 'lucide-react';
 import { Modal, Field, Button, ErrorBanner, Badge, ColorChipsInput, PrintingChipsInput } from '@/components/ui';
-import type { BatchWithRelations, Stage, Item } from '@/lib/supabase';
+import type { BatchWithRelations, Stage, Item, ComponentStockSummary } from '@/lib/supabase';
 import { SCRAP_REASONS, COMMON_COLORS, COMMON_PRINTING_DESIGNS } from '@/lib/supabase';
 import { insertStageMovement, insertScrapMovement, insertDispatch } from '@/lib/queries';
 import { formatNumber, getErrorMessage, getTodayDateString } from '@/lib/utils';
@@ -118,28 +118,43 @@ export function QuickActionModal({
     return selectedBatchItem.stageQuantities[readyStage.id] ?? 0;
   }, [selectedBatchItem, stages]);
 
+  const stockSummaryMap = useMemo(() => {
+    const map = new Map<string, ComponentStockSummary>();
+    if (calculations?.componentStocks) {
+      for (const cs of calculations.componentStocks) {
+        map.set(cs.item.id, cs);
+      }
+    }
+    return map;
+  }, [calculations]);
+
   const isColoringStage = useMemo(() => {
-    const fromName = stages.find((s) => s.id === fromStageId)?.name?.toLowerCase();
-    const toName = stages.find((s) => s.id === toStageId)?.name?.toLowerCase();
-    return fromName === 'coloring' || toName === 'coloring';
+    const fromName = stages.find((s) => s.id === fromStageId)?.name?.toLowerCase() || '';
+    const toName = stages.find((s) => s.id === toStageId)?.name?.toLowerCase() || '';
+    return fromName.includes('color') || toName.includes('color');
   }, [stages, fromStageId, toStageId]);
 
   const isPrintingStage = useMemo(() => {
-    const fromName = stages.find((s) => s.id === fromStageId)?.name?.toLowerCase();
-    const toName = stages.find((s) => s.id === toStageId)?.name?.toLowerCase();
-    return fromName === 'printing' || toName === 'printing';
+    const fromName = stages.find((s) => s.id === fromStageId)?.name?.toLowerCase() || '';
+    const toName = stages.find((s) => s.id === toStageId)?.name?.toLowerCase() || '';
+    return fromName.includes('print') || toName.includes('print');
   }, [stages, fromStageId, toStageId]);
 
+  const isLeavingFilling = useMemo(() => {
+    const fromName = stages.find((s) => s.id === fromStageId)?.name?.toLowerCase() || '';
+    return fromName.includes('fill') || fromName.includes('assembly');
+  }, [stages, fromStageId]);
+
   const isFillingStage = useMemo(() => {
-    const fromName = stages.find((s) => s.id === fromStageId)?.name?.toLowerCase();
-    const toName = stages.find((s) => s.id === toStageId)?.name?.toLowerCase();
-    return fromName === 'filling' || toName === 'filling';
+    const fromName = stages.find((s) => s.id === fromStageId)?.name?.toLowerCase() || '';
+    const toName = stages.find((s) => s.id === toStageId)?.name?.toLowerCase() || '';
+    return fromName.includes('fill') || toName.includes('fill') || fromName.includes('assembly') || toName.includes('assembly');
   }, [stages, fromStageId, toStageId]);
 
   const isPackagingStage = useMemo(() => {
-    const fromName = stages.find((s) => s.id === fromStageId)?.name?.toLowerCase();
-    const toName = stages.find((s) => s.id === toStageId)?.name?.toLowerCase();
-    return fromName === 'packaging' || toName === 'packaging';
+    const fromName = stages.find((s) => s.id === fromStageId)?.name?.toLowerCase() || '';
+    const toName = stages.find((s) => s.id === toStageId)?.name?.toLowerCase() || '';
+    return fromName.includes('pack') || toName.includes('pack');
   }, [stages, fromStageId, toStageId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -171,6 +186,38 @@ export function QuickActionModal({
         return;
       }
 
+      if (isLeavingFilling) {
+        const resolvedCap = capItemId || capName.trim();
+        if (!resolvedCap) {
+          setError('Cap closure specification or warehouse item selection is mandatory when advancing from the Filling stage. Bottles cannot move without caps.');
+          return;
+        }
+
+        const resolvedAtomizer = atomizerItemId || atomizerName.trim();
+        if (!resolvedAtomizer) {
+          setError('Atomizer / pump specification or warehouse item selection is mandatory when advancing from the Filling stage. Bottles cannot move without atomizers.');
+          return;
+        }
+
+        if (capItemId) {
+          const capSum = stockSummaryMap.get(capItemId);
+          const capAvail = capSum?.availableStock ?? 0;
+          if (capAvail < qtyNum) {
+            setError(`Insufficient Cap Stock: "${capSum?.item.name || capName || 'Selected Cap'}" has only ${formatNumber(capAvail)} units available in warehouse, but requires ${formatNumber(qtyNum)}.`);
+            return;
+          }
+        }
+
+        if (atomizerItemId) {
+          const atomSum = stockSummaryMap.get(atomizerItemId);
+          const atomAvail = atomSum?.availableStock ?? 0;
+          if (atomAvail < qtyNum) {
+            setError(`Insufficient Atomizer Stock: "${atomSum?.item.name || atomizerName || 'Selected Atomizer'}" has only ${formatNumber(atomAvail)} units available in warehouse, but requires ${formatNumber(qtyNum)}.`);
+            return;
+          }
+        }
+      }
+
       setSubmitting(true);
       try {
         await insertStageMovement({
@@ -187,6 +234,9 @@ export function QuickActionModal({
           cap_name: capName.trim() || null,
           atomizer_name: atomizerName.trim() || null,
           box_name: boxName.trim() || null,
+          cap_qty_used: capItemId ? qtyNum : null,
+          atomizer_qty_used: atomizerItemId ? qtyNum : null,
+          box_qty_used: boxItemId ? qtyNum : null,
           remarks: remarks.trim() || null,
           done_by: doneBy.trim() || null,
         });
@@ -345,7 +395,7 @@ export function QuickActionModal({
             >
               {batches.map((b) => (
                 <option key={b.id} value={b.id}>
-                  {b.batch_no} — {b.item?.name ?? 'Item'} ({formatNumber(b.qty_received)} inward)
+                  {b.brand_name ? `[${b.brand_name}] Batch ${b.batch_no}` : `Batch ${b.batch_no}`} — {b.item?.name ?? 'Item'} ({formatNumber(b.qty_received)} inward)
                 </option>
               ))}
             </select>
@@ -460,17 +510,31 @@ export function QuickActionModal({
 
               {/* Filling Stage */}
               {isFillingStage && (
-                <div className="rounded-xl border border-violet-200 bg-gradient-to-r from-violet-50/80 to-sky-50/80 p-3.5 space-y-3 shadow-2xs">
+                <div className={`rounded-xl border p-3.5 space-y-3 shadow-2xs ${
+                  isLeavingFilling ? 'border-violet-300 bg-gradient-to-r from-violet-50/90 to-sky-50/70 ring-1 ring-violet-200' : 'border-violet-200 bg-gradient-to-r from-violet-50/80 to-sky-50/80'
+                }`}>
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-black uppercase tracking-wider text-violet-900 flex items-center gap-1.5">
                       🧴 Caps & 💨 Atomizers Assembly (Filling Stage)
+                      {isLeavingFilling && <span className="text-rose-600 font-extrabold text-sm">*</span>}
                     </span>
-                    <Badge label="Filling BOM Stock" variant="violet" size="sm" />
+                    {isLeavingFilling ? (
+                      <Badge label="Mandatory for Advance" variant="rose" size="sm" />
+                    ) : (
+                      <Badge label="Filling BOM Stock" variant="violet" size="sm" />
+                    )}
                   </div>
+                  {isLeavingFilling && (
+                    <p className="text-[11px] text-violet-900 font-semibold leading-relaxed">
+                      ⚠️ Bottles cannot move from the Filling stage without assembling an Atomizer pump and Cap closure.
+                    </p>
+                  )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <Field label="Cap / Closure (Warehouse Stock)">
+                    <Field label={`Cap / Closure (Warehouse Stock)${isLeavingFilling ? ' *' : ''}`} required={isLeavingFilling}>
                       <select
-                        className={inputClass}
+                        className={`${inputClass} ${
+                          isLeavingFilling && !capItemId && !capName.trim() ? 'border-amber-300 bg-amber-50/30' : ''
+                        }`}
                         value={capItemId}
                         onChange={(e) => {
                           setCapItemId(e.target.value);
@@ -479,16 +543,50 @@ export function QuickActionModal({
                         }}
                       >
                         <option value="">Select cap…</option>
-                        {caps.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name}{c.color ? ` (${c.color})` : ''}
-                          </option>
-                        ))}
+                        {caps.map((c) => {
+                          const avail = stockSummaryMap.get(c.id)?.availableStock ?? 0;
+                          const isOutOfStock = avail <= 0;
+                          return (
+                            <option key={c.id} value={c.id}>
+                              {c.name}{c.color ? ` (${c.color})` : ''} — {isOutOfStock ? '0 available [OUT OF STOCK]' : `${formatNumber(avail)} available`}
+                            </option>
+                          );
+                        })}
                       </select>
+                      {capItemId && (() => {
+                        const capSum = stockSummaryMap.get(capItemId);
+                        const capAvail = capSum?.availableStock ?? 0;
+                        const qtyNum = Number(qty) || 0;
+                        if (capAvail <= 0) {
+                          return (
+                            <div className="mt-1 text-[11px] font-bold text-red-600 flex items-center gap-1">
+                              <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-red-500" />
+                              <span>Out of stock (0 available in warehouse)</span>
+                            </div>
+                          );
+                        }
+                        if (qtyNum > capAvail) {
+                          return (
+                            <div className="mt-1 text-[11px] font-bold text-amber-700 flex items-center gap-1">
+                              <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-600" />
+                              <span>Insufficient stock: requires {formatNumber(qtyNum)}, only {formatNumber(capAvail)} available.</span>
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
+                      {isLeavingFilling && !capItemId && !capName.trim() && (
+                        <div className="mt-1 text-[11px] font-semibold text-rose-600 flex items-center gap-1">
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span>Cap closure is required.</span>
+                        </div>
+                      )}
                     </Field>
-                    <Field label="Atomizer / Pump (Warehouse Stock)">
+                    <Field label={`Atomizer / Pump (Warehouse Stock)${isLeavingFilling ? ' *' : ''}`} required={isLeavingFilling}>
                       <select
-                        className={inputClass}
+                        className={`${inputClass} ${
+                          isLeavingFilling && !atomizerItemId && !atomizerName.trim() ? 'border-amber-300 bg-amber-50/30' : ''
+                        }`}
                         value={atomizerItemId}
                         onChange={(e) => {
                           setAtomizerItemId(e.target.value);
@@ -497,16 +595,48 @@ export function QuickActionModal({
                         }}
                       >
                         <option value="">Select atomizer…</option>
-                        {atomizers.map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {a.name}{a.color ? ` (${a.color})` : ''}
-                          </option>
-                        ))}
+                        {atomizers.map((a) => {
+                          const avail = stockSummaryMap.get(a.id)?.availableStock ?? 0;
+                          const isOutOfStock = avail <= 0;
+                          return (
+                            <option key={a.id} value={a.id}>
+                              {a.name}{a.color ? ` (${a.color})` : ''} — {isOutOfStock ? '0 available [OUT OF STOCK]' : `${formatNumber(avail)} available`}
+                            </option>
+                          );
+                        })}
                       </select>
+                      {atomizerItemId && (() => {
+                        const atomSum = stockSummaryMap.get(atomizerItemId);
+                        const atomAvail = atomSum?.availableStock ?? 0;
+                        const qtyNum = Number(qty) || 0;
+                        if (atomAvail <= 0) {
+                          return (
+                            <div className="mt-1 text-[11px] font-bold text-red-600 flex items-center gap-1">
+                              <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-red-500" />
+                              <span>Out of stock (0 available in warehouse)</span>
+                            </div>
+                          );
+                        }
+                        if (qtyNum > atomAvail) {
+                          return (
+                            <div className="mt-1 text-[11px] font-bold text-amber-700 flex items-center gap-1">
+                              <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-600" />
+                              <span>Insufficient stock: requires {formatNumber(qtyNum)}, only {formatNumber(atomAvail)} available.</span>
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
+                      {isLeavingFilling && !atomizerItemId && !atomizerName.trim() && (
+                        <div className="mt-1 text-[11px] font-semibold text-rose-600 flex items-center gap-1">
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span>Atomizer pump is required.</span>
+                        </div>
+                      )}
                     </Field>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <Field label="Cap Custom Name">
+                    <Field label="Cap Custom Specification (If Not from Warehouse)">
                       <input
                         type="text"
                         value={capName}
@@ -515,7 +645,7 @@ export function QuickActionModal({
                         className={`${inputClass} font-semibold`}
                       />
                     </Field>
-                    <Field label="Atomizer Custom Name">
+                    <Field label="Atomizer Custom Specification (If Not from Warehouse)">
                       <input
                         type="text"
                         value={atomizerName}

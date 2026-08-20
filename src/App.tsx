@@ -2,7 +2,6 @@ import { useState, useCallback } from 'react';
 import { AppShell } from '@/components/AppShell';
 import type { NavigationContext } from '@/components/AppShell';
 import { DashboardView } from '@/views/DashboardView';
-import { InwardView } from '@/views/InwardView';
 import { OutwardView } from '@/views/OutwardView';
 import { SuppliersView } from '@/views/SuppliersView';
 import { ItemsView } from '@/views/ItemsView';
@@ -27,11 +26,13 @@ function App() {
           initialBatchId={navContext?.batchId}
         />
       )}
-      {view === 'inward' && <InwardView />}
-      {view === 'outward' && (
-        <OutwardView
+      {view === 'items' && (
+        <ItemsView
+          initialItemId={navContext?.itemId}
           initialBatchId={navContext?.batchId}
-          initialMovementId={navContext?.movementId}
+          initialOpenInwardModal={navContext?.openInwardModal}
+          initialActiveTab={navContext?.activeTab}
+          onViewChange={handleViewChange}
         />
       )}
       {view === 'suppliers' && (
@@ -39,9 +40,10 @@ function App() {
           initialSupplierId={navContext?.supplierId}
         />
       )}
-      {view === 'items' && (
-        <ItemsView
-          initialItemId={navContext?.itemId}
+      {view === 'outward' && (
+        <OutwardView
+          initialBatchId={navContext?.batchId}
+          initialMovementId={navContext?.movementId}
         />
       )}
     </AppShell>

@@ -82,10 +82,27 @@ export async function fetchStages(): Promise<Stage[]> {
   return data ?? [];
 }
 
-export async function fetchSuppliers() {
+export async function fetchSuppliers(): Promise<Supplier[]> {
   const { data, error } = await supabase.from('suppliers').select('*').order('name');
   if (error) throw error;
   return data ?? [];
+}
+
+export async function insertSupplier(payload: {
+  name: string;
+  contact?: string | null;
+}): Promise<Supplier> {
+  const { data, error } = await supabase
+    .from('suppliers')
+    .insert({
+      name: payload.name.trim(),
+      contact: payload.contact?.trim() || null,
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as Supplier;
 }
 
 export async function fetchItems() {
@@ -257,98 +274,6 @@ export async function fetchItemStockReceipts(): Promise<ItemStockReceipt[]> {
     // Graceful fallback if table does not exist yet
   }
   return [];
-}
-
-export async function insertItemStockReceipt(payload: {
-  item_id: string;
-  supplier_id?: string | null;
-  qty: number;
-  received_on?: string;
-  invoice_no?: string | null;
-  location?: string | null;
-  remarks?: string | null;
-}) {
-  const fullPayload: Record<string, unknown> = {
-    item_id: payload.item_id,
-    supplier_id: payload.supplier_id || null,
-    qty: payload.qty,
-    received_on: payload.received_on || getTodayDateString(),
-    invoice_no: payload.invoice_no?.trim() || null,
-    location: payload.location?.trim() || null,
-    remarks: payload.remarks?.trim() || null,
-  };
-
-  // 1. Try to insert into dedicated item_stock_receipts table
-  try {
-    const res = await supabase.from('item_stock_receipts').insert(fullPayload).select().single();
-    if (!res.error && res.data) return res.data;
-
-    const isTableMissing =
-      res.error &&
-      (res.error.code === '42P01' ||
-        res.error.code === 'PGRST205' ||
-        res.error.code === 'PGRST204' ||
-        res.error.message?.includes('item_stock_receipts') ||
-        res.error.message?.includes('relation "item_stock_receipts" does not exist') ||
-        res.error.message?.includes('schema cache'));
-
-    if (res.error && !isTableMissing) {
-      throw res.error;
-    }
-  } catch (err: unknown) {
-    const errObj = err as { code?: string; message?: string };
-    const isTableMissing =
-      errObj?.code === '42P01' ||
-      errObj?.code === 'PGRST205' ||
-      errObj?.code === 'PGRST204' ||
-      errObj?.message?.includes('item_stock_receipts') ||
-      errObj?.message?.includes('relation "item_stock_receipts" does not exist') ||
-      errObj?.message?.includes('schema cache');
-
-    if (!isTableMissing) {
-      throw err;
-    }
-  }
-
-  // 2. Resilient Fallback: Persist in inward_batches so it works in 100% of environments
-  let validSupplierId = payload.supplier_id;
-  if (!validSupplierId) {
-    const supps = await fetchSuppliers().catch(() => []);
-    if (supps.length > 0) {
-      validSupplierId = supps[0].id;
-    } else {
-      const { data: newSupp } = await supabase
-        .from('suppliers')
-        .insert({ name: 'General Stock Intake', contact: 'Internal' })
-        .select('id')
-        .single();
-      validSupplierId = newSupp?.id || null;
-    }
-  }
-
-  if (!validSupplierId) {
-    throw new Error('Please select a supplier for this stock intake.');
-  }
-
-  const timeSuffix = Date.now().toString(36).toUpperCase();
-  const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
-  const fallbackBatchNo = `WH-${timeSuffix}-${randomSuffix}`;
-
-  const fallbackData = await insertInwardBatch({
-    batch_no: fallbackBatchNo,
-    supplier_id: validSupplierId,
-    item_id: payload.item_id,
-    received_on: payload.received_on || getTodayDateString(),
-    qty_received: payload.qty,
-    location: payload.location?.trim() || 'Warehouse Master Storage',
-  });
-
-  return fallbackData;
-}
-
-export async function deleteItemStockReceipt(id: string) {
-  const { error } = await supabase.from('item_stock_receipts').delete().eq('id', id);
-  if (error) throw error;
 }
 
 export async function fetchBatches(): Promise<BatchWithRelations[]> {
@@ -606,6 +531,7 @@ async function resilientBatchInsert(
 
 export async function insertInwardBatch(payload: {
   batch_no: string;
+  brand_name?: string | null;
   supplier_id: string;
   item_id: string;
   received_on: string;
@@ -622,6 +548,7 @@ export async function insertInwardBatch(payload: {
 }) {
   const fullPayload: Record<string, unknown> = {
     batch_no: payload.batch_no.trim(),
+    brand_name: payload.brand_name?.trim() || null,
     supplier_id: payload.supplier_id,
     item_id: payload.item_id,
     received_on: payload.received_on,
@@ -1729,6 +1656,8 @@ export async function fetchComponentStockSummary(): Promise<ComponentStockSummar
     let bottleAvailableRawStock = 0;
     let bottleInFactoryWip = 0;
     let bottleTotalMovedFromRaw = 0;
+    let bottleScrapTotal = 0;
+    let bottleBatchesInProdCount = 0;
 
     if (isBottle) {
       for (const b of rawBatches) {
@@ -1744,19 +1673,32 @@ export async function fetchComponentStockSummary(): Promise<ComponentStockSummar
           .reduce((s, m) => s + m.qty_moved, 0);
         const netMovedOutOfRaw = Math.max(0, forwardOutFromRaw - reversalsBackToRaw);
 
+        if (netMovedOutOfRaw > 0) {
+          bottleBatchesInProdCount++;
+        }
+
         const rawStockRemaining = Math.max(0, intake - netMovedOutOfRaw);
         const batchDispatched = rawDispatches
           .filter((d) => d.batch_id === b.id)
           .reduce((s, d) => s + d.qty, 0);
-        const batchScrap = bMoves
-          .filter((m) => m.to_stage?.name === 'Scrap / Defect')
-          .reduce((s, m) => s + m.qty_moved, 0);
+
+        let batchScrap = 0;
+        for (const m of bMoves) {
+          if (m.to_stage?.name === 'Scrap / Defect') {
+            batchScrap += m.qty_moved;
+          } else if (m.from_stage?.name === 'Scrap / Defect') {
+            batchScrap = Math.max(0, batchScrap - m.qty_moved);
+          }
+        }
+        bottleScrapTotal += batchScrap;
+
         const inFactoryWip = Math.max(0, intake - rawStockRemaining - batchDispatched - batchScrap);
 
         bottleAvailableRawStock += rawStockRemaining;
         bottleInFactoryWip += inFactoryWip;
         bottleTotalMovedFromRaw += netMovedOutOfRaw;
       }
+      totalScrapped = bottleScrapTotal;
     }
 
     const totalUsed = isBottle
@@ -1885,7 +1827,7 @@ export async function fetchComponentStockSummary(): Promise<ComponentStockSummar
 
     // Unallocated Warehouse Stock (Stock in Items section not yet assigned to batches)
     const unallocatedWarehouseStock = isBottle
-      ? (directReceiptsQty > 0 ? Math.max(0, directReceiptsQty - directInwardQty) : bottleAvailableRawStock)
+      ? directReceiptsQty
       : Math.max(0, totalInwarded - totalUsed - totalScrapped);
 
     // 4. Accurate 5-State Balance Math:
@@ -1893,14 +1835,14 @@ export async function fetchComponentStockSummary(): Promise<ComponentStockSummar
     // In Factory Assembled = Consumed - Dispatched - Scrapped (for Bottles: WIP in downstream stages + Ready)
     // Dispatched = Dispatched in customer orders
     const availableStock = isBottle
-      ? (directReceiptsQty > 0 ? (unallocatedWarehouseStock + bottleAvailableRawStock) : bottleAvailableRawStock)
+      ? (unallocatedWarehouseStock + bottleAvailableRawStock)
       : Math.max(0, totalInwarded - totalUsed - totalScrapped);
 
     const totalInFactoryAssembled = isBottle
       ? bottleInFactoryWip
       : Math.max(0, totalUsed - totalDispatchedInOrders - totalScrapped);
 
-    const stockDeficit = Math.max(0, (isBottle ? directInwardQty : totalUsed) - totalInwarded);
+    const stockDeficit = 0;
 
     return {
       item,
@@ -1908,9 +1850,9 @@ export async function fetchComponentStockSummary(): Promise<ComponentStockSummar
       totalInwarded,
       unallocatedWarehouseStock,
       inwardBatchCount,
-      totalUsedInBatches: isBottle ? directInwardQty : totalUsed,
+      totalUsedInBatches: totalUsed,
       totalInFactoryAssembled,
-      usedInBatchCount: isBottle ? directCount : [...usedBatchesMap.values()].filter((b) => b.qty > 0).length,
+      usedInBatchCount: isBottle ? bottleBatchesInProdCount : [...usedBatchesMap.values()].filter((b) => b.qty > 0).length,
       totalDispatchedInOrders,
       totalScrapped,
       availableStock,

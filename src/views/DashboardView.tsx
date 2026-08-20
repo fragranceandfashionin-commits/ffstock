@@ -771,11 +771,11 @@ export function DashboardView({
           <Button
             variant="secondary"
             size="sm"
-            onClick={() => onViewChange('inward')}
+            onClick={() => onViewChange('items', { openInwardModal: true })}
             className="text-xs font-bold cursor-pointer"
           >
-            <Package className="h-3.5 w-3.5" />
-            Inward Entry
+            <Package className="h-3.5 w-3.5 text-emerald-600" />
+            Inward Stock
           </Button>
         </div>
       </div>

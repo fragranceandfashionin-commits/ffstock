@@ -43,8 +43,8 @@ export function PipelineVisualizer({
         </div>
       </div>
 
-      {/* Mobile-Friendly Swipeable / Desktop Grid Pipeline */}
-      <div className="flex xl:grid xl:grid-cols-6 gap-3.5 overflow-x-auto snap-x snap-mandatory pb-2 scrollbar-thin">
+      {/* Responsive Single-Row / Multi-Col Pipeline */}
+      <div className="flex md:grid md:grid-cols-2 lg:grid-cols-3 xl:grid-flow-col xl:auto-cols-fr gap-3 overflow-x-auto snap-x snap-mandatory pb-2 scrollbar-thin">
         {processStages.map((stage, idx) => {
           const qty = qtyAt(stage.id);
           const hasStock = qty > 0;

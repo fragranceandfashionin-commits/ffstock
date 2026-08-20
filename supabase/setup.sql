@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS stages (
 CREATE TABLE IF NOT EXISTS inward_batches (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   batch_no text NOT NULL UNIQUE CHECK (char_length(trim(batch_no)) > 0),
+  brand_name text,
   supplier_id uuid NOT NULL REFERENCES suppliers(id),
   item_id uuid NOT NULL REFERENCES items(id),
   received_on date NOT NULL DEFAULT current_date,
@@ -766,45 +767,71 @@ WITH
   attached_atomizers_agg AS (
     SELECT atomizer_item_id AS item_id, COALESCE(SUM(COALESCE(atomizer_qty, qty_received)), 0) AS qty, COUNT(id) AS batch_count
     FROM inward_batches
-    WHERE atomizer_item_id IS NOT NULL AND (item_id IS NULL OR atomizer_item_id <> item_id)
+    WHERE atomizer_item_id IS NOT NULL 
+      AND (item_id IS NULL OR atomizer_item_id <> item_id)
+      AND (cap_item_id IS NULL OR atomizer_item_id <> cap_item_id)
     GROUP BY atomizer_item_id
   ),
   attached_boxes_agg AS (
     SELECT box_item_id AS item_id, COALESCE(SUM(COALESCE(box_qty, qty_received)), 0) AS qty, COUNT(id) AS batch_count
     FROM inward_batches
-    WHERE box_item_id IS NOT NULL AND (item_id IS NULL OR box_item_id <> item_id)
+    WHERE box_item_id IS NOT NULL 
+      AND (item_id IS NULL OR box_item_id <> item_id)
+      AND (cap_item_id IS NULL OR box_item_id <> cap_item_id)
+      AND (atomizer_item_id IS NULL OR box_item_id <> atomizer_item_id)
     GROUP BY box_item_id
   ),
   cap_moves_agg AS (
     SELECT 
       sm.cap_item_id AS item_id,
-      COALESCE(SUM(CASE WHEN s_to.name <> 'Scrap / Defect' THEN COALESCE(sm.cap_qty_used, sm.qty_moved) ELSE 0 END), 0) AS qty_used,
-      COALESCE(SUM(CASE WHEN s_to.name = 'Scrap / Defect' THEN COALESCE(sm.cap_qty_used, sm.qty_moved) ELSE 0 END), 0) AS qty_scrapped,
+      COALESCE(SUM(CASE WHEN s_to.name <> 'Scrap / Defect' AND (s_from.name IS NULL OR s_from.name <> 'Scrap / Defect') THEN COALESCE(sm.cap_qty_used, sm.qty_moved) ELSE 0 END), 0) AS qty_used,
+      COALESCE(SUM(
+        CASE 
+          WHEN s_to.name = 'Scrap / Defect' THEN COALESCE(sm.cap_qty_used, sm.qty_moved)
+          WHEN s_from.name = 'Scrap / Defect' THEN -COALESCE(sm.cap_qty_used, sm.qty_moved)
+          ELSE 0 
+        END
+      ), 0) AS qty_scrapped,
       COUNT(sm.id) AS movement_count
     FROM stage_movements sm
     LEFT JOIN stages s_to ON s_to.id = sm.to_stage_id
+    LEFT JOIN stages s_from ON s_from.id = sm.from_stage_id
     WHERE sm.cap_item_id IS NOT NULL
     GROUP BY sm.cap_item_id
   ),
   atomizer_moves_agg AS (
     SELECT 
       sm.atomizer_item_id AS item_id,
-      COALESCE(SUM(CASE WHEN s_to.name <> 'Scrap / Defect' THEN COALESCE(sm.atomizer_qty_used, sm.qty_moved) ELSE 0 END), 0) AS qty_used,
-      COALESCE(SUM(CASE WHEN s_to.name = 'Scrap / Defect' THEN COALESCE(sm.atomizer_qty_used, sm.qty_moved) ELSE 0 END), 0) AS qty_scrapped,
+      COALESCE(SUM(CASE WHEN s_to.name <> 'Scrap / Defect' AND (s_from.name IS NULL OR s_from.name <> 'Scrap / Defect') THEN COALESCE(sm.atomizer_qty_used, sm.qty_moved) ELSE 0 END), 0) AS qty_used,
+      COALESCE(SUM(
+        CASE 
+          WHEN s_to.name = 'Scrap / Defect' THEN COALESCE(sm.atomizer_qty_used, sm.qty_moved)
+          WHEN s_from.name = 'Scrap / Defect' THEN -COALESCE(sm.atomizer_qty_used, sm.qty_moved)
+          ELSE 0 
+        END
+      ), 0) AS qty_scrapped,
       COUNT(sm.id) AS movement_count
     FROM stage_movements sm
     LEFT JOIN stages s_to ON s_to.id = sm.to_stage_id
+    LEFT JOIN stages s_from ON s_from.id = sm.from_stage_id
     WHERE sm.atomizer_item_id IS NOT NULL
     GROUP BY sm.atomizer_item_id
   ),
   box_moves_agg AS (
     SELECT 
       sm.box_item_id AS item_id,
-      COALESCE(SUM(CASE WHEN s_to.name <> 'Scrap / Defect' THEN COALESCE(sm.box_qty_used, sm.qty_moved) ELSE 0 END), 0) AS qty_used,
-      COALESCE(SUM(CASE WHEN s_to.name = 'Scrap / Defect' THEN COALESCE(sm.box_qty_used, sm.qty_moved) ELSE 0 END), 0) AS qty_scrapped,
+      COALESCE(SUM(CASE WHEN s_to.name <> 'Scrap / Defect' AND (s_from.name IS NULL OR s_from.name <> 'Scrap / Defect') THEN COALESCE(sm.box_qty_used, sm.qty_moved) ELSE 0 END), 0) AS qty_used,
+      COALESCE(SUM(
+        CASE 
+          WHEN s_to.name = 'Scrap / Defect' THEN COALESCE(sm.box_qty_used, sm.qty_moved)
+          WHEN s_from.name = 'Scrap / Defect' THEN -COALESCE(sm.box_qty_used, sm.qty_moved)
+          ELSE 0 
+        END
+      ), 0) AS qty_scrapped,
       COUNT(sm.id) AS movement_count
     FROM stage_movements sm
     LEFT JOIN stages s_to ON s_to.id = sm.to_stage_id
+    LEFT JOIN stages s_from ON s_from.id = sm.from_stage_id
     WHERE sm.box_item_id IS NOT NULL
     GROUP BY sm.box_item_id
   ),
@@ -823,11 +850,11 @@ SELECT
   (COALESCE(r.receipt_count, 0) + COALESCE(db.batch_count, 0) + COALESCE(ac.batch_count, 0) + COALESCE(aa.batch_count, 0) + COALESCE(ab.batch_count, 0)) AS inward_batch_count,
   (COALESCE(cm.qty_used, 0) + COALESCE(am.qty_used, 0) + COALESCE(bm.qty_used, 0) + (CASE WHEN lower(i.category) = 'bottle' THEN COALESCE(db.qty, 0) ELSE 0 END)) AS total_used,
   (COALESCE(cm.movement_count, 0) + COALESCE(am.movement_count, 0) + COALESCE(bm.movement_count, 0) + (CASE WHEN lower(i.category) = 'bottle' THEN COALESCE(db.batch_count, 0) ELSE 0 END)) AS used_in_batch_count,
-  (COALESCE(cm.qty_scrapped, 0) + COALESCE(am.qty_scrapped, 0) + COALESCE(bm.qty_scrapped, 0)) AS total_scrapped,
+  GREATEST(0, (COALESCE(cm.qty_scrapped, 0) + COALESCE(am.qty_scrapped, 0) + COALESCE(bm.qty_scrapped, 0))) AS total_scrapped,
   COALESCE(dbx.qty, 0) AS total_dispatched,
   GREATEST(0, (COALESCE(r.qty, 0) + COALESCE(db.qty, 0) + COALESCE(ac.qty, 0) + COALESCE(aa.qty, 0) + COALESCE(ab.qty, 0)) 
     - (COALESCE(cm.qty_used, 0) + COALESCE(am.qty_used, 0) + COALESCE(bm.qty_used, 0) + (CASE WHEN lower(i.category) = 'bottle' THEN COALESCE(db.qty, 0) ELSE 0 END))
-    - (COALESCE(cm.qty_scrapped, 0) + COALESCE(am.qty_scrapped, 0) + COALESCE(bm.qty_scrapped, 0))) AS available_stock
+    - GREATEST(0, (COALESCE(cm.qty_scrapped, 0) + COALESCE(am.qty_scrapped, 0) + COALESCE(bm.qty_scrapped, 0)))) AS available_stock
 FROM items i
 LEFT JOIN receipts_agg r ON r.item_id = i.id
 LEFT JOIN direct_batches_agg db ON db.item_id = i.id
