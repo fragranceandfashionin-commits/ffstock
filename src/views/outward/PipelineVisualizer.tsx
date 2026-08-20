@@ -100,10 +100,10 @@ export function PipelineVisualizer({
                       <button
                         type="button"
                         onClick={() => onStartStageMove(stage.id, nextStage.id)}
-                        className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white shadow-2xs hover:bg-slate-800 active:scale-[0.98] transition cursor-pointer"
+                        className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white shadow-2xs hover:bg-slate-800 active:scale-[0.98] transition cursor-pointer min-w-0"
                       >
-                        <Zap className="h-3.5 w-3.5 text-amber-400" />
-                        <span>Advance → {nextStage.name}</span>
+                        <Zap className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                        <span className="truncate">Advance → {nextStage.name}</span>
                       </button>
                     )}
 
@@ -112,10 +112,10 @@ export function PipelineVisualizer({
                       <button
                         type="button"
                         onClick={onStartDispatch}
-                        className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white shadow-2xs hover:bg-emerald-700 active:scale-[0.98] transition cursor-pointer"
+                        className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white shadow-2xs hover:bg-emerald-700 active:scale-[0.98] transition cursor-pointer min-w-0"
                       >
-                        <Truck className="h-3.5 w-3.5" />
-                        <span>Dispatch to Customer</span>
+                        <Truck className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate">Dispatch to Customer</span>
                       </button>
                     )}
 

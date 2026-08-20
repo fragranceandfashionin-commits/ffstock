@@ -85,7 +85,7 @@ export function AppShell({ view, onViewChange, children }: AppShellProps) {
               <button
                 type="button"
                 onClick={() => setMobileOpen((open) => !open)}
-                className="rounded-xl border border-slate-200 min-w-[44px] min-h-[44px] flex items-center justify-center text-slate-600 transition hover:bg-slate-100 md:hidden cursor-pointer"
+                className="rounded-xl border border-slate-200 min-w-[44px] min-h-[44px] flex items-center justify-center text-slate-600 transition hover:bg-slate-100 lg:hidden cursor-pointer"
                 aria-label="Toggle menu"
               >
                 {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
@@ -112,7 +112,7 @@ export function AppShell({ view, onViewChange, children }: AppShellProps) {
             </div>
 
             {/* Center: Global Omni-Search Quick Bar */}
-            <div className="flex-1 max-w-md mx-2 hidden sm:block">
+            <div className="flex-1 max-w-md mx-2 hidden md:block">
               <button
                 type="button"
                 onClick={() => setSearchOpen(true)}
@@ -133,13 +133,13 @@ export function AppShell({ view, onViewChange, children }: AppShellProps) {
               <button
                 type="button"
                 onClick={() => setSearchOpen(true)}
-                className="sm:hidden rounded-xl border border-slate-200 p-2 text-slate-600 hover:bg-slate-100 cursor-pointer"
+                className="md:hidden rounded-xl border border-slate-200 p-2 text-slate-600 hover:bg-slate-100 cursor-pointer min-w-[40px] min-h-[40px] flex items-center justify-center"
                 aria-label="Open Search"
               >
                 <Search className="h-5 w-5" />
               </button>
 
-              <nav className="hidden md:flex items-center gap-1.5 bg-slate-100/70 p-1.5 rounded-2xl border border-slate-200/60 shadow-2xs">
+              <nav className="hidden lg:flex items-center gap-1 xl:gap-1.5 bg-slate-100/70 p-1.5 rounded-2xl border border-slate-200/60 shadow-2xs">
                 {NAV_ITEMS.map((item) => {
                   const Icon = item.icon;
                   const active = view === item.id;
@@ -149,12 +149,12 @@ export function AppShell({ view, onViewChange, children }: AppShellProps) {
                       type="button"
                       onClick={() => handleSelect(item.id)}
                       className={classNames(
-                        'flex items-center gap-2 rounded-xl px-3.5 py-1.5 text-xs font-bold transition-all duration-150 cursor-pointer',
+                        'flex items-center gap-1.5 xl:gap-2 rounded-xl px-2.5 xl:px-3.5 py-1.5 text-xs font-bold transition-all duration-150 cursor-pointer whitespace-nowrap',
                         active ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900 hover:bg-white/80',
                       )}
                     >
-                      <Icon className="h-4 w-4" />
-                      {item.label}
+                      <Icon className="h-4 w-4 shrink-0" />
+                      <span>{item.label}</span>
                     </button>
                   );
                 })}
@@ -170,11 +170,12 @@ export function AppShell({ view, onViewChange, children }: AppShellProps) {
           onNavigate={handleSearchNavigate}
         />
 
+        {/* Mobile Slide-out Drawer */}
         {mobileOpen && (
-          <div className="fixed inset-0 z-50 md:hidden">
-            <div className="absolute inset-0 bg-slate-900/60 sm:backdrop-blur-xs" onClick={() => setMobileOpen(false)} />
-            <nav className="absolute left-0 top-0 h-full w-72 max-w-[85%] bg-white p-5 shadow-2xl flex flex-col justify-between">
-              <div>
+          <div className="fixed inset-0 z-50 lg:hidden">
+            <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-xs" onClick={() => setMobileOpen(false)} />
+            <nav className="absolute left-0 top-0 h-full w-72 max-w-[85%] bg-white p-5 shadow-2xl flex flex-col justify-between overflow-y-auto overscroll-contain">
+              <div className="flex-1">
                 <div className="mb-6 flex items-center justify-between border-b border-slate-100 pb-4">
                   <div className="flex items-center gap-2.5">
                     <img src="/logo.png" alt="logo" className="h-8 w-8 rounded-lg border border-slate-200" />
@@ -199,11 +200,11 @@ export function AppShell({ view, onViewChange, children }: AppShellProps) {
                         type="button"
                         onClick={() => handleSelect(item.id)}
                         className={classNames(
-                          'flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-semibold transition cursor-pointer',
-                          active ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100',
+                          'flex items-center gap-3 rounded-xl px-3.5 py-3 text-sm font-semibold transition cursor-pointer',
+                          active ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-700 hover:bg-slate-100',
                         )}
                       >
-                        <Icon className="h-4 w-4" />
+                        <Icon className="h-4 w-4 shrink-0" />
                         {item.label}
                       </button>
                     );
@@ -211,16 +212,48 @@ export function AppShell({ view, onViewChange, children }: AppShellProps) {
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-slate-100 text-xs text-slate-400 text-center">
+              <div className="pt-4 mt-6 border-t border-slate-100 text-xs text-slate-400 text-center shrink-0">
                 Database Ledger Integrity Protected
               </div>
             </nav>
           </div>
         )}
 
-        <main className="mx-auto max-w-7xl w-full px-4 py-6 sm:px-6 sm:py-8 flex-1">{children}</main>
+        {/* Main View Container */}
+        <main className="mx-auto max-w-7xl w-full px-4 py-6 sm:px-6 sm:py-8 pb-24 lg:pb-8 flex-1">{children}</main>
 
-        <footer className="border-t border-slate-200 bg-white py-4 mt-auto">
+        {/* Mobile & Tablet Quick Bottom Navigation Bar */}
+        <nav className="fixed bottom-0 left-0 right-0 z-40 lg:hidden border-t border-slate-200/90 bg-white/95 backdrop-blur-md shadow-lg safe-area-inset-bottom">
+          <div className="flex items-center justify-around px-2 py-1.5 max-w-lg mx-auto">
+            {NAV_ITEMS.map((item) => {
+              const Icon = item.icon;
+              const active = view === item.id;
+              return (
+                <button
+                  key={`bottom-nav-${item.id}`}
+                  type="button"
+                  onClick={() => handleSelect(item.id)}
+                  className={classNames(
+                    'flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all cursor-pointer min-w-0',
+                    active ? 'text-slate-950 font-extrabold' : 'text-slate-500 hover:text-slate-800 font-medium',
+                  )}
+                >
+                  <div className={classNames(
+                    'flex items-center justify-center h-7 w-7 rounded-lg transition-all',
+                    active ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-500',
+                  )}>
+                    <Icon className="h-4 w-4" />
+                  </div>
+                  <span className="text-[10px] mt-0.5 truncate max-w-full leading-tight">
+                    {item.id === 'outward' ? 'Outward' : item.id === 'inward' ? 'Inward' : item.label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </nav>
+
+        <footer className="border-t border-slate-200 bg-white py-4 mt-auto hidden lg:block">
           <div className="mx-auto max-w-7xl px-4 text-center text-xs text-slate-500 sm:px-6">
             ffstock — Batch Inventory Ledger. Quantities calculated strictly from immutable ledger history.
           </div>

@@ -64,7 +64,7 @@ export function DispatchesTab({
                     <p className="font-black text-violet-800 text-lg leading-tight">
                       {formatNumber(d.qty)}
                     </p>
-                    <p className="text-[10px] text-slate-500 font-bold">{d.item?.unit || 'units'} shipped</p>
+                    <p className="text-[10px] text-slate-500 font-bold">{d.batch?.item?.unit || 'units'} shipped</p>
                     <p className="text-[11px] text-slate-400 mt-0.5">{formatDate(d.dispatched_on)}</p>
                   </div>
                 </div>

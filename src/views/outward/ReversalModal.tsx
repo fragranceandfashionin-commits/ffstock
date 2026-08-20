@@ -140,6 +140,7 @@ export function ReversalModal({
           <div className="relative flex items-center gap-2">
             <input
               type="number"
+              inputMode="numeric"
               min="1"
               max={maxReversible}
               value={reversalQty}

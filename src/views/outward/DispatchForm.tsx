@@ -342,6 +342,7 @@ export function DispatchForm({
                       <div className="relative">
                         <input
                           type="number"
+                          inputMode="numeric"
                           min={0}
                           max={readyQty}
                           className={`${inputClass} font-black text-sm pr-12 border-emerald-300 focus:border-emerald-500`}
@@ -406,6 +407,7 @@ export function DispatchForm({
               <input
                 id="disp-qty"
                 type="number"
+                inputMode="numeric"
                 min={1}
                 max={readyQty}
                 className={`${inputClass} text-base font-black pr-24 ${isOverQty ? 'border-rose-400 ring-2 ring-rose-100 bg-rose-50/40' : ''}`}

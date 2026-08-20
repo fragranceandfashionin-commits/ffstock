@@ -9,7 +9,7 @@ export type StagesTabProps = {
   selectedStageId: string | 'ALL';
   onSetZoomImageUrl: (data: { url: string; title: string; batchNo: string } | null) => void;
   onSetInspectedBatchItem: (item: InspectedBatchItem) => void;
-  onOpenQuickModal: (batchId?: string) => void;
+  onOpenQuickModal: (batchId?: string, defaultTab?: 'move' | 'scrap' | 'dispatch') => void;
   batchMatrix: BatchMatrixRow[];
 };
 

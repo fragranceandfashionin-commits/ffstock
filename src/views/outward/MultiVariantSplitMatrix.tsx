@@ -287,6 +287,7 @@ export function MultiVariantSplitMatrix({
                   <div className="relative">
                     <input
                       type="number"
+                      inputMode="numeric"
                       min={0}
                       max={activeSourceQty}
                       className={`${inputClass} font-black text-sm pr-12`}

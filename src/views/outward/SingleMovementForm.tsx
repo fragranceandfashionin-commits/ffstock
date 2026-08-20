@@ -120,6 +120,7 @@ export function SingleMovementForm({
           <input
             id="move-qty"
             type="number"
+            inputMode="numeric"
             min={1}
             max={activeSourceQty}
             className={`${inputClass} text-base font-black pr-24 ${isOverQty ? 'border-rose-400 ring-2 ring-rose-100 bg-rose-50/40' : ''}`}
