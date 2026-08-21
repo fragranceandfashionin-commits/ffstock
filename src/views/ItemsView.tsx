@@ -240,25 +240,14 @@ export function ItemsView({
         title="Items & Stock Management"
         subtitle="Manage master catalogue SKUs, receive stock batches with brand name tagging, and launch batches directly into the production pipeline."
         action={
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="primary"
-              onClick={() => openInwardStockModal()}
-              className="font-bold bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm py-2 px-3.5 rounded-xl flex items-center gap-1.5 text-xs cursor-pointer"
-            >
-              <PackagePlus className="h-4 w-4 text-emerald-100" />
-              Inward Stock & Batch
-            </Button>
-
-            <Button
-              variant="primary"
-              onClick={() => setShowAddModal(true)}
-              className="font-bold bg-slate-950 text-white hover:bg-slate-800 shadow-sm py-2 px-3.5 rounded-xl flex items-center gap-1.5 text-xs cursor-pointer"
-            >
-              <Plus className="h-4 w-4 text-emerald-400" />
-              Register New Item
-            </Button>
-          </div>
+          <Button
+            variant="primary"
+            onClick={() => openInwardStockModal()}
+            className="font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm py-2 px-4 rounded-xl flex items-center gap-2 text-xs cursor-pointer"
+          >
+            <PackagePlus className="h-4 w-4 text-emerald-100" />
+            <span>Inward Stock & Batch</span>
+          </Button>
         }
       />
 
@@ -352,6 +341,12 @@ export function ItemsView({
           onSupplierCreated={(newSupp) => {
             setSuppliers((prev) => [...prev, newSupp].sort((a, b) => a.name.localeCompare(b.name)));
           }}
+          onItemCreated={(newItem) => {
+            if (newItem) {
+              setItems((prev) => (prev ? [newItem, ...prev] : [newItem]));
+            }
+            load(true);
+          }}
         />
       )}
 
@@ -360,7 +355,12 @@ export function ItemsView({
         <AddItemModal
           isOpen={showAddModal}
           onClose={() => setShowAddModal(false)}
-          onItemCreated={() => load(true)}
+          onItemCreated={(newItem) => {
+            if (newItem) {
+              setItems((prev) => (prev ? [newItem, ...prev] : [newItem]));
+            }
+            load(true);
+          }}
           existingItems={items ?? []}
         />
       )}

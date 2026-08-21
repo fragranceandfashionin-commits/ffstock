@@ -203,7 +203,7 @@ export async function insertItem(payload: {
   unit?: string;
   description?: string | null;
   color?: string | null;
-}): Promise<{ id: string }> {
+}): Promise<Item> {
   const fullPayload: Record<string, unknown> = {
     name: payload.name.trim(),
     category: payload.category?.trim() || 'Bottle',
@@ -215,11 +215,11 @@ export async function insertItem(payload: {
   const { data, error } = await supabase
     .from('items')
     .insert(fullPayload)
-    .select('id')
+    .select('*')
     .single();
 
   if (!error && data) {
-    return data as { id: string };
+    return data as Item;
   }
 
   // Graceful fallback: If migration hasn't been executed in Supabase yet,
@@ -234,10 +234,10 @@ export async function insertItem(payload: {
     const fallbackRes = await supabase
       .from('items')
       .insert({ name: payload.name.trim() })
-      .select('id')
+      .select('*')
       .single();
     if (fallbackRes.error) throw fallbackRes.error;
-    return fallbackRes.data as { id: string };
+    return fallbackRes.data as Item;
   }
 
   throw error;

@@ -1,5 +1,5 @@
-import { useState, useMemo } from 'react';
-import { Save, AlertTriangle, Plus, Trash2, Copy, FileText, ListPlus } from 'lucide-react';
+import { useState, useMemo, useRef, useEffect } from 'react';
+import { Save, AlertTriangle, Plus, Trash2, Copy, FileText, ListPlus, Sparkles, Check } from 'lucide-react';
 import { Modal, Field, inputClass, Button, ErrorBanner } from '@/components/ui';
 import { insertItem, insertItems } from '@/lib/queries';
 import { getErrorMessage, findSimilarItems, type SimilarItemMatch } from '@/lib/utils';
@@ -10,8 +10,9 @@ import { COMMON_UNITS } from './types';
 export type AddItemModalProps = {
   isOpen: boolean;
   onClose: () => void;
-  onItemCreated: () => void;
+  onItemCreated?: (newItem?: Item) => void;
   existingItems?: Item[];
+  initialCategory?: string;
 };
 
 export type MultiItemRow = {
@@ -32,17 +33,27 @@ const createEmptyRow = (defaultCategory = 'Bottle'): MultiItemRow => ({
   description: '',
 });
 
-export function AddItemModal({ isOpen, onClose, onItemCreated, existingItems = [] }: AddItemModalProps) {
+export function AddItemModal({
+  isOpen,
+  onClose,
+  onItemCreated,
+  existingItems = [],
+  initialCategory = 'Bottle',
+}: AddItemModalProps) {
   // Mode: 'single' or 'multi'
   const [entryMode, setEntryMode] = useState<'single' | 'multi'>('single');
 
   // Single Item State
-  const [category, setCategory] = useState('Bottle');
+  const [category, setCategory] = useState(initialCategory);
   const [name, setName] = useState('');
   const [unit, setUnit] = useState('pcs');
   const [color, setColor] = useState('');
   const [description, setDescription] = useState('');
   const [allowDuplicate, setAllowDuplicate] = useState(false);
+
+  // Session Counter for continuous additions
+  const [sessionAddedCount, setSessionAddedCount] = useState(0);
+  const [lastAddedName, setLastAddedName] = useState<string | null>(null);
 
   // Multi Items State
   const [rows, setRows] = useState<MultiItemRow[]>([
@@ -56,7 +67,20 @@ export function AddItemModal({ isOpen, onClose, onItemCreated, existingItems = [
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const toast = useToast();
+
+  useEffect(() => {
+    if (isOpen) {
+      setSessionAddedCount(0);
+      setLastAddedName(null);
+      setError(null);
+      if (initialCategory) setCategory(initialCategory);
+      setTimeout(() => {
+        nameInputRef.current?.focus();
+      }, 50);
+    }
+  }, [isOpen, initialCategory]);
 
   // Single item similarity detection
   const similarMatches: SimilarItemMatch[] = useMemo(() => {
@@ -119,7 +143,6 @@ export function AddItemModal({ isOpen, onClose, onItemCreated, existingItems = [
       .filter(Boolean);
 
     const parsedRows: MultiItemRow[] = lines.map((line) => {
-      // Check if line contains tab or comma separated values
       if (line.includes('\t')) {
         const parts = line.split('\t').map((p) => p.trim());
         return {
@@ -142,7 +165,6 @@ export function AddItemModal({ isOpen, onClose, onItemCreated, existingItems = [
           description: parts[4] || '',
         };
       }
-      // Single name per line
       return {
         id: crypto.randomUUID(),
         name: line,
@@ -154,7 +176,6 @@ export function AddItemModal({ isOpen, onClose, onItemCreated, existingItems = [
     });
 
     if (parsedRows.length > 0) {
-      // Replace or append
       const existingFilled = rows.filter((r) => r.name.trim().length > 0);
       setRows([...existingFilled, ...parsedRows]);
       toast.success(`Imported ${parsedRows.length} item lines.`, 'Items Imported');
@@ -164,12 +185,15 @@ export function AddItemModal({ isOpen, onClose, onItemCreated, existingItems = [
     setShowPasteBox(false);
   };
 
-  // Handle Submit Single
-  const handleSubmitSingle = async (e?: React.FormEvent) => {
+  // Handle Submit Single SKU
+  const handleSaveSingle = async (shouldClose: boolean, e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setError(null);
-    if (!name.trim()) {
+
+    const trimmedName = name.trim();
+    if (!trimmedName) {
       setError('Item name / specification is required.');
+      nameInputRef.current?.focus();
       return;
     }
 
@@ -183,23 +207,39 @@ export function AddItemModal({ isOpen, onClose, onItemCreated, existingItems = [
 
     setSubmitting(true);
     try {
-      await insertItem({
-        name: name.trim(),
+      const newItem = await insertItem({
+        name: trimmedName,
         category: category.trim() || 'Bottle',
         unit: unit.trim() || 'pcs',
         description: description.trim() || null,
         color: color.trim() || null,
       });
 
-      toast.success(`Registered new item "${name.trim()}".`, 'Item Added');
-      setName('');
-      setCategory('Bottle');
-      setUnit('pcs');
-      setColor('');
-      setDescription('');
-      setAllowDuplicate(false);
-      onItemCreated();
-      onClose();
+      toast.success(
+        `Registered SKU "${trimmedName}" (${category}).${shouldClose ? '' : ' Ready for next SKU.'}`,
+        'SKU Added'
+      );
+
+      setSessionAddedCount((prev) => prev + 1);
+      setLastAddedName(trimmedName);
+      onItemCreated?.(newItem);
+
+      if (shouldClose) {
+        setName('');
+        setColor('');
+        setDescription('');
+        setAllowDuplicate(false);
+        onClose();
+      } else {
+        // Continuous mode: Reset name, color, description, keep category & unit
+        setName('');
+        setColor('');
+        setDescription('');
+        setAllowDuplicate(false);
+        setTimeout(() => {
+          nameInputRef.current?.focus();
+        }, 50);
+      }
     } catch (err) {
       setError(getErrorMessage(err, 'Failed to create item'));
     } finally {
@@ -252,7 +292,11 @@ export function AddItemModal({ isOpen, onClose, onItemCreated, existingItems = [
         createEmptyRow('Cap'),
         createEmptyRow('Atomizer'),
       ]);
-      onItemCreated();
+      if (created.length > 0) {
+        onItemCreated?.(created[0]);
+      } else {
+        onItemCreated?.();
+      }
       onClose();
     } catch (err) {
       setError(getErrorMessage(err, 'Failed to create batch items'));
@@ -271,43 +315,77 @@ export function AddItemModal({ isOpen, onClose, onItemCreated, existingItems = [
       maxWidthClass={entryMode === 'multi' ? 'max-w-4xl' : 'max-w-lg'}
     >
       <div className="space-y-4">
-        {/* MODE TOGGLE SWITCH */}
-        <div className="flex items-center justify-between bg-slate-100 p-1 rounded-xl border border-slate-200">
-          <button
-            type="button"
-            onClick={() => setEntryMode('single')}
-            className={`flex-1 py-1.5 px-3 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-              entryMode === 'single'
-                ? 'bg-white text-slate-900 shadow-2xs'
-                : 'text-slate-500 hover:text-slate-900'
-            }`}
-          >
-            <FileText className="h-3.5 w-3.5" />
-            <span>Single SKU Entry</span>
-          </button>
+        {/* MODE TOGGLE SWITCH & LIVE SESSION BADGE */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex-1 flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
+            <button
+              type="button"
+              onClick={() => setEntryMode('single')}
+              className={`flex-1 py-1.5 px-3 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                entryMode === 'single'
+                  ? 'bg-white text-slate-900 shadow-2xs'
+                  : 'text-slate-500 hover:text-slate-900'
+              }`}
+            >
+              <FileText className="h-3.5 w-3.5" />
+              <span>Single SKU Entry</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setEntryMode('multi')}
-            className={`flex-1 py-1.5 px-3 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-              entryMode === 'multi'
-                ? 'bg-slate-900 text-white shadow-2xs'
-                : 'text-slate-500 hover:text-slate-900'
-            }`}
-          >
-            <ListPlus className="h-3.5 w-3.5 text-emerald-400" />
-            <span>Multi-SKU Batch Matrix</span>
-            <span className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${
-              entryMode === 'multi' ? 'bg-slate-800 text-emerald-300' : 'bg-slate-200 text-slate-600'
-            }`}>
-              Fast Add
+            <button
+              type="button"
+              onClick={() => setEntryMode('multi')}
+              className={`flex-1 py-1.5 px-3 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                entryMode === 'multi'
+                  ? 'bg-slate-900 text-white shadow-2xs'
+                  : 'text-slate-500 hover:text-slate-900'
+              }`}
+            >
+              <ListPlus className="h-3.5 w-3.5 text-emerald-400" />
+              <span>Multi-SKU Matrix</span>
+              <span
+                className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${
+                  entryMode === 'multi' ? 'bg-slate-800 text-emerald-300' : 'bg-slate-200 text-slate-600'
+                }`}
+              >
+                Fast Add
+              </span>
+            </button>
+          </div>
+
+          {sessionAddedCount > 0 && entryMode === 'single' && (
+            <span className="shrink-0 flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 animate-in fade-in">
+              <Check className="h-3.5 w-3.5 text-emerald-600" />
+              <span>{sessionAddedCount} Registered</span>
             </span>
-          </button>
+          )}
         </div>
 
-        {/* -------------------- MODE 1: SINGLE ENTRY -------------------- */}
+        {/* -------------------- MODE 1: SINGLE ENTRY (CONTINUOUS + WORKFLOW) -------------------- */}
         {entryMode === 'single' && (
-          <form onSubmit={handleSubmitSingle} className="space-y-4">
+          <form
+            onSubmit={(e) => handleSaveSingle(false, e)}
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault();
+                handleSaveSingle(false);
+              }
+            }}
+            className="space-y-4"
+          >
+            {sessionAddedCount > 0 && lastAddedName && (
+              <div className="flex items-center justify-between bg-emerald-50/80 border border-emerald-200 rounded-xl px-3 py-1.5 text-xs text-emerald-900">
+                <span className="flex items-center gap-1.5 truncate">
+                  <Sparkles className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                  <span>
+                    Saved: <strong>"{lastAddedName}"</strong>
+                  </span>
+                </span>
+                <span className="text-[11px] text-emerald-700 font-semibold shrink-0 ml-2">
+                  Form ready for next SKU ↓
+                </span>
+              </div>
+            )}
+
             <Field label="Component Category" htmlFor="sku-cat" required>
               <select
                 id="sku-cat"
@@ -318,7 +396,15 @@ export function AddItemModal({ isOpen, onClose, onItemCreated, existingItems = [
               >
                 {ITEM_CATEGORIES.map((c) => (
                   <option key={c} value={c}>
-                    {c === 'Packaging' ? '📦 Packaging / Box' : c === 'Cap' ? '🧴 Cap' : c === 'Atomizer' ? '💨 Atomizer' : c === 'Bottle' ? '🍾 Bottle' : c}
+                    {c === 'Packaging'
+                      ? '📦 Packaging / Box'
+                      : c === 'Cap'
+                      ? '🧴 Cap'
+                      : c === 'Atomizer'
+                      ? '💨 Atomizer'
+                      : c === 'Bottle'
+                      ? '🍾 Bottle'
+                      : c}
                   </option>
                 ))}
               </select>
@@ -326,6 +412,7 @@ export function AddItemModal({ isOpen, onClose, onItemCreated, existingItems = [
 
             <Field label="Item Name / Model Specification" htmlFor="sku-name" required>
               <input
+                ref={nameInputRef}
                 id="sku-name"
                 className={`${inputClass} font-bold`}
                 value={name}
@@ -347,20 +434,29 @@ export function AddItemModal({ isOpen, onClose, onItemCreated, existingItems = [
                   <div>
                     <span className="font-bold">Potential Duplicate Detected:</span>
                     <p className="mt-0.5 text-amber-800">
-                      {similarMatches.length === 1 ? 'An existing SKU matches closely:' : `${similarMatches.length} existing SKUs match closely:`}
+                      {similarMatches.length === 1
+                        ? 'An existing SKU matches closely:'
+                        : `${similarMatches.length} existing SKUs match closely:`}
                     </p>
                   </div>
                 </div>
                 <div className="space-y-1 pl-6">
                   {similarMatches.slice(0, 3).map(({ item, matchType, confidence }) => (
-                    <div key={item.id} className="flex items-center justify-between bg-white/80 px-2 py-1 rounded border border-amber-200">
+                    <div
+                      key={item.id}
+                      className="flex items-center justify-between bg-white/80 px-2 py-1 rounded border border-amber-200"
+                    >
                       <div className="flex items-center gap-1.5 overflow-hidden">
                         <span className="font-semibold text-slate-900 truncate">"{item.name}"</span>
                         <span className="text-[10px] bg-slate-100 text-slate-600 px-1 py-0.2 rounded font-medium shrink-0">
                           {item.category || 'SKU'}
                         </span>
                       </div>
-                      <span className={`text-[10px] font-bold shrink-0 ${matchType === 'exact' ? 'text-rose-600' : 'text-amber-700'}`}>
+                      <span
+                        className={`text-[10px] font-bold shrink-0 ${
+                          matchType === 'exact' ? 'text-rose-600' : 'text-amber-700'
+                        }`}
+                      >
                         {matchType === 'exact' ? 'Exact Match' : `${Math.round(confidence * 100)}% match`}
                       </span>
                     </div>
@@ -420,14 +516,35 @@ export function AddItemModal({ isOpen, onClose, onItemCreated, existingItems = [
 
             {error && <ErrorBanner message={error} />}
 
-            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100">
               <Button type="button" variant="secondary" onClick={onClose}>
-                Cancel
+                {sessionAddedCount > 0 ? `Done (${sessionAddedCount} Added)` : 'Cancel'}
               </Button>
-              <Button type="submit" variant="primary" loading={submitting} className="font-bold bg-slate-900 text-white">
-                <Save className="h-4 w-4 mr-1 text-emerald-400" />
-                Save SKU
-              </Button>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  loading={submitting}
+                  onClick={() => handleSaveSingle(false)}
+                  className="font-bold text-emerald-700 bg-emerald-50 border-emerald-300 hover:bg-emerald-100 cursor-pointer shadow-2xs"
+                  title="Save this SKU and keep the form open to add more"
+                >
+                  <Plus className="h-4 w-4 mr-1 text-emerald-600" />
+                  <span>Save & Add Another SKU (+)</span>
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="primary"
+                  loading={submitting}
+                  onClick={() => handleSaveSingle(true)}
+                  className="font-bold bg-slate-900 hover:bg-slate-800 text-white cursor-pointer"
+                >
+                  <Save className="h-4 w-4 mr-1 text-emerald-400" />
+                  <span>Save & Close</span>
+                </Button>
+              </div>
             </div>
           </form>
         )}
@@ -468,7 +585,9 @@ export function AddItemModal({ isOpen, onClose, onItemCreated, existingItems = [
             {showPasteBox && (
               <div className="p-3 bg-indigo-50/70 border border-indigo-200 rounded-xl space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-indigo-950">Bulk Paste Items (One item per line or tab-separated from Excel)</span>
+                  <span className="text-xs font-bold text-indigo-950">
+                    Bulk Paste Items (One item per line or tab-separated from Excel)
+                  </span>
                   <div className="flex items-center gap-2">
                     <span className="text-[11px] font-medium text-indigo-800">Default Category:</span>
                     <select
@@ -477,7 +596,9 @@ export function AddItemModal({ isOpen, onClose, onItemCreated, existingItems = [
                       onChange={(e) => setDefaultBatchCategory(e.target.value)}
                     >
                       {ITEM_CATEGORIES.map((c) => (
-                        <option key={c} value={c}>{c}</option>
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
                       ))}
                     </select>
                   </div>
@@ -492,7 +613,13 @@ export function AddItemModal({ isOpen, onClose, onItemCreated, existingItems = [
                   <Button type="button" variant="secondary" size="sm" onClick={() => setShowPasteBox(false)}>
                     Cancel
                   </Button>
-                  <Button type="button" variant="primary" size="sm" onClick={handleApplyPastedText} className="bg-indigo-600 text-white font-bold">
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="sm"
+                    onClick={handleApplyPastedText}
+                    className="bg-indigo-600 text-white font-bold"
+                  >
                     Import to Table
                   </Button>
                 </div>
@@ -528,7 +655,9 @@ export function AddItemModal({ isOpen, onClose, onItemCreated, existingItems = [
                           onChange={(e) => updateRow(idx, 'category', e.target.value)}
                         >
                           {ITEM_CATEGORIES.map((c) => (
-                            <option key={c} value={c}>{c}</option>
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
                           ))}
                         </select>
                       </td>
@@ -553,7 +682,9 @@ export function AddItemModal({ isOpen, onClose, onItemCreated, existingItems = [
                           onChange={(e) => updateRow(idx, 'unit', e.target.value)}
                         >
                           {COMMON_UNITS.map((u) => (
-                            <option key={u} value={u}>{u}</option>
+                            <option key={u} value={u}>
+                              {u}
+                            </option>
                           ))}
                         </select>
                       </td>
@@ -630,7 +761,8 @@ export function AddItemModal({ isOpen, onClose, onItemCreated, existingItems = [
               </div>
 
               <div className="text-xs font-bold text-slate-700">
-                Ready to save: <span className="text-emerald-700 font-black">{filledRowCount}</span> {filledRowCount === 1 ? 'SKU' : 'SKUs'}
+                Ready to save: <span className="text-emerald-700 font-black">{filledRowCount}</span>{' '}
+                {filledRowCount === 1 ? 'SKU' : 'SKUs'}
               </div>
             </div>
 
@@ -649,7 +781,9 @@ export function AddItemModal({ isOpen, onClose, onItemCreated, existingItems = [
               >
                 <Save className="h-4 w-4 mr-1 text-emerald-400" />
                 <span>Save All {filledRowCount > 0 ? `(${filledRowCount}) SKUs` : 'SKUs'}</span>
-                <kbd className="hidden sm:inline-block ml-1.5 px-1.5 py-0.5 text-[10px] font-mono bg-slate-800 text-slate-300 rounded">Ctrl+Enter</kbd>
+                <kbd className="hidden sm:inline-block ml-1.5 px-1.5 py-0.5 text-[10px] font-mono bg-slate-800 text-slate-300 rounded">
+                  Ctrl+Enter
+                </kbd>
               </Button>
             </div>
           </form>
