@@ -292,8 +292,13 @@ export function BatchInspectionModal({
                         {formatNumber(m.qty_moved)} units
                       </span>
                     </div>
-                    {(m.color || m.printing_design || m.cap_name || m.atomizer_name || m.box_name) && (
+                    {(m.variant_name || m.color || m.printing_design || m.cap_name || m.atomizer_name || m.box_name) && (
                       <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                        {m.variant_name && (
+                          <span className="text-[10px] font-black text-indigo-900 bg-indigo-100 px-1.5 py-0.2 rounded border border-indigo-300 shadow-2xs">
+                            🏷️ {m.variant_name}
+                          </span>
+                        )}
                         {m.color && <ColorBadge color={m.color} />}
                         {m.printing_design && <PrintingBadge design={m.printing_design} />}
                         {m.cap_name && (
@@ -364,8 +369,13 @@ export function BatchInspectionModal({
                         {formatNumber(d.qty)} pcs
                       </span>
                     </div>
-                    {(d.color || d.printing_design || d.cap_name || d.atomizer_name || d.box_name) && (
+                    {(d.variant_name || d.color || d.printing_design || d.cap_name || d.atomizer_name || d.box_name) && (
                       <div className="mt-1 flex flex-wrap items-center gap-1">
+                        {d.variant_name && (
+                          <span className="text-[10px] font-black text-indigo-900 bg-indigo-100 px-1.5 py-0.2 rounded border border-indigo-300 shadow-2xs">
+                            🏷️ {d.variant_name}
+                          </span>
+                        )}
                         {d.color && <ColorBadge color={d.color} />}
                         {d.printing_design && <PrintingBadge design={d.printing_design} />}
                         {d.cap_name && (

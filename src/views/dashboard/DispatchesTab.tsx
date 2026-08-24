@@ -73,6 +73,11 @@ export function DispatchesTab({
                 <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-100 space-y-1">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="font-bold text-slate-900 text-xs font-mono">{d.batchNo}</span>
+                    {d.variant_name && (
+                      <span className="font-black text-indigo-900 bg-indigo-100 border border-indigo-300 px-1.5 py-0.5 rounded text-[10px]">
+                        🏷️ {d.variant_name}
+                      </span>
+                    )}
                     <ColorBadge color={d.resolvedColor} />
                     {d.printing_design && <PrintingBadge design={d.printing_design} />}
                   </div>
@@ -146,7 +151,14 @@ export function DispatchesTab({
                     </td>
                     <td className="px-3.5 py-3.5">
                       <div className="flex flex-col gap-0.5">
-                        <span className="font-bold text-slate-900">{d.batchNo}</span>
+                        <div className="flex items-center gap-1 flex-wrap">
+                          <span className="font-bold text-slate-900">{d.batchNo}</span>
+                          {d.variant_name && (
+                            <span className="font-black text-indigo-900 bg-indigo-100/90 border border-indigo-300 px-1.5 py-0.2 rounded text-[10px] shadow-2xs">
+                              🏷️ {d.variant_name}
+                            </span>
+                          )}
+                        </div>
                         <span className="text-[10px] text-slate-500 font-normal">{d.itemName}</span>
                         <div className="flex items-center gap-1 mt-0.5">
                           <ColorBadge color={d.resolvedColor} />

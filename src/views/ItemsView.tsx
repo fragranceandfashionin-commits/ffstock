@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { Tag, Boxes, PackagePlus, Plus } from 'lucide-react';
+import { Tag, Boxes, PackagePlus } from 'lucide-react';
 import { PageHeader, ErrorBanner, Button, ConfirmModal } from '@/components/ui';
 import { useToast } from '@/components/Toast';
 import {
@@ -163,13 +163,65 @@ export function ItemsView({
     setShowInwardModal(true);
   };
 
-  // Delete Item SKU handler
+  // Delete Item SKU handler (Clean cascade)
   const executeDeleteItem = async () => {
     if (!deleteModalItem) return;
     setDeletingItem(true);
     try {
-      const { error: deleteErr } = await supabase.from('items').delete().eq('id', deleteModalItem.id);
+      const itemId = deleteModalItem.id;
+      // 1. Find all batches for this item
+      const { data: linkedBatches } = await supabase
+        .from('inward_batches')
+        .select('id, image_url')
+        .eq('item_id', itemId);
+
+      if (linkedBatches && linkedBatches.length > 0) {
+        const batchIds = linkedBatches.map((b) => b.id);
+        // Delete movements & dispatches for these batches
+        await supabase.from('stage_movements').delete().in('batch_id', batchIds);
+        await supabase.from('dispatches').delete().in('batch_id', batchIds);
+        // Clean any batch images from storage
+        for (const b of linkedBatches) {
+          if (b.image_url) {
+            try {
+              const u = new URL(b.image_url);
+              const parts = u.pathname.split('batch-images/');
+              if (parts[1]) {
+                await supabase.storage.from('batch-images').remove([decodeURIComponent(parts[1])]).catch(() => {});
+              }
+            } catch {
+              // ignore
+            }
+          }
+        }
+        // Delete the batches
+        await supabase.from('inward_batches').delete().in('id', batchIds);
+      }
+
+      // 2. Delete item stock receipts
+      try {
+        await supabase.from('item_stock_receipts').delete().eq('item_id', itemId);
+      } catch {
+        // Ignored
+      }
+
+      // 3. Clear any component references in remaining batches or movements
+      try {
+        await supabase.from('inward_batches').update({ cap_item_id: null }).eq('cap_item_id', itemId);
+        await supabase.from('inward_batches').update({ atomizer_item_id: null }).eq('atomizer_item_id', itemId);
+        await supabase.from('inward_batches').update({ box_item_id: null }).eq('box_item_id', itemId);
+        await supabase.from('stage_movements').update({ cap_item_id: null }).eq('cap_item_id', itemId);
+        await supabase.from('stage_movements').update({ atomizer_item_id: null }).eq('atomizer_item_id', itemId);
+        await supabase.from('stage_movements').update({ box_item_id: null }).eq('box_item_id', itemId);
+        await supabase.from('dispatches').update({ box_item_id: null }).eq('box_item_id', itemId);
+      } catch {
+        // Ignored
+      }
+
+      // 4. Delete the item
+      const { error: deleteErr } = await supabase.from('items').delete().eq('id', itemId);
       if (deleteErr) throw deleteErr;
+
       toast.success(`Item "${deleteModalItem.name}" deleted.`, 'Item Removed');
       setDeleteModalItem(null);
       await load(true);
@@ -181,11 +233,12 @@ export function ItemsView({
     }
   };
 
-  // Delete Inward Batch handler
+  // Delete Inward Batch handler (Clean cascade)
   const executeDeleteBatch = async () => {
     if (!deleteModalBatch) return;
     setDeletingBatch(true);
     try {
+      const batchId = deleteModalBatch.id;
       if (deleteModalBatch.image_url) {
         try {
           const u = new URL(deleteModalBatch.image_url);
@@ -198,7 +251,12 @@ export function ItemsView({
         }
       }
 
-      const { error: deleteErr } = await supabase.from('inward_batches').delete().eq('id', deleteModalBatch.id);
+      // 1. Delete associated stage movements & dispatches for this batch
+      await supabase.from('stage_movements').delete().eq('batch_id', batchId);
+      await supabase.from('dispatches').delete().eq('batch_id', batchId);
+
+      // 2. Delete the batch record
+      const { error: deleteErr } = await supabase.from('inward_batches').delete().eq('id', batchId);
       if (deleteErr) throw deleteErr;
 
       toast.success(`Batch "${deleteModalBatch.batch_no}" deleted successfully.`, 'Batch Removed');
@@ -319,6 +377,7 @@ export function ItemsView({
           onOpenInwardModal={() => openInwardStockModal()}
           onOpenDeleteBatchModal={(batch) => setDeleteModalBatch(batch)}
           onViewChange={onViewChange}
+          onBatchUpdated={() => load(true)}
         />
       )}
 
@@ -332,6 +391,7 @@ export function ItemsView({
           }}
           items={items ?? []}
           suppliers={suppliers}
+          batches={batches ?? []}
           caps={caps}
           atomizers={atomizers}
           boxes={boxes}

@@ -64,14 +64,35 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
   const [stockSummaryMap, setStockSummaryMap] = useState<Map<string, ComponentStockSummary>>(new Map());
 
   const lastHandledBatchIdRef = useRef<string | null>(null);
+  const actionPanelRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // Active user action
   const [activeAction, setActiveAction] = useState<ActiveAction>(null);
 
+  // Smooth scroll to action panel when activated
+  useEffect(() => {
+    if (activeAction && actionPanelRef.current) {
+      actionPanelRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [activeAction]);
+
+  // Global Escape key listener to dismiss active action panel
+  useEffect(() => {
+    const handleGlobalEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && activeAction) {
+        setActiveAction(null);
+        resetForm();
+      }
+    };
+    window.addEventListener('keydown', handleGlobalEsc);
+    return () => window.removeEventListener('keydown', handleGlobalEsc);
+  }, [activeAction]);
+
   // Movement Form state
   const [moveQty, setMoveQty] = useState('');
+  const [moveVariantName, setMoveVariantName] = useState('');
   const [moveColor, setMoveColor] = useState('');
   const [movePrintingDesign, setMovePrintingDesign] = useState('');
   const [capName, setCapName] = useState('');
@@ -96,6 +117,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
   // Dispatch Form state
   const [dispatchMode, setDispatchMode] = useState<'single' | 'multi-split'>('single');
   const [dispatchQty, setDispatchQty] = useState('');
+  const [dispatchVariantName, setDispatchVariantName] = useState('');
   const [customerName, setCustomerName] = useState('');
   const [invoiceNo, setInvoiceNo] = useState('');
   const [dispatchDate, setDispatchDate] = useState(getTodayDateString());
@@ -125,7 +147,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
 
   const toast = useToast();
 
-  const loadInitial = async () => {
+  const loadInitial = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -153,11 +175,11 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     } finally {
       setLoading(false);
     }
-  };
+  }, [batchId]);
 
   useEffect(() => {
     loadInitial();
-  }, []);
+  }, [loadInitial]);
 
   const refreshBatchData = useCallback(async () => {
     if (!batchId) {
@@ -238,9 +260,9 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     [stages]
   );
 
-  const qtyAt = (stageId: string): number => {
+  const qtyAt = useCallback((stageId: string): number => {
     return stock.find((s) => s.stage_id === stageId)?.qty ?? 0;
-  };
+  }, [stock]);
 
   const dispatchedTotal = useMemo(
     () => dispatches.reduce((acc, d) => acc + d.qty, 0),
@@ -250,7 +272,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
   const readyQty = useMemo(() => {
     const readyStage = stages?.find((s) => s.name === 'Ready');
     return readyStage ? qtyAt(readyStage.id) : 0;
-  }, [stages, stock]);
+  }, [stages, qtyAt]);
 
   const inFactory = useMemo(() => {
     if (!selectedBatch) return 0;
@@ -261,6 +283,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
 
   const resetForm = () => {
     setMoveQty('');
+    setMoveVariantName('');
     setMoveColor('');
     setMovePrintingDesign('');
     setCapName('');
@@ -276,6 +299,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     setScrapQty('');
     setScrapReason(SCRAP_REASONS[0]);
     setDispatchQty('');
+    setDispatchVariantName('');
     setCustomerName('');
     setInvoiceNo('');
     setDispatchDate(getTodayDateString());
@@ -327,7 +351,108 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     if (activeAction.type === 'scrap') return qtyAt(activeAction.fromStageId);
     if (activeAction.type === 'dispatch') return readyQty;
     return 0;
-  }, [activeAction, stock, readyQty]);
+  }, [activeAction, qtyAt, readyQty]);
+
+  // Variant state synchronization handlers
+  const handleUpdateMoveVariantName = (val: string) => {
+    setMoveVariantName(val);
+    setVariantRows((prev) => {
+      if (prev.length === 0) {
+        return [
+          {
+            id: String(Date.now()),
+            variant_name: val,
+            color: moveColor || selectedBatch?.color || 'Clear',
+            printing_design: movePrintingDesign || '',
+            cap_name: capName || '',
+            cap_item_id: moveCapItemId || '',
+            atomizer_name: atomizerName || '',
+            atomizer_item_id: moveAtomizerItemId || '',
+            box_name: moveBoxName || '',
+            box_item_id: moveBoxItemId || '',
+            qty: moveQty || String(activeSourceQty),
+          },
+        ];
+      }
+      return prev.map((r, idx) => (idx === 0 ? { ...r, variant_name: val } : r));
+    });
+  };
+
+  const handleUpdateDispatchVariantName = (val: string) => {
+    setDispatchVariantName(val);
+    setVariantRows((prev) => {
+      if (prev.length === 0) {
+        return [
+          {
+            id: String(Date.now()),
+            variant_name: val,
+            color: dispatchColor || selectedBatch?.color || 'Clear',
+            printing_design: dispatchPrintingDesign || '',
+            cap_name: dispatchCapName || '',
+            atomizer_name: dispatchAtomizerName || '',
+            box_name: dispatchBoxName || '',
+            qty: dispatchQty || String(readyQty),
+          },
+        ];
+      }
+      return prev.map((r, idx) => (idx === 0 ? { ...r, variant_name: val } : r));
+    });
+  };
+
+  const handleSwitchToSingleMove = () => {
+    if (variantRows.length > 0) {
+      if (variantRows[0].variant_name !== undefined) setMoveVariantName(variantRows[0].variant_name);
+      if (variantRows[0].color) setMoveColor(variantRows[0].color);
+      if (variantRows[0].printing_design) setMovePrintingDesign(variantRows[0].printing_design);
+      if (variantRows[0].cap_name) setCapName(variantRows[0].cap_name);
+      if (variantRows[0].cap_item_id) setMoveCapItemId(variantRows[0].cap_item_id);
+      if (variantRows[0].atomizer_name) setAtomizerName(variantRows[0].atomizer_name);
+      if (variantRows[0].atomizer_item_id) setMoveAtomizerItemId(variantRows[0].atomizer_item_id);
+      if (variantRows[0].box_name) setMoveBoxName(variantRows[0].box_name);
+      if (variantRows[0].box_item_id) setMoveBoxItemId(variantRows[0].box_item_id);
+    }
+    setMoveMode('single');
+  };
+
+  const handleSwitchToMultiSplitMove = () => {
+    if (variantRows.length === 0 && activeAction?.type === 'stage-move') {
+      const derived = deriveStageVariants({
+        fromStageId: activeAction.fromStageId,
+        movements,
+        dispatches,
+        selectedBatch,
+        availableQty: activeSourceQty,
+      });
+      setVariantRows(derived);
+    } else if (variantRows.length > 0) {
+      setVariantRows((prev) =>
+        prev.map((r, idx) => {
+          const brand = selectedBatch?.brand_name?.trim() || selectedBatch?.item?.name?.trim() || 'Variant';
+          const resolvedRowName =
+            r.variant_name?.trim() ||
+            (idx === 0 && moveVariantName?.trim() ? moveVariantName.trim() : `${brand} - ${r.color || 'Variant'}`);
+          return idx === 0
+            ? {
+                ...r,
+                variant_name: resolvedRowName,
+                color: moveColor || r.color,
+                printing_design: movePrintingDesign || r.printing_design,
+                cap_name: capName || r.cap_name,
+                cap_item_id: moveCapItemId || r.cap_item_id,
+                atomizer_name: atomizerName || r.atomizer_name,
+                atomizer_item_id: moveAtomizerItemId || r.atomizer_item_id,
+                box_name: moveBoxName || r.box_name,
+                box_item_id: moveBoxItemId || r.box_item_id,
+              }
+            : {
+                ...r,
+                variant_name: resolvedRowName,
+              };
+        })
+      );
+    }
+    setMoveMode('multi-split');
+  };
 
   // Variant row manipulations
   const handleAddVariantRow = () => {
@@ -337,11 +462,14 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     const lastRow = variantRows[variantRows.length - 1];
     const totalAllocated = variantRows.reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
     const unallocated = Math.max(0, activeSourceQty - totalAllocated);
+    const brand = selectedBatch?.brand_name?.trim() || selectedBatch?.item?.name?.trim() || 'Variant';
+    const autoVariantName = `${brand} - ${availableColor}`;
 
     setVariantRows((prev) => [
       ...prev,
       {
         id: nextId,
+        variant_name: autoVariantName,
         color: availableColor,
         printing_design: lastRow?.printing_design || movePrintingDesign || '',
         box_name: lastRow?.box_name || moveBoxName || '',
@@ -378,13 +506,12 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     setFormError(null);
     resetForm();
 
-    const fromS = stages?.find((s) => s.id === fromStageId);
-    const fName = (fromS?.name || '').toLowerCase();
     const available = qtyAt(fromStageId);
 
     const derivedVariants = deriveStageVariants({
       fromStageId,
       movements,
+      dispatches,
       selectedBatch,
       availableQty: available,
     });
@@ -392,7 +519,11 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     const primaryVariant = derivedVariants[0];
     setVariantRows(derivedVariants);
 
+    const latestMoveWithVariant = movements.slice().reverse().find((m) => m.variant_name?.trim())?.variant_name?.trim() || '';
+    const initialVariant = primaryVariant?.variant_name || latestMoveWithVariant || (selectedBatch?.brand_name ? selectedBatch.brand_name : '');
+
     setMoveQty(available > 0 ? String(available) : '');
+    setMoveVariantName(initialVariant);
     setMoveColor(primaryVariant?.color || selectedBatch?.color || '');
     setMovePrintingDesign(primaryVariant?.printing_design || '');
     setCapName(primaryVariant?.cap_name || selectedBatch?.cap_item?.name || '');
@@ -406,7 +537,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     setSplitScrapEnabled(false);
     setSplitScrapReason(SCRAP_REASONS[0]);
 
-    if (derivedVariants.length > 1 || fName.includes('color') || fName.includes('print') || fName.includes('pack')) {
+    if (derivedVariants.length > 1) {
       setMoveMode('multi-split');
     } else {
       setMoveMode('single');
@@ -429,13 +560,27 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     const readyMoves = movements.filter((m) => m.to_stage_id === readyStageObj?.id);
     const latestReadyMove = readyMoves.slice().reverse()[0] || movements.slice().reverse()[0];
 
-    const derivedColor = latestReadyMove?.color || selectedBatch?.color || '';
-    const derivedPrinting = latestReadyMove?.printing_design || '';
-    const derivedCap = latestReadyMove?.cap_name || selectedBatch?.cap_item?.name || '';
-    const derivedAtomizer = latestReadyMove?.atomizer_name || selectedBatch?.atomizer_item?.name || '';
-    const derivedBox = latestReadyMove?.box_name || selectedBatch?.box_item?.name || '';
+    const derivedVariants = readyStageObj
+      ? deriveStageVariants({
+          fromStageId: readyStageObj.id,
+          movements,
+          dispatches,
+          selectedBatch,
+          availableQty: readyQty,
+        })
+      : [];
+
+    const primaryVariant = derivedVariants[0];
+
+    const derivedVariantName = primaryVariant?.variant_name || latestReadyMove?.variant_name || selectedBatch?.brand_name || '';
+    const derivedColor = primaryVariant?.color || latestReadyMove?.color || selectedBatch?.color || '';
+    const derivedPrinting = primaryVariant?.printing_design || latestReadyMove?.printing_design || '';
+    const derivedCap = primaryVariant?.cap_name || latestReadyMove?.cap_name || selectedBatch?.cap_item?.name || '';
+    const derivedAtomizer = primaryVariant?.atomizer_name || latestReadyMove?.atomizer_name || selectedBatch?.atomizer_item?.name || '';
+    const derivedBox = primaryVariant?.box_name || latestReadyMove?.box_name || selectedBatch?.box_item?.name || '';
 
     const specsList = [
+      derivedVariantName ? `Variant: ${derivedVariantName}` : '',
       derivedColor ? `Color: ${derivedColor}` : '',
       derivedPrinting ? `Print: ${derivedPrinting}` : '',
       derivedCap ? `Cap: ${derivedCap}` : '',
@@ -444,6 +589,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     ].filter(Boolean).join(' • ');
 
     setDispatchQty(readyQty > 0 ? String(readyQty) : '');
+    setDispatchVariantName(derivedVariantName);
     setCustomerName('');
     setInvoiceNo('');
     setDispatchDate(getTodayDateString());
@@ -454,13 +600,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     setDispatchBoxName(derivedBox);
     setDispatchProductSpecs(specsList);
 
-    if (readyStageObj) {
-      const derivedVariants = deriveStageVariants({
-        fromStageId: readyStageObj.id,
-        movements,
-        selectedBatch,
-        availableQty: readyQty,
-      });
+    if (derivedVariants.length > 0) {
       setVariantRows(derivedVariants);
       if (derivedVariants.length > 1) {
         setDispatchMode('multi-split');
@@ -527,14 +667,14 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
         return;
       }
 
-      // Component stock validation
-      if (isFillingStage || isLeavingFilling) {
+      // Component stock validation (Only when leaving Filling)
+      if (isLeavingFilling) {
         const capDemand = new Map<string, number>();
         const atomDemand = new Map<string, number>();
         for (const r of variantRows) {
           const q = Number(r.qty) || 0;
-          const cId = (isFillingStage || isLeavingFilling ? (moveCapItemId || r.cap_item_id) : (r.cap_item_id || moveCapItemId)) || selectedBatch?.cap_item_id || null;
-          const aId = (isFillingStage || isLeavingFilling ? (moveAtomizerItemId || r.atomizer_item_id) : (r.atomizer_item_id || moveAtomizerItemId)) || selectedBatch?.atomizer_item_id || null;
+          const cId = r.cap_item_id || moveCapItemId || selectedBatch?.cap_item_id || null;
+          const aId = r.atomizer_item_id || moveAtomizerItemId || selectedBatch?.atomizer_item_id || null;
           if (cId && q > 0) capDemand.set(cId, (capDemand.get(cId) ?? 0) + q);
           if (aId && q > 0) atomDemand.set(aId, (atomDemand.get(aId) ?? 0) + q);
         }
@@ -558,7 +698,8 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
         }
       }
 
-      if (isPackagingStage || isLeavingPackaging) {
+      // Box stock validation (Only when leaving Packaging or moving direct to Ready)
+      if (isLeavingPackaging || (isLeavingFilling && targetStageName.toLowerCase().includes('ready'))) {
         const boxDemand = new Map<string, number>();
         for (const r of variantRows) {
           const q = Number(r.qty) || 0;
@@ -579,17 +720,27 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
       setSubmitting(true);
       try {
         const remainingLoss = available - totalVariantQty;
-        const variantsPayload = variantRows.map((r) => ({
-          qty: Number(r.qty),
-          color: r.color?.trim() || moveColor.trim() || selectedBatch?.color || null,
-          printing_design: r.printing_design?.trim() || movePrintingDesign.trim() || null,
-          cap_name: (isFillingStage || isLeavingFilling ? (capName.trim() || r.cap_name?.trim()) : (r.cap_name?.trim() || capName.trim())) || selectedBatch?.cap_item?.name || null,
-          atomizer_name: (isFillingStage || isLeavingFilling ? (atomizerName.trim() || r.atomizer_name?.trim()) : (r.atomizer_name?.trim() || atomizerName.trim())) || selectedBatch?.atomizer_item?.name || null,
-          box_name: r.box_name?.trim() || moveBoxName.trim() || selectedBatch?.box_item?.name || null,
-          box_item_id: r.box_item_id || moveBoxItemId || selectedBatch?.box_item_id || null,
-          cap_item_id: (isFillingStage || isLeavingFilling ? (moveCapItemId || r.cap_item_id) : (r.cap_item_id || moveCapItemId)) || selectedBatch?.cap_item_id || null,
-          atomizer_item_id: (isFillingStage || isLeavingFilling ? (moveAtomizerItemId || r.atomizer_item_id) : (r.atomizer_item_id || moveAtomizerItemId)) || selectedBatch?.atomizer_item_id || null,
-        }));
+        const brand = selectedBatch?.brand_name?.trim() || selectedBatch?.item?.name?.trim() || 'Variant';
+        const fallbackVariant = moveVariantName.trim() || variantRows[0]?.variant_name?.trim() || brand;
+
+        const variantsPayload = variantRows.map((r) => {
+          const resolvedRowVariant =
+            r.variant_name?.trim() ||
+            (r.color?.trim() ? `${brand} - ${r.color.trim()}` : fallbackVariant) ||
+            brand;
+          return {
+            qty: Number(r.qty),
+            variant_name: resolvedRowVariant,
+            color: r.color?.trim() || moveColor.trim() || selectedBatch?.color || null,
+            printing_design: r.printing_design?.trim() || movePrintingDesign.trim() || null,
+            cap_name: r.cap_name?.trim() || capName.trim() || selectedBatch?.cap_item?.name || null,
+            atomizer_name: r.atomizer_name?.trim() || atomizerName.trim() || selectedBatch?.atomizer_item?.name || null,
+            box_name: r.box_name?.trim() || moveBoxName.trim() || selectedBatch?.box_item?.name || null,
+            box_item_id: r.box_item_id || moveBoxItemId || selectedBatch?.box_item_id || null,
+            cap_item_id: r.cap_item_id || moveCapItemId || selectedBatch?.cap_item_id || null,
+            atomizer_item_id: r.atomizer_item_id || moveAtomizerItemId || selectedBatch?.atomizer_item_id || null,
+          };
+        });
 
         await insertMultiVariantStageMovements({
           batch_id: batchId,
@@ -658,6 +809,8 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     setSubmitting(true);
     try {
       const remainingLoss = available - qtyNum;
+      const latestHistoricalVariant = movements.slice().reverse().find((m) => m.variant_name?.trim())?.variant_name?.trim() || '';
+      const resolvedVariantName = moveVariantName.trim() || variantRows[0]?.variant_name?.trim() || latestHistoricalVariant || null;
       const resolvedColor = moveColor.trim() || selectedBatch?.color || null;
       const resolvedPrinting = movePrintingDesign.trim() || null;
       const resolvedCapName = capName.trim() || selectedBatch?.cap_item?.name || null;
@@ -667,8 +820,8 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
       const resolvedBoxName = moveBoxName.trim() || selectedBatch?.box_item?.name || null;
       const resolvedBoxItemId = moveBoxItemId || selectedBatch?.box_item_id || null;
 
-      // Component stock validation
-      if (isFillingStage || isLeavingFilling) {
+      // Component stock validation (Only when leaving Filling)
+      if (isLeavingFilling) {
         if (resolvedCapItemId) {
           const capSum = stockSummaryMap.get(resolvedCapItemId);
           const capAvail = capSum?.availableStock ?? 0;
@@ -690,7 +843,8 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
         }
       }
 
-      if (isPackagingStage || isLeavingPackaging) {
+      // Box stock validation (Only when leaving Packaging or moving direct to Ready)
+      if (isLeavingPackaging || (isLeavingFilling && targetStageName.toLowerCase().includes('ready'))) {
         if (resolvedBoxItemId) {
           const boxSum = stockSummaryMap.get(resolvedBoxItemId);
           const boxAvail = boxSum?.availableStock ?? 0;
@@ -710,6 +864,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
           qty_forward: qtyNum,
           qty_scrapped: remainingLoss,
           scrap_reason: splitScrapReason,
+          variant_name: resolvedVariantName,
           cap_name: resolvedCapName,
           atomizer_name: resolvedAtomizerName,
           box_name: resolvedBoxName,
@@ -734,6 +889,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
           to_stage_id: tId,
           qty_moved: qtyNum,
           moved_on: getTodayDateString(),
+          variant_name: resolvedVariantName,
           cap_name: resolvedCapName,
           atomizer_name: resolvedAtomizerName,
           box_name: resolvedBoxName,
@@ -742,6 +898,9 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
           cap_item_id: resolvedCapItemId,
           atomizer_item_id: resolvedAtomizerItemId,
           box_item_id: resolvedBoxItemId,
+          cap_qty_used: resolvedCapItemId ? qtyNum : null,
+          atomizer_qty_used: resolvedAtomizerItemId ? qtyNum : null,
+          box_qty_used: resolvedBoxItemId ? qtyNum : null,
           remarks: moveRemarks.trim() || null,
           done_by: moveDoneBy.trim() || null,
         });
@@ -790,11 +949,17 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
 
     setSubmitting(true);
     try {
+      const latestHistoricalVariant = movements.slice().reverse().find((m) => m.variant_name?.trim())?.variant_name?.trim() || '';
+      const resolvedVariantName = moveVariantName.trim() || variantRows[0]?.variant_name?.trim() || latestHistoricalVariant || null;
+
       await insertScrapMovement({
         batch_id: batchId,
         from_stage_id: fId,
         qty_scrapped: qtyNum,
         reason: scrapReason,
+        variant_name: resolvedVariantName,
+        color: moveColor.trim() || selectedBatch?.color || null,
+        printing_design: movePrintingDesign.trim() || null,
         remarks: moveRemarks.trim() || null,
         done_by: moveDoneBy.trim() || null,
         stages,
@@ -821,6 +986,9 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
       return;
     }
 
+    const latestHistoricalVariant = movements.slice().reverse().find((m) => m.variant_name?.trim())?.variant_name?.trim() || '';
+    const resolvedDispatchVariant = dispatchVariantName.trim() || latestHistoricalVariant || null;
+
     // Multi-Variant Dispatch Mode
     if (dispatchMode === 'multi-split') {
       if (variantRows.length === 0) {
@@ -845,7 +1013,9 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
       setSubmitting(true);
       try {
         const variantsPayload = variantRows.map((r) => {
+          const rowVariant = r.variant_name?.trim() || resolvedDispatchVariant;
           const variantSpecs = [
+            rowVariant ? `Variant: ${rowVariant}` : '',
             r.color ? `Color: ${r.color}` : '',
             r.printing_design ? `Print: ${r.printing_design}` : '',
             r.cap_name ? `Cap: ${r.cap_name}` : '',
@@ -855,6 +1025,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
 
           return {
             qty: Number(r.qty),
+            variant_name: rowVariant,
             color: r.color?.trim() || null,
             printing_design: r.printing_design?.trim() || null,
             cap_name: r.cap_name?.trim() || null,
@@ -913,6 +1084,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
         customer_name: customerName.trim(),
         invoice_no: invoiceNo.trim(),
         dispatched_on: dispatchDate,
+        variant_name: resolvedDispatchVariant,
         color: dispatchColor.trim() || selectedBatch?.color || null,
         printing_design: dispatchPrintingDesign.trim() || null,
         cap_name: dispatchCapName.trim() || null,
@@ -1022,6 +1194,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
         'From Stage',
         'To Stage',
         'Qty Moved',
+        'Variant Name',
         'Color',
         'Printing Design',
         'Cap Used',
@@ -1038,6 +1211,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
         m.from_stage?.name ?? '',
         m.to_stage?.name ?? '',
         m.qty_moved,
+        m.variant_name || '',
         m.color || '',
         m.printing_design || '',
         m.cap_name || '',
@@ -1066,6 +1240,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
         'Batch No',
         'Item SKU',
         'Dispatched Qty',
+        'Variant Name',
         'Color',
         'Printing Design',
         'Cap Name',
@@ -1081,6 +1256,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
         selectedBatch?.batch_no || 'Batch',
         selectedBatch?.item?.name || 'Product',
         d.qty,
+        d.variant_name || '',
         d.color || '',
         d.printing_design || '',
         d.cap_name || '',
@@ -1164,6 +1340,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
             readyQty={readyQty}
             dispatchedTotal={dispatchedTotal}
             unitLabel={unitLabel}
+            onStartDispatch={startDispatch}
           />
 
           {!batchId ? (
@@ -1188,7 +1365,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
 
                 {/* Step 3: Active Action Panel */}
                 {activeAction && (
-                  <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 animate-in fade-in slide-in-from-top-2 duration-200">
+                  <div ref={actionPanelRef} className="grid grid-cols-1 gap-6 lg:grid-cols-12 animate-in fade-in slide-in-from-top-2 duration-200 scroll-mt-6">
                     <Card className="lg:col-span-8 xl:col-span-7 border-indigo-200 bg-white shadow-md">
                       {/* Stage Movement Action */}
                       {activeAction.type === 'stage-move' && (
@@ -1219,7 +1396,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
                             <div className="flex rounded-xl bg-slate-100 p-1 border border-slate-200">
                               <button
                                 type="button"
-                                onClick={() => setMoveMode('single')}
+                                onClick={handleSwitchToSingleMove}
                                 className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
                                   moveMode === 'single'
                                     ? 'bg-white text-slate-900 shadow-2xs'
@@ -1230,18 +1407,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
                               </button>
                               <button
                                 type="button"
-                                onClick={() => {
-                                  if (variantRows.length === 0 && activeAction?.type === 'stage-move') {
-                                    const derived = deriveStageVariants({
-                                      fromStageId: activeAction.fromStageId,
-                                      movements,
-                                      selectedBatch,
-                                      availableQty: activeSourceQty,
-                                    });
-                                    setVariantRows(derived);
-                                  }
-                                  setMoveMode('multi-split');
-                                }}
+                                onClick={handleSwitchToMultiSplitMove}
                                 className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
                                   moveMode === 'multi-split'
                                     ? 'bg-indigo-600 text-white shadow-2xs'
@@ -1304,6 +1470,8 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
                               isLeavingPackaging={isLeavingPackaging}
                               moveQty={moveQty}
                               setMoveQty={setMoveQty}
+                              moveVariantName={moveVariantName}
+                              setMoveVariantName={handleUpdateMoveVariantName}
                               moveColor={moveColor}
                               setMoveColor={setMoveColor}
                               movePrintingDesign={movePrintingDesign}
@@ -1425,6 +1593,8 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
                             setDispatchDate={setDispatchDate}
                             dispatchQty={dispatchQty}
                             setDispatchQty={setDispatchQty}
+                            dispatchVariantName={dispatchVariantName}
+                            setDispatchVariantName={handleUpdateDispatchVariantName}
                             dispatchColor={dispatchColor}
                             setDispatchColor={setDispatchColor}
                             dispatchCapName={dispatchCapName}

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Save, Plus, Building2 } from 'lucide-react';
+import { Save, Plus } from 'lucide-react';
 import { Modal, Field, inputClass, Button, ErrorBanner } from '@/components/ui';
 import { insertSupplier } from '@/lib/queries';
 import { getErrorMessage } from '@/lib/utils';

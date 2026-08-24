@@ -97,7 +97,14 @@ export function DeliveryChallanModal({
               </thead>
               <tbody className="divide-y divide-slate-100">
                 <tr>
-                  <td className="p-2.5 font-bold text-slate-900">{batch?.item?.name ?? 'Product'}</td>
+                  <td className="p-2.5 font-bold text-slate-900">
+                    <div>{batch?.item?.name ?? 'Product'}</div>
+                    {dispatch.variant_name && (
+                      <div className="inline-flex items-center gap-1 text-[11px] font-black text-indigo-900 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded mt-1">
+                        🏷️ Variant: {dispatch.variant_name}
+                      </div>
+                    )}
+                  </td>
                   <td className="p-2.5">
                     <div className="space-y-0.5">
                       <div>Color: <strong>{dispatch.color || batch?.color || 'Standard'}</strong></div>

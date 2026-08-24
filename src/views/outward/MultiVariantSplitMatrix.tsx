@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Sparkles, Plus, Trash2, ArrowRight, AlertCircle } from 'lucide-react';
 import { Field, inputClass, Button, ErrorBanner, ColorSelect, PrintingSelect } from '@/components/ui';
 import type { Item, ComponentStockSummary } from '@/lib/supabase';
@@ -54,9 +54,7 @@ export function MultiVariantSplitMatrix({
   isLeavingColoring,
   isPrintingStage,
   isLeavingPrinting,
-  isFillingStage,
   isLeavingFilling,
-  isPackagingStage,
   isLeavingPackaging,
   moveDoneBy,
   setMoveDoneBy,
@@ -73,6 +71,40 @@ export function MultiVariantSplitMatrix({
   const totalVariantQty = variantRows.reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
   const unallocatedVariantQty = Math.max(0, activeSourceQty - totalVariantQty);
   const isVariantOverAllocated = totalVariantQty > activeSourceQty;
+
+  // Cumulative BOM component allocations across all rows in the split matrix
+  const matrixCapDemand = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const r of variantRows) {
+      const q = Number(r.qty) || 0;
+      if (r.cap_item_id && q > 0) {
+        map.set(r.cap_item_id, (map.get(r.cap_item_id) ?? 0) + q);
+      }
+    }
+    return map;
+  }, [variantRows]);
+
+  const matrixAtomizerDemand = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const r of variantRows) {
+      const q = Number(r.qty) || 0;
+      if (r.atomizer_item_id && q > 0) {
+        map.set(r.atomizer_item_id, (map.get(r.atomizer_item_id) ?? 0) + q);
+      }
+    }
+    return map;
+  }, [variantRows]);
+
+  const matrixBoxDemand = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const r of variantRows) {
+      const q = Number(r.qty) || 0;
+      if (r.box_item_id && q > 0) {
+        map.set(r.box_item_id, (map.get(r.box_item_id) ?? 0) + q);
+      }
+    }
+    return map;
+  }, [variantRows]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -126,14 +158,29 @@ export function MultiVariantSplitMatrix({
               className="p-3 rounded-xl border border-indigo-100 bg-white shadow-2xs space-y-2 transition hover:border-indigo-300"
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="flex items-center gap-1.5 text-xs font-extrabold text-indigo-900">
-                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-indigo-100 text-[10px] font-black text-indigo-800">
+                <span className="flex items-center gap-1.5 text-xs font-extrabold text-indigo-900 flex-wrap">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-indigo-100 text-[10px] font-black text-indigo-800 shrink-0">
                     #{index + 1}
                   </span>
                   <span>Variant Line</span>
+                  {row.variant_name?.trim() && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-black text-indigo-900 bg-indigo-100/90 border border-indigo-300 px-2 py-0.5 rounded-md shadow-2xs">
+                      🏷️ {row.variant_name}
+                    </span>
+                  )}
                   {row.color && (
-                    <span className="ml-1 text-[10px] font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
-                      {row.color}
+                    <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
+                      🎨 {row.color}
+                    </span>
+                  )}
+                  {row.cap_name && !isLeavingFilling && (
+                    <span className="text-[10px] font-semibold text-violet-700 bg-violet-50 border border-violet-100 px-1.5 py-0.5 rounded">
+                      🧴 {row.cap_name}
+                    </span>
+                  )}
+                  {row.atomizer_name && !isLeavingFilling && (
+                    <span className="text-[10px] font-semibold text-sky-700 bg-sky-50 border border-sky-100 px-1.5 py-0.5 rounded">
+                      💨 {row.atomizer_name}
                     </span>
                   )}
                 </span>
@@ -152,16 +199,48 @@ export function MultiVariantSplitMatrix({
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-start">
+                {/* Variant Name Input */}
+                <div
+                  className={
+                    isLeavingFilling
+                      ? 'sm:col-span-5'
+                      : isLeavingPackaging || isLeavingPrinting
+                      ? 'sm:col-span-4'
+                      : 'sm:col-span-4'
+                  }
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-indigo-950 block">
+                      🏷️ Variant Name
+                    </label>
+                    {row.variant_name?.trim() && (
+                      <span className="text-[9px] font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100">
+                        ✓ Preserved
+                      </span>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    className={`${inputClass} text-xs font-bold ${row.variant_name?.trim() ? 'border-indigo-300 bg-white' : ''}`}
+                    value={row.variant_name || ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setVariantRows((prev) =>
+                        prev.map((r) => (r.id === row.id ? { ...r, variant_name: val } : r))
+                      );
+                    }}
+                    placeholder="e.g. Velvet Night 50ml, SKU-101…"
+                  />
+                </div>
+
                 {/* Color Selection & Typing */}
                 <div
                   className={
-                    (isFillingStage || isLeavingFilling)
-                      ? 'sm:col-span-3'
-                      : (isLeavingPackaging || isPackagingStage) && (isLeavingPrinting || isPrintingStage)
-                      ? 'sm:col-span-3'
-                      : (isLeavingPackaging || isPackagingStage) || (isLeavingPrinting || isPrintingStage)
+                    isLeavingFilling
                       ? 'sm:col-span-4'
-                      : 'sm:col-span-7'
+                      : isLeavingPackaging || isLeavingPrinting
+                      ? 'sm:col-span-4'
+                      : 'sm:col-span-4'
                   }
                 >
                   <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">
@@ -173,7 +252,17 @@ export function MultiVariantSplitMatrix({
                     colors={allColorSuggestions}
                     onChange={(val) => {
                       setVariantRows((prev) =>
-                        prev.map((r) => (r.id === row.id ? { ...r, color: val } : r))
+                        prev.map((r) => {
+                          if (r.id !== row.id) return r;
+                          const currentName = r.variant_name?.trim() || '';
+                          const shouldAutoUpdateName = !currentName || currentName.endsWith(r.color || '') || currentName === 'Variant' || currentName.includes(' - ');
+                          const newName = shouldAutoUpdateName && val
+                            ? currentName.includes(' - ')
+                              ? `${currentName.split(' - ')[0]} - ${val}`
+                              : currentName || val
+                            : currentName;
+                          return { ...r, color: val, variant_name: newName || r.variant_name };
+                        })
                       );
                     }}
                     placeholder="Select Color / Finish…"
@@ -182,16 +271,8 @@ export function MultiVariantSplitMatrix({
                 </div>
 
                 {/* Printing Design Specification */}
-                {(isLeavingPrinting || isPrintingStage || isFillingStage || isLeavingFilling || isPackagingStage || isLeavingPackaging) && (
-                  <div
-                    className={
-                      (isFillingStage || isLeavingFilling)
-                        ? 'sm:col-span-3'
-                        : isLeavingPackaging || isPackagingStage
-                        ? 'sm:col-span-3'
-                        : 'sm:col-span-4'
-                    }
-                  >
+                {(isLeavingPrinting || isPrintingStage || ((isLeavingFilling || isLeavingPackaging) && row.printing_design)) && (
+                  <div className="sm:col-span-3">
                     <label className="text-[10px] font-bold uppercase tracking-wider text-indigo-700 mb-1 block">
                       🖨️ Printing / Artwork {isLeavingPrinting && <span className="text-rose-600">*</span>}
                     </label>
@@ -210,15 +291,44 @@ export function MultiVariantSplitMatrix({
                   </div>
                 )}
 
-                {/* Caps Closure Option (Filling Stage) */}
-                {(isFillingStage || isLeavingFilling) && (
-                  <div className="sm:col-span-3 space-y-1">
+                {/* Quantity Input (placed up top if simple stage or for direct visual balance) */}
+                {!isLeavingFilling && !isLeavingPackaging && !(isLeavingFilling && targetStageName.toLowerCase().includes('ready')) && (
+                  <div className="sm:col-span-4">
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">
+                      Quantity ({unitLabel}) *
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min={0}
+                        max={activeSourceQty}
+                        className={`${inputClass} font-black text-sm pr-12`}
+                        value={row.qty}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setVariantRows((prev) =>
+                            prev.map((r) => (r.id === row.id ? { ...r, qty: val } : r))
+                          );
+                        }}
+                        placeholder="0"
+                      />
+                      <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 pointer-events-none">
+                        {unitLabel}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Caps Closure Option (ONLY AT FILLING STAGE EXIT) */}
+                {isLeavingFilling && (
+                  <div className="sm:col-span-4 space-y-1">
                     <label className="text-[10px] font-bold uppercase tracking-wider text-violet-900 mb-1 block">
-                      🧴 Cap / Closure {isLeavingFilling && <span className="text-rose-600 font-extrabold">*</span>}
+                      🧴 Cap / Closure <span className="text-rose-600 font-extrabold">*</span>
                     </label>
                     <select
                       className={`${inputClass} text-xs font-bold border-violet-200 bg-violet-50/40 ${
-                        isLeavingFilling && !row.cap_item_id && !row.cap_name?.trim() ? 'border-amber-400 bg-amber-50/50' : ''
+                        !row.cap_item_id && !row.cap_name?.trim() ? 'border-amber-400 bg-amber-50/50' : ''
                       }`}
                       value={row.cap_item_id || ''}
                       onChange={(e) => {
@@ -239,36 +349,61 @@ export function MultiVariantSplitMatrix({
                     >
                       <option value="">Select Cap from Stock…</option>
                       {caps.map((c) => {
-                        const avail = stockSummaryMap.get(c.id)?.availableStock ?? 0;
-                        const isOutOfStock = avail <= 0;
+                        const totalAvail = stockSummaryMap.get(c.id)?.availableStock ?? 0;
+                        const isOutOfStock = totalAvail <= 0;
+                        const otherRowsAllocated = (matrixCapDemand.get(c.id) ?? 0) - (row.cap_item_id === c.id ? (Number(row.qty) || 0) : 0);
+                        const availForThisRow = Math.max(0, totalAvail - otherRowsAllocated);
+
                         return (
                           <option key={c.id} value={c.id}>
-                            {c.name}{c.color ? ` (${c.color})` : ''} ({isOutOfStock ? '0 - OUT OF STOCK' : `${formatNumber(avail)} in stock`})
+                            {c.name}{c.color ? ` (${c.color})` : ''} — {
+                              isOutOfStock
+                                ? '0 in stock [OUT OF STOCK]'
+                                : otherRowsAllocated > 0
+                                ? `Stock: ${formatNumber(totalAvail)} | Avail for row: ${formatNumber(availForThisRow)} (${formatNumber(otherRowsAllocated)} in other rows)`
+                                : `${formatNumber(totalAvail)} in stock`
+                            }
                           </option>
                         );
                       })}
                     </select>
                     {row.cap_item_id && (() => {
                       const sum = stockSummaryMap.get(row.cap_item_id);
-                      const avail = sum?.availableStock ?? 0;
+                      const totalAvail = sum?.availableStock ?? 0;
                       const rowQ = Number(row.qty) || 0;
-                      if (avail <= 0) {
+                      const totalDemand = matrixCapDemand.get(row.cap_item_id) ?? 0;
+                      const remainingAfterMatrix = totalAvail - totalDemand;
+
+                      if (totalAvail <= 0) {
                         return (
-                          <div className="text-[10px] font-bold text-red-600 flex items-center gap-0.5">
-                            <span>⚠️ Out of stock (0 available)</span>
+                          <div className="p-1.5 rounded-lg bg-rose-50 border border-rose-200 text-[10px] font-bold text-rose-700 flex items-center gap-1">
+                            <AlertCircle className="w-3.5 h-3.5 shrink-0 text-rose-600" />
+                            <span>Out of stock (0 available in warehouse)</span>
                           </div>
                         );
                       }
-                      if (rowQ > avail) {
+                      if (totalDemand > totalAvail) {
                         return (
-                          <div className="text-[10px] font-bold text-amber-700 flex items-center gap-0.5">
-                            <span>⚠️ Exceeds stock (only {formatNumber(avail)} available)</span>
+                          <div className="p-1.5 rounded-lg bg-rose-50 border border-rose-200 text-[10px] font-bold text-rose-700 flex items-center gap-1">
+                            <AlertCircle className="w-3.5 h-3.5 shrink-0 text-rose-600" />
+                            <span>Insufficient stock: Matrix requires {formatNumber(totalDemand)}, only {formatNumber(totalAvail)} available (Short by {formatNumber(totalDemand - totalAvail)})</span>
+                          </div>
+                        );
+                      }
+                      if (totalDemand > 0) {
+                        return (
+                          <div className="p-1.5 rounded-lg bg-emerald-50/90 border border-emerald-200 text-[10px] font-bold text-emerald-900 flex flex-wrap items-center justify-between gap-1 shadow-2xs">
+                            <span>Warehouse: <strong>{formatNumber(totalAvail)}</strong></span>
+                            <span>Matrix Used: <strong>{formatNumber(totalDemand)}</strong> (Row: {formatNumber(rowQ)})</span>
+                            <span className="text-emerald-700 bg-emerald-100/90 px-1.5 py-0.5 rounded">
+                              Left: <strong>{formatNumber(remainingAfterMatrix)}</strong>
+                            </span>
                           </div>
                         );
                       }
                       return null;
                     })()}
-                    {isLeavingFilling && !row.cap_item_id && !row.cap_name?.trim() && (
+                    {!row.cap_item_id && !row.cap_name?.trim() && (
                       <div className="text-[10px] font-bold text-rose-600 flex items-center gap-0.5">
                         <span>⚠️ Cap closure required</span>
                       </div>
@@ -288,15 +423,15 @@ export function MultiVariantSplitMatrix({
                   </div>
                 )}
 
-                {/* Atomizers Pump Option (Filling Stage) */}
-                {(isFillingStage || isLeavingFilling) && (
-                  <div className="sm:col-span-3 space-y-1">
+                {/* Atomizers Pump Option (ONLY AT FILLING STAGE EXIT) */}
+                {isLeavingFilling && (
+                  <div className="sm:col-span-4 space-y-1">
                     <label className="text-[10px] font-bold uppercase tracking-wider text-sky-900 mb-1 block">
-                      💨 Atomizer / Pump {isLeavingFilling && <span className="text-rose-600 font-extrabold">*</span>}
+                      💨 Atomizer / Pump <span className="text-rose-600 font-extrabold">*</span>
                     </label>
                     <select
                       className={`${inputClass} text-xs font-bold border-sky-200 bg-sky-50/40 ${
-                        isLeavingFilling && !row.atomizer_item_id && !row.atomizer_name?.trim() ? 'border-amber-400 bg-amber-50/50' : ''
+                        !row.atomizer_item_id && !row.atomizer_name?.trim() ? 'border-amber-400 bg-amber-50/50' : ''
                       }`}
                       value={row.atomizer_item_id || ''}
                       onChange={(e) => {
@@ -317,36 +452,61 @@ export function MultiVariantSplitMatrix({
                     >
                       <option value="">Select Atomizer from Stock…</option>
                       {atomizers.map((a) => {
-                        const avail = stockSummaryMap.get(a.id)?.availableStock ?? 0;
-                        const isOutOfStock = avail <= 0;
+                        const totalAvail = stockSummaryMap.get(a.id)?.availableStock ?? 0;
+                        const isOutOfStock = totalAvail <= 0;
+                        const otherRowsAllocated = (matrixAtomizerDemand.get(a.id) ?? 0) - (row.atomizer_item_id === a.id ? (Number(row.qty) || 0) : 0);
+                        const availForThisRow = Math.max(0, totalAvail - otherRowsAllocated);
+
                         return (
                           <option key={a.id} value={a.id}>
-                            {a.name}{a.color ? ` (${a.color})` : ''} ({isOutOfStock ? '0 - OUT OF STOCK' : `${formatNumber(avail)} in stock`})
+                            {a.name}{a.color ? ` (${a.color})` : ''} — {
+                              isOutOfStock
+                                ? '0 in stock [OUT OF STOCK]'
+                                : otherRowsAllocated > 0
+                                ? `Stock: ${formatNumber(totalAvail)} | Avail for row: ${formatNumber(availForThisRow)} (${formatNumber(otherRowsAllocated)} in other rows)`
+                                : `${formatNumber(totalAvail)} in stock`
+                            }
                           </option>
                         );
                       })}
                     </select>
                     {row.atomizer_item_id && (() => {
                       const sum = stockSummaryMap.get(row.atomizer_item_id);
-                      const avail = sum?.availableStock ?? 0;
+                      const totalAvail = sum?.availableStock ?? 0;
                       const rowQ = Number(row.qty) || 0;
-                      if (avail <= 0) {
+                      const totalDemand = matrixAtomizerDemand.get(row.atomizer_item_id) ?? 0;
+                      const remainingAfterMatrix = totalAvail - totalDemand;
+
+                      if (totalAvail <= 0) {
                         return (
-                          <div className="text-[10px] font-bold text-red-600 flex items-center gap-0.5">
-                            <span>⚠️ Out of stock (0 available)</span>
+                          <div className="p-1.5 rounded-lg bg-rose-50 border border-rose-200 text-[10px] font-bold text-rose-700 flex items-center gap-1">
+                            <AlertCircle className="w-3.5 h-3.5 shrink-0 text-rose-600" />
+                            <span>Out of stock (0 available in warehouse)</span>
                           </div>
                         );
                       }
-                      if (rowQ > avail) {
+                      if (totalDemand > totalAvail) {
                         return (
-                          <div className="text-[10px] font-bold text-amber-700 flex items-center gap-0.5">
-                            <span>⚠️ Exceeds stock (only {formatNumber(avail)} available)</span>
+                          <div className="p-1.5 rounded-lg bg-rose-50 border border-rose-200 text-[10px] font-bold text-rose-700 flex items-center gap-1">
+                            <AlertCircle className="w-3.5 h-3.5 shrink-0 text-rose-600" />
+                            <span>Insufficient stock: Matrix requires {formatNumber(totalDemand)}, only {formatNumber(totalAvail)} available (Short by {formatNumber(totalDemand - totalAvail)})</span>
+                          </div>
+                        );
+                      }
+                      if (totalDemand > 0) {
+                        return (
+                          <div className="p-1.5 rounded-lg bg-emerald-50/90 border border-emerald-200 text-[10px] font-bold text-emerald-900 flex flex-wrap items-center justify-between gap-1 shadow-2xs">
+                            <span>Warehouse: <strong>{formatNumber(totalAvail)}</strong></span>
+                            <span>Matrix Used: <strong>{formatNumber(totalDemand)}</strong> (Row: {formatNumber(rowQ)})</span>
+                            <span className="text-emerald-700 bg-emerald-100/90 px-1.5 py-0.5 rounded">
+                              Left: <strong>{formatNumber(remainingAfterMatrix)}</strong>
+                            </span>
                           </div>
                         );
                       }
                       return null;
                     })()}
-                    {isLeavingFilling && !row.atomizer_item_id && !row.atomizer_name?.trim() && (
+                    {!row.atomizer_item_id && !row.atomizer_name?.trim() && (
                       <div className="text-[10px] font-bold text-rose-600 flex items-center gap-0.5">
                         <span>⚠️ Atomizer pump required</span>
                       </div>
@@ -366,113 +526,158 @@ export function MultiVariantSplitMatrix({
                   </div>
                 )}
 
-                {/* Box / Packaging Option */}
-                {(isPackagingStage || isLeavingPackaging) && (
-                  <div className="sm:col-span-3 space-y-1">
-                    <label className="text-[10px] font-bold uppercase tracking-wider text-amber-800 mb-1 block">
-                      📦 Box / Packaging Option
+                {/* Quantity Input for Filling Stage */}
+                {isLeavingFilling && (
+                  <div className="sm:col-span-4">
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">
+                      Quantity ({unitLabel}) *
                     </label>
-                    <select
-                      className={`${inputClass} text-xs font-bold border-amber-200 bg-amber-50/40`}
-                      value={row.box_item_id || ''}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        const selectedBox = boxes.find((bx) => bx.id === val);
-                        setVariantRows((prev) =>
-                          prev.map((r) =>
-                            r.id === row.id
-                              ? {
-                                  ...r,
-                                  box_item_id: val,
-                                  box_name: selectedBox ? selectedBox.name : (val ? r.box_name : ''),
-                                }
-                              : r
-                          )
-                        );
-                      }}
-                    >
-                      <option value="">Select Box from Stock…</option>
-                      {boxes.map((bx) => {
-                        const avail = stockSummaryMap.get(bx.id)?.availableStock ?? 0;
-                        const isOutOfStock = avail <= 0;
-                        return (
-                          <option key={bx.id} value={bx.id}>
-                            {bx.name} ({isOutOfStock ? '0 - OUT OF STOCK' : `${formatNumber(avail)} in stock`})
-                          </option>
-                        );
-                      })}
-                    </select>
-                    {row.box_item_id && (() => {
-                      const sum = stockSummaryMap.get(row.box_item_id);
-                      const avail = sum?.availableStock ?? 0;
-                      const rowQ = Number(row.qty) || 0;
-                      if (avail <= 0) {
-                        return (
-                          <div className="text-[10px] font-bold text-red-600 flex items-center gap-0.5">
-                            <span>⚠️ Out of stock (0 available)</span>
-                          </div>
-                        );
-                      }
-                      if (rowQ > avail) {
-                        return (
-                          <div className="text-[10px] font-bold text-amber-700 flex items-center gap-0.5">
-                            <span>⚠️ Exceeds stock (only {formatNumber(avail)} available)</span>
-                          </div>
-                        );
-                      }
-                      return null;
-                    })()}
-                    <input
-                      type="text"
-                      value={row.box_name || ''}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setVariantRows((prev) =>
-                          prev.map((r) => (r.id === row.id ? { ...r, box_name: val } : r))
-                        );
-                      }}
-                      placeholder="Or custom box name…"
-                      className={`${inputClass} text-[11px] font-medium py-1 px-2`}
-                    />
+                    <div className="relative">
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min={0}
+                        max={activeSourceQty}
+                        className={`${inputClass} font-black text-sm pr-12`}
+                        value={row.qty}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setVariantRows((prev) =>
+                            prev.map((r) => (r.id === row.id ? { ...r, qty: val } : r))
+                          );
+                        }}
+                        placeholder="0"
+                      />
+                      <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 pointer-events-none">
+                        {unitLabel}
+                      </span>
+                    </div>
                   </div>
                 )}
 
-                {/* Quantity Input */}
-                <div
-                  className={
-                    (isFillingStage || isLeavingFilling)
-                      ? 'sm:col-span-3'
-                      : (isLeavingPackaging || isPackagingStage) && (isLeavingPrinting || isPrintingStage)
-                      ? 'sm:col-span-3'
-                      : (isLeavingPackaging || isPackagingStage) || (isLeavingPrinting || isPrintingStage)
-                      ? 'sm:col-span-4'
-                      : 'sm:col-span-5'
-                  }
-                >
-                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">
-                    Quantity ({unitLabel}) *
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      inputMode="numeric"
-                      min={0}
-                      max={activeSourceQty}
-                      className={`${inputClass} font-black text-sm pr-12`}
-                      value={row.qty}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setVariantRows((prev) =>
-                          prev.map((r) => (r.id === row.id ? { ...r, qty: val } : r))
-                        );
-                      }}
-                      placeholder="0"
-                    />
-                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 pointer-events-none">
-                      {unitLabel}
-                    </span>
-                  </div>
-                </div>
+                {/* Box / Packaging Option (ONLY AT PACKAGING STAGE EXIT OR DIRECT TO READY) */}
+                {(isLeavingPackaging || (isLeavingFilling && targetStageName.toLowerCase().includes('ready'))) && (
+                  <>
+                    <div className="sm:col-span-8 space-y-1">
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-amber-800 mb-1 block">
+                        📦 Box / Packaging Option
+                      </label>
+                      <select
+                        className={`${inputClass} text-xs font-bold border-amber-200 bg-amber-50/40`}
+                        value={row.box_item_id || ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const selectedBox = boxes.find((bx) => bx.id === val);
+                          setVariantRows((prev) =>
+                            prev.map((r) =>
+                              r.id === row.id
+                                ? {
+                                    ...r,
+                                    box_item_id: val,
+                                    box_name: selectedBox ? selectedBox.name : (val ? r.box_name : ''),
+                                  }
+                                : r
+                            )
+                          );
+                        }}
+                      >
+                        <option value="">Select Box from Stock…</option>
+                        {boxes.map((bx) => {
+                          const totalAvail = stockSummaryMap.get(bx.id)?.availableStock ?? 0;
+                          const isOutOfStock = totalAvail <= 0;
+                          const otherRowsAllocated = (matrixBoxDemand.get(bx.id) ?? 0) - (row.box_item_id === bx.id ? (Number(row.qty) || 0) : 0);
+                          const availForThisRow = Math.max(0, totalAvail - otherRowsAllocated);
+
+                          return (
+                            <option key={bx.id} value={bx.id}>
+                              {bx.name} — {
+                                isOutOfStock
+                                  ? '0 in stock [OUT OF STOCK]'
+                                  : otherRowsAllocated > 0
+                                  ? `Stock: ${formatNumber(totalAvail)} | Avail for row: ${formatNumber(availForThisRow)} (${formatNumber(otherRowsAllocated)} in other rows)`
+                                  : `${formatNumber(totalAvail)} in stock`
+                              }
+                            </option>
+                          );
+                        })}
+                      </select>
+                      {row.box_item_id && (() => {
+                        const sum = stockSummaryMap.get(row.box_item_id);
+                        const totalAvail = sum?.availableStock ?? 0;
+                        const rowQ = Number(row.qty) || 0;
+                        const totalDemand = matrixBoxDemand.get(row.box_item_id) ?? 0;
+                        const remainingAfterMatrix = totalAvail - totalDemand;
+
+                        if (totalAvail <= 0) {
+                          return (
+                            <div className="p-1.5 rounded-lg bg-rose-50 border border-rose-200 text-[10px] font-bold text-rose-700 flex items-center gap-1">
+                              <AlertCircle className="w-3.5 h-3.5 shrink-0 text-rose-600" />
+                              <span>Out of stock (0 available in warehouse)</span>
+                            </div>
+                          );
+                        }
+                        if (totalDemand > totalAvail) {
+                          return (
+                            <div className="p-1.5 rounded-lg bg-rose-50 border border-rose-200 text-[10px] font-bold text-rose-700 flex items-center gap-1">
+                              <AlertCircle className="w-3.5 h-3.5 shrink-0 text-rose-600" />
+                              <span>Insufficient stock: Matrix requires {formatNumber(totalDemand)}, only {formatNumber(totalAvail)} available (Short by {formatNumber(totalDemand - totalAvail)})</span>
+                            </div>
+                          );
+                        }
+                        if (totalDemand > 0) {
+                          return (
+                            <div className="p-1.5 rounded-lg bg-emerald-50/90 border border-emerald-200 text-[10px] font-bold text-emerald-900 flex flex-wrap items-center justify-between gap-1 shadow-2xs">
+                              <span>Warehouse: <strong>{formatNumber(totalAvail)}</strong></span>
+                              <span>Matrix Used: <strong>{formatNumber(totalDemand)}</strong> (Row: {formatNumber(rowQ)})</span>
+                              <span className="text-emerald-700 bg-emerald-100/90 px-1.5 py-0.5 rounded">
+                                Left: <strong>{formatNumber(remainingAfterMatrix)}</strong>
+                              </span>
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
+                      <input
+                        type="text"
+                        value={row.box_name || ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setVariantRows((prev) =>
+                            prev.map((r) => (r.id === row.id ? { ...r, box_name: val } : r))
+                          );
+                        }}
+                        placeholder="Or custom box name…"
+                        className={`${inputClass} text-[11px] font-medium py-1 px-2`}
+                      />
+                    </div>
+
+                    <div className="sm:col-span-4">
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">
+                        Quantity ({unitLabel}) *
+                      </label>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          min={0}
+                          max={activeSourceQty}
+                          className={`${inputClass} font-black text-sm pr-12`}
+                          value={row.qty}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setVariantRows((prev) =>
+                              prev.map((r) => (r.id === row.id ? { ...r, qty: val } : r))
+                            );
+                          }}
+                          placeholder="0"
+                        />
+                        <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 pointer-events-none">
+                          {unitLabel}
+                        </span>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           );

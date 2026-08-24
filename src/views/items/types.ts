@@ -1,5 +1,3 @@
-import type { Item, ComponentStockSummary } from '@/lib/supabase';
-
 export const COMMON_UNITS = ['pcs', 'units', 'boxes', 'sets', 'kg', 'ml', 'L'] as const;
 export const NEW_OPTION = '__new__';
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB

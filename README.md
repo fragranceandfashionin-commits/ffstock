@@ -18,18 +18,11 @@ Create a project at [supabase.com](https://supabase.com). Note your **project re
 
 ### 2. Run the database migrations
 
-In the Supabase Dashboard → **SQL Editor**, run these files **in order** (or paste the combined `supabase/setup.sql` once):
+In the Supabase Dashboard → **SQL Editor**, paste and run the single consolidated `supabase/setup.sql` (or apply the individual migrations in `supabase/migrations/` sequentially):
 
-1. `supabase/migrations/20260813101116_create_batch_ledger_schema.sql`
-2. `supabase/migrations/20260813120000_harden_rls_and_ledger_integrity.sql`
-3. `supabase/migrations/20260813130000_add_batch_image_storage.sql`
-4. `supabase/migrations/20260813140000_fix_quantity_validation_and_stock_views.sql`
-5. `supabase/migrations/20260813150000_fix_batch_stock_ready_null_and_safe_delete.sql`
-6. `supabase/migrations/20260817000000_add_storage_delete_and_scrap_support.sql`
+- `supabase/setup.sql` executes all schema definitions, stages, append-only ledger integrity triggers, public storage buckets, BOM component tracking, atomic movement/split RPCs, and server-side analytical stock views in a single idempotent script.
 
-The first creates the schema, seeds the seven production stages, and enables RLS. The second applies least-privilege policies and makes the ledger append-only (see [Security model](#security-model)). The third creates the public `batch-images` storage bucket for batch photos (only needed for the photo-upload feature). The fourth fixes quantity validation (a stage's available stock is no longer inflated by the full received quantity) and adds server-side stock views. The fifth fixes a bug where `v_batch_stock` returned `NULL` for Ready stock until a batch had its first dispatch (making Ready always show 0 and blocking the first dispatch), and allows deleting an inward batch **while it still has no movements/dispatches**. The sixth adds storage object deletion permissions for safe photo rollback on failed batch inserts or batch deletions.
-
-> The migrations are idempotent: they can be re-run safely, and running the single combined `supabase/setup.sql` executes all 6 migrations in one go.
+> All migrations and `supabase/setup.sql` are 100% idempotent and can be safely re-run without data loss.
 
 ### 3. Configure environment variables
 

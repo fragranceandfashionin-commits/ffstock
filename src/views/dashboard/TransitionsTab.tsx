@@ -78,6 +78,11 @@ export function TransitionsTab({
                             🏢 {m.brandName}
                           </span>
                         )}
+                        {m.variant_name && (
+                          <span className="font-black text-indigo-900 bg-indigo-100 border border-indigo-300 px-2 py-0.5 rounded-md text-xs">
+                            🏷️ {m.variant_name}
+                          </span>
+                        )}
                         <span className="font-mono font-black text-slate-900 text-sm">{m.batchNo}</span>
                       </div>
                       <p className="font-bold text-slate-800 text-xs mt-0.5">{m.itemName}</p>
@@ -161,6 +166,11 @@ export function TransitionsTab({
                           {m.brandName && (
                             <span className="font-black text-indigo-900 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded text-[10px] shadow-2xs">
                               🏢 {m.brandName}
+                            </span>
+                          )}
+                          {m.variant_name && (
+                            <span className="font-black text-indigo-900 bg-indigo-100/90 border border-indigo-300 px-1.5 py-0.5 rounded text-[10px] shadow-2xs">
+                              🏷️ {m.variant_name}
                             </span>
                           )}
                           <span className="font-mono">{m.batchNo}</span>

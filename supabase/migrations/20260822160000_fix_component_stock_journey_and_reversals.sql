@@ -1,14 +1,16 @@
 -- ============================================================
--- Migration: Fix v_component_stock Scrap Reversals & Cross-Slot Exclusions
+-- Migration: Align v_component_stock with Milestone Deduplication & Bidirectional Reversals
 -- ============================================================
 
 /*
-# Fix Server-Side v_component_stock View Double-Counting & Scrap Reversals
+# Fix Server-Side v_component_stock View Milestone Deduplication & Bidirectional Reversals
 
-## Why
-1. Prevent cross-slot double-counting if the same component ID is configured in multiple slots on inward_batches.
-2. Net scrap accounting: subtract compensating reversals from scrap when movements are recorded from Scrap / Defect back to production.
-3. Guard total_scrapped with GREATEST(0, ...) to ensure non-negative balances.
+## Improvements:
+1. Caps & Atomizers: deduplicated at the Filling exit milestone (sequence_no <= 4 -> > 4 or from_stage = 'Filling').
+   Reversals are credited back when returning to Filling (sequence_no > 4 -> <= 4 or to_stage = 'Filling').
+2. Boxes / Packaging: deduplicated at the Packaging exit milestone (sequence_no <= 5 -> > 5 or from_stage = 'Packaging').
+   Reversals are credited back when returning to Packaging (sequence_no > 5 -> <= 5 or to_stage = 'Packaging').
+3. Multi-channel intake aggregation (direct batches, attached BOM components, direct ledger receipts).
 
 Idempotent: safe to re-run.
 */
@@ -54,9 +56,15 @@ WITH
       sm.cap_item_id AS item_id,
       COALESCE(SUM(
         CASE 
-          WHEN s_to.name <> 'Scrap / Defect' AND (s_from.name IS NULL OR s_from.name <> 'Scrap / Defect') 
-               AND (s_from.sequence_no <= 4 OR s_from.name = 'Filling' OR s_to.name = 'Packaging')
-          THEN COALESCE(sm.cap_qty_used, sm.qty_moved) 
+          WHEN s_to.name = 'Scrap / Defect' OR s_from.name = 'Scrap / Defect' THEN 0
+          -- Forward milestone assembly
+          WHEN (s_from.name = 'Filling' OR (s_from.sequence_no <= 4 AND s_to.sequence_no > 4))
+               AND NOT (COALESCE(sm.remarks, '') ILIKE '%[REVERSAL%' OR (s_from.sequence_no > s_to.sequence_no))
+          THEN COALESCE(sm.cap_qty_used, sm.qty_moved)
+          -- Reverse milestone return
+          WHEN (s_to.name = 'Filling' OR (s_from.sequence_no > 4 AND s_to.sequence_no <= 4))
+               AND (COALESCE(sm.remarks, '') ILIKE '%[REVERSAL%' OR (s_from.sequence_no > s_to.sequence_no))
+          THEN -COALESCE(sm.cap_qty_used, sm.qty_moved)
           ELSE 0 
         END
       ), 0) AS qty_used,
@@ -79,9 +87,15 @@ WITH
       sm.atomizer_item_id AS item_id,
       COALESCE(SUM(
         CASE 
-          WHEN s_to.name <> 'Scrap / Defect' AND (s_from.name IS NULL OR s_from.name <> 'Scrap / Defect') 
-               AND (s_from.sequence_no <= 4 OR s_from.name = 'Filling' OR s_to.name = 'Packaging')
-          THEN COALESCE(sm.atomizer_qty_used, sm.qty_moved) 
+          WHEN s_to.name = 'Scrap / Defect' OR s_from.name = 'Scrap / Defect' THEN 0
+          -- Forward milestone assembly
+          WHEN (s_from.name = 'Filling' OR (s_from.sequence_no <= 4 AND s_to.sequence_no > 4))
+               AND NOT (COALESCE(sm.remarks, '') ILIKE '%[REVERSAL%' OR (s_from.sequence_no > s_to.sequence_no))
+          THEN COALESCE(sm.atomizer_qty_used, sm.qty_moved)
+          -- Reverse milestone return
+          WHEN (s_to.name = 'Filling' OR (s_from.sequence_no > 4 AND s_to.sequence_no <= 4))
+               AND (COALESCE(sm.remarks, '') ILIKE '%[REVERSAL%' OR (s_from.sequence_no > s_to.sequence_no))
+          THEN -COALESCE(sm.atomizer_qty_used, sm.qty_moved)
           ELSE 0 
         END
       ), 0) AS qty_used,
@@ -104,9 +118,15 @@ WITH
       sm.box_item_id AS item_id,
       COALESCE(SUM(
         CASE 
-          WHEN s_to.name <> 'Scrap / Defect' AND (s_from.name IS NULL OR s_from.name <> 'Scrap / Defect') 
-               AND (s_from.sequence_no <= 5 OR s_from.name = 'Packaging' OR s_to.name = 'Ready')
-          THEN COALESCE(sm.box_qty_used, sm.qty_moved) 
+          WHEN s_to.name = 'Scrap / Defect' OR s_from.name = 'Scrap / Defect' THEN 0
+          -- Forward milestone packaging
+          WHEN (s_from.name = 'Packaging' OR (s_from.sequence_no <= 5 AND s_to.sequence_no > 5))
+               AND NOT (COALESCE(sm.remarks, '') ILIKE '%[REVERSAL%' OR (s_from.sequence_no > s_to.sequence_no))
+          THEN COALESCE(sm.box_qty_used, sm.qty_moved)
+          -- Reverse milestone return
+          WHEN (s_to.name = 'Packaging' OR (s_from.sequence_no > 5 AND s_to.sequence_no <= 5))
+               AND (COALESCE(sm.remarks, '') ILIKE '%[REVERSAL%' OR (s_from.sequence_no > s_to.sequence_no))
+          THEN -COALESCE(sm.box_qty_used, sm.qty_moved)
           ELSE 0 
         END
       ), 0) AS qty_used,
@@ -137,12 +157,12 @@ SELECT
   i.unit,
   (COALESCE(r.qty, 0) + COALESCE(db.qty, 0) + COALESCE(ac.qty, 0) + COALESCE(aa.qty, 0) + COALESCE(ab.qty, 0)) AS total_inwarded,
   (COALESCE(r.receipt_count, 0) + COALESCE(db.batch_count, 0) + COALESCE(ac.batch_count, 0) + COALESCE(aa.batch_count, 0) + COALESCE(ab.batch_count, 0)) AS inward_batch_count,
-  (COALESCE(cm.qty_used, 0) + COALESCE(am.qty_used, 0) + COALESCE(bm.qty_used, 0) + (CASE WHEN lower(i.category) = 'bottle' THEN COALESCE(db.qty, 0) ELSE 0 END)) AS total_used,
+  GREATEST(0, (COALESCE(cm.qty_used, 0) + COALESCE(am.qty_used, 0) + COALESCE(bm.qty_used, 0) + (CASE WHEN lower(i.category) = 'bottle' THEN COALESCE(db.qty, 0) ELSE 0 END))) AS total_used,
   (COALESCE(cm.movement_count, 0) + COALESCE(am.movement_count, 0) + COALESCE(bm.movement_count, 0) + (CASE WHEN lower(i.category) = 'bottle' THEN COALESCE(db.batch_count, 0) ELSE 0 END)) AS used_in_batch_count,
   GREATEST(0, (COALESCE(cm.qty_scrapped, 0) + COALESCE(am.qty_scrapped, 0) + COALESCE(bm.qty_scrapped, 0))) AS total_scrapped,
   COALESCE(dbx.qty, 0) AS total_dispatched,
   GREATEST(0, (COALESCE(r.qty, 0) + COALESCE(db.qty, 0) + COALESCE(ac.qty, 0) + COALESCE(aa.qty, 0) + COALESCE(ab.qty, 0)) 
-    - (COALESCE(cm.qty_used, 0) + COALESCE(am.qty_used, 0) + COALESCE(bm.qty_used, 0) + (CASE WHEN lower(i.category) = 'bottle' THEN COALESCE(db.qty, 0) ELSE 0 END))
+    - GREATEST(0, (COALESCE(cm.qty_used, 0) + COALESCE(am.qty_used, 0) + COALESCE(bm.qty_used, 0) + (CASE WHEN lower(i.category) = 'bottle' THEN COALESCE(db.qty, 0) ELSE 0 END)))
     - GREATEST(0, (COALESCE(cm.qty_scrapped, 0) + COALESCE(am.qty_scrapped, 0) + COALESCE(bm.qty_scrapped, 0)))) AS available_stock
 FROM items i
 LEFT JOIN receipts_agg r ON r.item_id = i.id

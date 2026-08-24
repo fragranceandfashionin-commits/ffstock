@@ -18,6 +18,8 @@ export type SingleMovementFormProps = {
   isLeavingPackaging: boolean;
   moveQty: string;
   setMoveQty: (val: string) => void;
+  moveVariantName?: string;
+  setMoveVariantName?: (val: string) => void;
   moveColor: string;
   setMoveColor: (val: string) => void;
   movePrintingDesign: string;
@@ -55,16 +57,17 @@ export type SingleMovementFormProps = {
 
 export function SingleMovementForm({
   activeSourceQty,
+  toStageName,
   isColoringStage,
   isLeavingColoring,
   isPrintingStage,
   isLeavingPrinting,
-  isFillingStage,
   isLeavingFilling,
-  isPackagingStage,
   isLeavingPackaging,
   moveQty,
   setMoveQty,
+  moveVariantName = '',
+  setMoveVariantName,
   moveColor,
   setMoveColor,
   movePrintingDesign,
@@ -112,32 +115,69 @@ export function SingleMovementForm({
     }
   };
 
+  const halfQty = Math.floor(activeSourceQty / 2);
+  const quarterQty = Math.floor(activeSourceQty / 4);
+
   return (
     <div onKeyDown={handleKeyDown} className="space-y-4">
       {/* Exact Raw Quantity Input */}
       <Field label={`How many ${unitLabel} to move?`} htmlFor="move-qty" required>
-        <div className="relative">
-          <input
-            id="move-qty"
-            type="number"
-            inputMode="numeric"
-            min={1}
-            max={activeSourceQty}
-            className={`${inputClass} text-base font-black pr-24 ${isOverQty ? 'border-rose-400 ring-2 ring-rose-100 bg-rose-50/40' : ''}`}
-            value={moveQty}
-            onChange={(e) => setMoveQty(e.target.value)}
-            placeholder={`1 to ${formatNumber(activeSourceQty)}`}
-            disabled={activeSourceQty === 0 || submitting}
-            autoFocus
-          />
-          {activeSourceQty > 0 && (
-            <button
-              type="button"
-              onClick={() => setMoveQty(String(activeSourceQty))}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-bold text-white hover:bg-slate-800 transition flex items-center gap-1 shadow-2xs cursor-pointer"
-            >
-              <Zap className="h-3 w-3 text-amber-400" /> All ({formatNumber(activeSourceQty)})
-            </button>
+        <div className="space-y-2">
+          <div className="relative">
+            <input
+              id="move-qty"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={activeSourceQty}
+              className={`${inputClass} text-base font-black pr-28 ${isOverQty ? 'border-rose-400 ring-2 ring-rose-100 bg-rose-50/40' : ''}`}
+              value={moveQty}
+              onChange={(e) => setMoveQty(e.target.value)}
+              placeholder={`1 to ${formatNumber(activeSourceQty)}`}
+              disabled={activeSourceQty === 0 || submitting}
+              autoFocus
+            />
+            {activeSourceQty > 0 && (
+              <button
+                type="button"
+                onClick={() => setMoveQty(String(activeSourceQty))}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-bold text-white hover:bg-slate-800 transition flex items-center gap-1 shadow-2xs cursor-pointer"
+              >
+                <Zap className="h-3 w-3 text-amber-400" /> All ({formatNumber(activeSourceQty)})
+              </button>
+            )}
+          </div>
+
+          {/* Quick Quantity Preset Chips */}
+          {activeSourceQty > 1 && (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[11px] font-bold text-slate-400 mr-1">Quick presets:</span>
+              <button
+                type="button"
+                onClick={() => setMoveQty(String(activeSourceQty))}
+                className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 cursor-pointer transition"
+              >
+                100% ({formatNumber(activeSourceQty)})
+              </button>
+              {halfQty > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setMoveQty(String(halfQty))}
+                  className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 cursor-pointer transition"
+                >
+                  50% ({formatNumber(halfQty)})
+                </button>
+              )}
+              {quarterQty > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setMoveQty(String(quarterQty))}
+                  className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 cursor-pointer transition"
+                >
+                  25% ({formatNumber(quarterQty)})
+                </button>
+              )}
+            </div>
           )}
         </div>
         {isOverQty && (
@@ -147,6 +187,33 @@ export function SingleMovementForm({
           </div>
         )}
       </Field>
+
+      {/* VARIANT NAME SECTION */}
+      {setMoveVariantName && (
+        <div className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-3 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <label htmlFor="move-variant-name" className="text-xs font-black uppercase tracking-wider text-indigo-950 flex items-center gap-1.5">
+              🏷️ Variant Specification
+            </label>
+            {moveVariantName?.trim() ? (
+              <span className="inline-flex items-center gap-1 text-[10px] font-black text-indigo-700 bg-indigo-100/90 border border-indigo-200 px-2 py-0.5 rounded-md">
+                ✓ Preserved from previous stage
+              </span>
+            ) : (
+              <span className="text-[10px] text-indigo-600 font-medium">Optional</span>
+            )}
+          </div>
+          <input
+            id="move-variant-name"
+            type="text"
+            className={`${inputClass} text-xs font-bold ${moveVariantName?.trim() ? 'border-indigo-300 bg-white' : ''}`}
+            value={moveVariantName}
+            onChange={(e) => setMoveVariantName(e.target.value)}
+            placeholder="e.g. Velvet Night 50ml, SKU-101, Edition A…"
+            disabled={submitting}
+          />
+        </div>
+      )}
 
       {/* COLOR SECTION */}
       {(isColoringStage || isLeavingColoring) && (
@@ -184,41 +251,29 @@ export function SingleMovementForm({
         </div>
       )}
 
-      {/* CAPS & ATOMIZERS SECTION */}
-      {(isFillingStage || isLeavingFilling) && (
-        <div className={`rounded-xl border p-3.5 space-y-3 shadow-2xs ${
-          isLeavingFilling ? 'border-violet-300 bg-gradient-to-r from-violet-50/90 to-sky-50/70 ring-1 ring-violet-200' : 'border-violet-200 bg-gradient-to-r from-violet-50/80 to-sky-50/50'
-        }`}>
+      {/* CAPS & ATOMIZERS ASSEMBLY SECTION (ONLY AT FILLING STAGE EXIT) */}
+      {isLeavingFilling ? (
+        <div className="rounded-xl border p-3.5 space-y-3 shadow-2xs border-violet-300 bg-gradient-to-r from-violet-50/90 to-sky-50/70 ring-1 ring-violet-200">
           <div className="flex items-center justify-between">
             <span className="text-xs font-black uppercase tracking-wider text-violet-900 flex items-center gap-1.5">
               🧴 Caps & 💨 Atomizers Assembly (Filling Stage)
-              {isLeavingFilling && <span className="text-rose-600 font-extrabold text-sm">*</span>}
+              <span className="text-rose-600 font-extrabold text-sm">*</span>
             </span>
-            {isLeavingFilling ? (
-              <Badge label="Mandatory for Advance" variant="rose" size="sm" />
-            ) : (
-              <Badge label="Live BOM Stock" variant="violet" size="sm" />
-            )}
+            <Badge label="Mandatory for Advance" variant="rose" size="sm" />
           </div>
-          <p className="text-[11px] text-violet-800 font-medium leading-relaxed">
-            {isLeavingFilling ? (
-              <span className="font-semibold text-violet-900">
-                ⚠️ Perfume bottles <strong className="underline decoration-rose-400 font-black">cannot advance from the Filling stage</strong> without assembling an Atomizer pump and Cap closure. Select from warehouse inventory or specify custom components.
-              </span>
-            ) : (
-              'Select cap closures and atomizer pumps from live warehouse inventory. Available balances are displayed in real time.'
-            )}
+          <p className="text-[11px] text-violet-900 font-semibold leading-relaxed">
+            ⚠️ Perfume bottles <strong className="underline decoration-rose-400 font-black">cannot advance from the Filling stage</strong> without assembling an Atomizer pump and Cap closure. Select from warehouse inventory or specify custom components.
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Field
-              label={`Cap / Closure (Warehouse Stock)${isLeavingFilling ? ' *' : ''}`}
+              label="Cap / Closure (Warehouse Stock) *"
               htmlFor="cap-item-select"
-              required={isLeavingFilling}
+              required
             >
               <select
                 id="cap-item-select"
                 className={`${inputClass} ${
-                  isLeavingFilling && !moveCapItemId && !capName.trim()
+                  !moveCapItemId && !capName.trim()
                     ? 'border-amber-300 bg-amber-50/30'
                     : ''
                 }`}
@@ -234,9 +289,16 @@ export function SingleMovementForm({
                 {caps.map((c) => {
                   const avail = stockSummaryMap.get(c.id)?.availableStock ?? 0;
                   const isOutOfStock = avail <= 0;
+                  const remaining = avail - numericQty;
                   return (
                     <option key={c.id} value={c.id}>
-                      {c.name}{c.color ? ` (${c.color})` : ''} — {isOutOfStock ? '0 available [OUT OF STOCK]' : `${formatNumber(avail)} available`}
+                      {c.name}{c.color ? ` (${c.color})` : ''} — {
+                        isOutOfStock
+                          ? '0 in stock [OUT OF STOCK]'
+                          : numericQty > 0
+                          ? `Stock: ${formatNumber(avail)} → ${remaining >= 0 ? `${formatNumber(remaining)} left after move` : `SHORT BY ${formatNumber(Math.abs(remaining))}`}`
+                          : `${formatNumber(avail)} available`
+                      }
                     </option>
                   );
                 })}
@@ -244,25 +306,41 @@ export function SingleMovementForm({
               {moveCapItemId && (() => {
                 const capSum = stockSummaryMap.get(moveCapItemId);
                 const capAvail = capSum?.availableStock ?? 0;
+                const capRemaining = capAvail - numericQty;
                 if (capAvail <= 0) {
                   return (
-                    <div className="mt-1 text-[11px] font-bold text-red-600 flex items-center gap-1">
-                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-red-500" />
-                      <span>Out of stock (0 available in warehouse)</span>
+                    <div className="mt-1.5 p-2 rounded-lg bg-rose-50 border border-rose-200 text-[11px] font-bold text-rose-700 flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
+                      <span>Out of stock: 0 available in warehouse. Intake stock before proceeding.</span>
                     </div>
                   );
                 }
                 if (numericQty > capAvail) {
                   return (
-                    <div className="mt-1 text-[11px] font-bold text-amber-700 flex items-center gap-1">
-                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-600" />
-                      <span>Insufficient stock: requires {formatNumber(numericQty)}, only {formatNumber(capAvail)} available.</span>
+                    <div className="mt-1.5 p-2 rounded-lg bg-rose-50 border border-rose-200 text-[11px] font-bold text-rose-700 flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
+                      <span>Insufficient stock: requires {formatNumber(numericQty)}, but only {formatNumber(capAvail)} in warehouse (Short by {formatNumber(numericQty - capAvail)}).</span>
                     </div>
                   );
                 }
-                return null;
+                if (numericQty > 0) {
+                  return (
+                    <div className="mt-1.5 p-2 rounded-lg bg-emerald-50/90 border border-emerald-200 text-[11px] font-bold text-emerald-900 flex items-center justify-between gap-2 shadow-2xs">
+                      <span>✓ In Warehouse: <strong>{formatNumber(capAvail)}</strong></span>
+                      <span>Used: <strong>{formatNumber(numericQty)}</strong></span>
+                      <span className="text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-md">
+                        Remaining: <strong>{formatNumber(capRemaining)}</strong> left
+                      </span>
+                    </div>
+                  );
+                }
+                return (
+                  <div className="mt-1 text-[11px] font-medium text-slate-500">
+                    Warehouse balance: {formatNumber(capAvail)} available.
+                  </div>
+                );
               })()}
-              {isLeavingFilling && !moveCapItemId && !capName.trim() && (
+              {!moveCapItemId && !capName.trim() && (
                 <div className="mt-1 text-[11px] font-semibold text-rose-600 flex items-center gap-1">
                   <AlertCircle className="w-3.5 h-3.5 shrink-0" />
                   <span>Cap closure required to advance from Filling.</span>
@@ -270,14 +348,14 @@ export function SingleMovementForm({
               )}
             </Field>
             <Field
-              label={`Atomizer / Pump (Warehouse Stock)${isLeavingFilling ? ' *' : ''}`}
+              label="Atomizer / Pump (Warehouse Stock) *"
               htmlFor="atomizer-item-select"
-              required={isLeavingFilling}
+              required
             >
               <select
                 id="atomizer-item-select"
                 className={`${inputClass} ${
-                  isLeavingFilling && !moveAtomizerItemId && !atomizerName.trim()
+                  !moveAtomizerItemId && !atomizerName.trim()
                     ? 'border-amber-300 bg-amber-50/30'
                     : ''
                 }`}
@@ -293,9 +371,16 @@ export function SingleMovementForm({
                 {atomizers.map((a) => {
                   const avail = stockSummaryMap.get(a.id)?.availableStock ?? 0;
                   const isOutOfStock = avail <= 0;
+                  const remaining = avail - numericQty;
                   return (
                     <option key={a.id} value={a.id}>
-                      {a.name}{a.color ? ` (${a.color})` : ''} — {isOutOfStock ? '0 available [OUT OF STOCK]' : `${formatNumber(avail)} available`}
+                      {a.name}{a.color ? ` (${a.color})` : ''} — {
+                        isOutOfStock
+                          ? '0 in stock [OUT OF STOCK]'
+                          : numericQty > 0
+                          ? `Stock: ${formatNumber(avail)} → ${remaining >= 0 ? `${formatNumber(remaining)} left after move` : `SHORT BY ${formatNumber(Math.abs(remaining))}`}`
+                          : `${formatNumber(avail)} available`
+                      }
                     </option>
                   );
                 })}
@@ -303,25 +388,41 @@ export function SingleMovementForm({
               {moveAtomizerItemId && (() => {
                 const atomSum = stockSummaryMap.get(moveAtomizerItemId);
                 const atomAvail = atomSum?.availableStock ?? 0;
+                const atomRemaining = atomAvail - numericQty;
                 if (atomAvail <= 0) {
                   return (
-                    <div className="mt-1 text-[11px] font-bold text-red-600 flex items-center gap-1">
-                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-red-500" />
-                      <span>Out of stock (0 available in warehouse)</span>
+                    <div className="mt-1.5 p-2 rounded-lg bg-rose-50 border border-rose-200 text-[11px] font-bold text-rose-700 flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
+                      <span>Out of stock: 0 available in warehouse. Intake stock before proceeding.</span>
                     </div>
                   );
                 }
                 if (numericQty > atomAvail) {
                   return (
-                    <div className="mt-1 text-[11px] font-bold text-amber-700 flex items-center gap-1">
-                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-600" />
-                      <span>Insufficient stock: requires {formatNumber(numericQty)}, only {formatNumber(atomAvail)} available.</span>
+                    <div className="mt-1.5 p-2 rounded-lg bg-rose-50 border border-rose-200 text-[11px] font-bold text-rose-700 flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
+                      <span>Insufficient stock: requires {formatNumber(numericQty)}, but only {formatNumber(atomAvail)} in warehouse (Short by {formatNumber(numericQty - atomAvail)}).</span>
                     </div>
                   );
                 }
-                return null;
+                if (numericQty > 0) {
+                  return (
+                    <div className="mt-1.5 p-2 rounded-lg bg-emerald-50/90 border border-emerald-200 text-[11px] font-bold text-emerald-900 flex items-center justify-between gap-2 shadow-2xs">
+                      <span>✓ In Warehouse: <strong>{formatNumber(atomAvail)}</strong></span>
+                      <span>Used: <strong>{formatNumber(numericQty)}</strong></span>
+                      <span className="text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-md">
+                        Remaining: <strong>{formatNumber(atomRemaining)}</strong> left
+                      </span>
+                    </div>
+                  );
+                }
+                return (
+                  <div className="mt-1 text-[11px] font-medium text-slate-500">
+                    Warehouse balance: {formatNumber(atomAvail)} available.
+                  </div>
+                );
               })()}
-              {isLeavingFilling && !moveAtomizerItemId && !atomizerName.trim() && (
+              {!moveAtomizerItemId && !atomizerName.trim() && (
                 <div className="mt-1 text-[11px] font-semibold text-rose-600 flex items-center gap-1">
                   <AlertCircle className="w-3.5 h-3.5 shrink-0" />
                   <span>Atomizer pump required to advance from Filling.</span>
@@ -352,10 +453,29 @@ export function SingleMovementForm({
             </Field>
           </div>
         </div>
-      )}
+      ) : (capName || atomizerName || moveCapItemId || moveAtomizerItemId) ? (
+        <div className="rounded-xl border border-violet-200 bg-violet-50/50 p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 shadow-2xs">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-bold text-violet-950">🧴 Assembled Components:</span>
+            {capName && (
+              <span className="inline-flex items-center gap-1 text-xs font-bold text-violet-900 bg-white px-2.5 py-1 rounded-lg border border-violet-200 shadow-2xs">
+                Cap: <strong>{capName}</strong>
+              </span>
+            )}
+            {atomizerName && (
+              <span className="inline-flex items-center gap-1 text-xs font-bold text-sky-900 bg-white px-2.5 py-1 rounded-lg border border-sky-200 shadow-2xs">
+                Pump: <strong>{atomizerName}</strong>
+              </span>
+            )}
+          </div>
+          <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100/80 px-2.5 py-1 rounded-md border border-emerald-200 self-start sm:self-auto">
+            ✓ Assembled in Filling Stage
+          </span>
+        </div>
+      ) : null}
 
-      {/* BOX & PACKAGING SECTION */}
-      {(isPackagingStage || isLeavingPackaging) && (
+      {/* BOX & PACKAGING SECTION (ONLY AT PACKAGING STAGE EXIT OR DIRECT TO READY) */}
+      {(isLeavingPackaging || (isLeavingFilling && toStageName.toLowerCase().includes('ready'))) && (
         <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3.5 space-y-3 shadow-2xs">
           <div className="flex items-center justify-between">
             <span className="text-xs font-black uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
@@ -383,9 +503,16 @@ export function SingleMovementForm({
                 {boxes.map((bx) => {
                   const avail = stockSummaryMap.get(bx.id)?.availableStock ?? 0;
                   const isOutOfStock = avail <= 0;
+                  const remaining = avail - numericQty;
                   return (
                     <option key={bx.id} value={bx.id}>
-                      {bx.name} — {isOutOfStock ? '0 available [OUT OF STOCK]' : `${formatNumber(avail)} available`}
+                      {bx.name} — {
+                        isOutOfStock
+                          ? '0 in stock [OUT OF STOCK]'
+                          : numericQty > 0
+                          ? `Stock: ${formatNumber(avail)} → ${remaining >= 0 ? `${formatNumber(remaining)} left after move` : `SHORT BY ${formatNumber(Math.abs(remaining))}`}`
+                          : `${formatNumber(avail)} available`
+                      }
                     </option>
                   );
                 })}
@@ -393,23 +520,39 @@ export function SingleMovementForm({
               {moveBoxItemId && (() => {
                 const boxSum = stockSummaryMap.get(moveBoxItemId);
                 const boxAvail = boxSum?.availableStock ?? 0;
+                const boxRemaining = boxAvail - numericQty;
                 if (boxAvail <= 0) {
                   return (
-                    <div className="mt-1 text-[11px] font-bold text-red-600 flex items-center gap-1">
-                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-red-500" />
-                      <span>Out of stock (0 available in warehouse)</span>
+                    <div className="mt-1.5 p-2 rounded-lg bg-rose-50 border border-rose-200 text-[11px] font-bold text-rose-700 flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
+                      <span>Out of stock: 0 available in warehouse. Intake stock before proceeding.</span>
                     </div>
                   );
                 }
                 if (numericQty > boxAvail) {
                   return (
-                    <div className="mt-1 text-[11px] font-bold text-amber-700 flex items-center gap-1">
-                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-600" />
-                      <span>Insufficient stock: requires {formatNumber(numericQty)}, only {formatNumber(boxAvail)} available.</span>
+                    <div className="mt-1.5 p-2 rounded-lg bg-rose-50 border border-rose-200 text-[11px] font-bold text-rose-700 flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
+                      <span>Insufficient stock: requires {formatNumber(numericQty)}, but only {formatNumber(boxAvail)} in warehouse (Short by {formatNumber(numericQty - boxAvail)}).</span>
                     </div>
                   );
                 }
-                return null;
+                if (numericQty > 0) {
+                  return (
+                    <div className="mt-1.5 p-2 rounded-lg bg-emerald-50/90 border border-emerald-200 text-[11px] font-bold text-emerald-900 flex items-center justify-between gap-2 shadow-2xs">
+                      <span>✓ In Warehouse: <strong>{formatNumber(boxAvail)}</strong></span>
+                      <span>Used: <strong>{formatNumber(numericQty)}</strong></span>
+                      <span className="text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-md">
+                        Remaining: <strong>{formatNumber(boxRemaining)}</strong> left
+                      </span>
+                    </div>
+                  );
+                }
+                return (
+                  <div className="mt-1 text-[11px] font-medium text-slate-500">
+                    Warehouse balance: {formatNumber(boxAvail)} available.
+                  </div>
+                );
               })()}
             </Field>
             <Field label="Box Custom Specification" htmlFor="box-name">

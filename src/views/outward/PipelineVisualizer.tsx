@@ -1,5 +1,6 @@
-import { Zap, Truck, Flame } from 'lucide-react';
+import { Zap, Truck, Flame, ArrowRight, Layers } from 'lucide-react';
 import { Card } from '@/components/ui';
+
 import type { Stage } from '@/lib/supabase';
 import type { ActiveAction } from './types';
 import { formatNumber } from '@/lib/utils';
@@ -23,143 +24,220 @@ export function PipelineVisualizer({
   onStartScrap,
   unitLabel,
 }: PipelineVisualizerProps) {
+  const totalStockInPipeline = processStages.reduce((sum, s) => sum + qtyAt(s.id), 0);
+  const activeStagesCount = processStages.filter((s) => qtyAt(s.id) > 0).length;
+
   return (
-    <Card className="border-slate-200/90 shadow-2xs">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4 pb-3 border-b border-slate-100">
+    <Card className="border-slate-200/90 shadow-2xs overflow-hidden">
+      {/* Header & Situational Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 pb-3 border-b border-slate-100">
         <div>
           <h2 className="text-sm font-black uppercase tracking-wider text-slate-900 flex items-center gap-2">
             <span className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-900 text-[11px] font-bold text-white shadow-2xs">
               2
             </span>
-            Live Stage Pipeline & Quick Action
+            Live Stage Pipeline & Conveyor Flow
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Click <span className="font-semibold text-slate-700">⚡ Advance</span> to move {unitLabel} to the next stage, or use the Jump menu for direct skips.
+            Physical stock movement along the assembly line. Click <span className="font-semibold text-slate-800">⚡ Advance</span> to transition units forward.
           </p>
         </div>
-        <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
-          <span className="inline-block h-2 w-2 rounded-full bg-emerald-500"></span> Stock Available
-          <span className="inline-block h-2 w-2 rounded-full bg-slate-300 ml-2"></span> Empty Stage
+        <div className="flex items-center gap-3 text-xs font-semibold">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-bold">
+            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+            {activeStagesCount} of {processStages.length} Stages Active
+          </span>
         </div>
       </div>
 
-      {/* Responsive Single-Row / Multi-Col Pipeline */}
-      <div className="flex md:grid md:grid-cols-2 lg:grid-cols-3 xl:grid-flow-col xl:auto-cols-fr gap-3 overflow-x-auto snap-x snap-mandatory pb-2 scrollbar-thin">
-        {processStages.map((stage, idx) => {
-          const qty = qtyAt(stage.id);
-          const hasStock = qty > 0;
-          const nextStage = processStages[idx + 1];
-          const isLastStage = idx === processStages.length - 1 || stage.name === 'Ready';
-          const otherStages = processStages.filter((s) => s.id !== stage.id);
+      {/* Pipeline Throughput Progress Track */}
+      {totalStockInPipeline > 0 && (
+        <div className="mb-4 p-3 rounded-xl bg-slate-50 border border-slate-200/70 space-y-1.5">
+          <div className="flex items-center justify-between text-[11px] font-bold text-slate-600">
+            <span className="flex items-center gap-1.5">
+              <Layers className="h-3.5 w-3.5 text-indigo-600" />
+              Batch Pipeline Distribution ({formatNumber(totalStockInPipeline)} {unitLabel} total)
+            </span>
+            <span className="text-slate-400 font-medium">Stage 1 → Ready</span>
+          </div>
 
-          const isSourceOfActive = activeAction?.type === 'stage-move' && activeAction.fromStageId === stage.id;
-          const isTargetOfActive = activeAction?.type === 'stage-move' && activeAction.toStageId === stage.id;
+          <div className="h-2.5 w-full rounded-full bg-slate-200 overflow-hidden flex shadow-inner">
+            {processStages.map((stage, idx) => {
+              const qty = qtyAt(stage.id);
+              if (qty <= 0) return null;
+              const pct = (qty / totalStockInPipeline) * 100;
+              const colors = [
+                'bg-slate-700',
+                'bg-blue-600',
+                'bg-indigo-600',
+                'bg-violet-600',
+                'bg-purple-600',
+                'bg-emerald-600',
+                'bg-teal-600',
+              ];
+              const colorClass = colors[idx % colors.length];
 
-          return (
-            <div
-              key={stage.id}
-              className={`min-w-[240px] xl:min-w-0 flex-1 snap-start relative rounded-2xl p-4 transition-all flex flex-col justify-between border ${
-                isSourceOfActive
-                  ? 'border-indigo-500 bg-indigo-50/50 ring-2 ring-indigo-200 shadow-sm'
-                  : isTargetOfActive
-                  ? 'border-emerald-500 bg-emerald-50/50 ring-2 ring-emerald-200 shadow-sm'
-                  : hasStock
-                  ? 'border-emerald-200 bg-gradient-to-b from-white to-emerald-50/30 shadow-2xs'
-                  : 'border-slate-200/80 bg-slate-50/50 opacity-80'
-              }`}
-            >
-              <div>
-                {/* Stage Number & Name */}
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400">
-                    Stage #{idx + 1}
-                  </span>
-                  {hasStock && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800 border border-emerald-200">
-                      Active
+              return (
+                <div
+                  key={stage.id}
+                  style={{ width: `${pct}%` }}
+                  className={`${colorClass} h-full transition-all duration-300 relative group`}
+                  title={`${stage.name}: ${formatNumber(qty)} ${unitLabel} (${Math.round(pct)}%)`}
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Connected Responsive Conveyor Pipeline */}
+      <div className="relative">
+        <div className="flex md:grid md:grid-cols-2 lg:grid-cols-3 xl:grid-flow-col xl:auto-cols-fr gap-3 overflow-x-auto snap-x snap-mandatory pb-2 scrollbar-thin">
+          {processStages.map((stage, idx) => {
+            const qty = qtyAt(stage.id);
+            const hasStock = qty > 0;
+            const nextStage = processStages[idx + 1];
+            const isLastStage = idx === processStages.length - 1 || stage.name === 'Ready';
+            const otherStages = processStages.filter((s) => s.id !== stage.id);
+
+            const isSourceOfActive = activeAction?.type === 'stage-move' && activeAction.fromStageId === stage.id;
+            const isTargetOfActive = activeAction?.type === 'stage-move' && activeAction.toStageId === stage.id;
+
+            const stagePct = totalStockInPipeline > 0 ? Math.round((qty / totalStockInPipeline) * 100) : 0;
+
+            return (
+              <div
+                key={stage.id}
+                className={`min-w-[250px] xl:min-w-0 flex-1 snap-start relative rounded-2xl p-4 transition-all duration-200 flex flex-col justify-between border ${
+                  isSourceOfActive
+                    ? 'border-indigo-600 bg-indigo-50/70 ring-2 ring-indigo-400 shadow-md scale-[1.01]'
+                    : isTargetOfActive
+                    ? 'border-emerald-600 bg-emerald-50/70 ring-2 ring-emerald-400 shadow-md scale-[1.01]'
+                    : hasStock
+                    ? 'border-emerald-200/90 bg-gradient-to-b from-white to-emerald-50/20 shadow-xs hover:border-emerald-300'
+                    : 'border-slate-200/70 bg-slate-50/40 opacity-75 hover:opacity-100'
+                }`}
+              >
+                <div>
+                  {/* Stage Number & Status Pill */}
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="inline-flex items-center gap-1 text-[11px] font-black uppercase tracking-wider text-slate-500">
+                      <span className="h-4 w-4 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-[10px]">
+                        {idx + 1}
+                      </span>
+                      Stage
                     </span>
+
+                    {isSourceOfActive ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-black text-white shadow-2xs">
+                        Source
+                      </span>
+                    ) : isTargetOfActive ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-black text-white shadow-2xs">
+                        Target Destination
+                      </span>
+                    ) : hasStock ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800 border border-emerald-200">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                        Active
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-semibold text-slate-400">Empty</span>
+                    )}
+                  </div>
+
+                  {/* Stage Name */}
+                  <h3 className="font-extrabold text-slate-900 text-sm tracking-tight flex items-center justify-between">
+                    <span>{stage.name}</span>
+                    {nextStage && (
+                      <ArrowRight className="hidden xl:block h-3.5 w-3.5 text-slate-300 -mr-1" />
+                    )}
+                  </h3>
+
+                  {/* Quantity Display */}
+                  <div className="my-3">
+                    <div className="flex items-baseline gap-1.5">
+                      <p className={`text-2xl font-black ${hasStock ? 'text-slate-900' : 'text-slate-400'}`}>
+                        {formatNumber(qty)}
+                      </p>
+                      <span className="text-xs font-bold text-slate-500">{unitLabel}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] font-medium text-slate-400 mt-0.5">
+                      <span>{hasStock ? `${stagePct}% of stock` : 'No units here'}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Actions for this stage */}
+                <div className="space-y-1.5 pt-2.5 border-t border-slate-100">
+                  {hasStock ? (
+                    <>
+                      {/* 1-Click Advance */}
+                      {nextStage && (
+                        <button
+                          type="button"
+                          onClick={() => onStartStageMove(stage.id, nextStage.id)}
+                          className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-extrabold text-white shadow-xs hover:bg-indigo-950 active:scale-[0.98] transition cursor-pointer min-w-0"
+                        >
+                          <Zap className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                          <span className="truncate">Advance → {nextStage.name}</span>
+                        </button>
+                      )}
+
+                      {/* Ready -> Dispatch */}
+                      {isLastStage && (
+                        <button
+                          type="button"
+                          onClick={onStartDispatch}
+                          className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-extrabold text-white shadow-xs hover:bg-emerald-700 active:scale-[0.98] transition cursor-pointer min-w-0"
+                        >
+                          <Truck className="h-3.5 w-3.5 shrink-0" />
+                          <span className="truncate">Dispatch to Customer</span>
+                        </button>
+                      )}
+
+                      {/* Jump menu */}
+                      {otherStages.length > 0 && (
+                        <div className="relative">
+                          <select
+                            className="w-full appearance-none rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:bg-slate-50 cursor-pointer text-center"
+                            value=""
+                            onChange={(e) => {
+                              if (e.target.value) {
+                                onStartStageMove(stage.id, e.target.value);
+                              }
+                            }}
+                          >
+                            <option value="">Jump / Transfer to ▾</option>
+                            {otherStages.map((target) => (
+                              <option key={target.id} value={target.id}>
+                                → {target.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      {/* Record Scrap */}
+                      <button
+                        type="button"
+                        onClick={() => onStartScrap(stage.id)}
+                        className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50/50 px-2 py-1 text-[11px] font-bold text-rose-700 hover:bg-rose-100 active:scale-[0.98] transition cursor-pointer"
+                      >
+                        <Flame className="h-3 w-3 text-rose-600" />
+                        <span>Record Scrap Loss</span>
+                      </button>
+                    </>
+                  ) : (
+                    <div className="py-2 text-center text-[11px] font-medium text-slate-400 italic">
+                      Stage is idle
+                    </div>
                   )}
                 </div>
-                <h3 className="font-bold text-slate-900 text-sm">{stage.name}</h3>
-
-                {/* Quantity Display */}
-                <div className="my-3">
-                  <p className="text-2xl font-black text-slate-900">
-                    {formatNumber(qty)}
-                  </p>
-                  <p className="text-[11px] font-medium text-slate-500">{unitLabel} available</p>
-                </div>
               </div>
-
-              {/* Actions for this stage */}
-              <div className="space-y-1.5 pt-2 border-t border-slate-100">
-                {hasStock ? (
-                  <>
-                    {/* 1-Click Advance */}
-                    {nextStage && (
-                      <button
-                        type="button"
-                        onClick={() => onStartStageMove(stage.id, nextStage.id)}
-                        className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white shadow-2xs hover:bg-slate-800 active:scale-[0.98] transition cursor-pointer min-w-0"
-                      >
-                        <Zap className="h-3.5 w-3.5 text-amber-400 shrink-0" />
-                        <span className="truncate">Advance → {nextStage.name}</span>
-                      </button>
-                    )}
-
-                    {/* Ready -> Dispatch */}
-                    {isLastStage && (
-                      <button
-                        type="button"
-                        onClick={onStartDispatch}
-                        className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white shadow-2xs hover:bg-emerald-700 active:scale-[0.98] transition cursor-pointer min-w-0"
-                      >
-                        <Truck className="h-3.5 w-3.5 shrink-0" />
-                        <span className="truncate">Dispatch to Customer</span>
-                      </button>
-                    )}
-
-                    {/* Jump menu */}
-                    {otherStages.length > 0 && (
-                      <div className="relative">
-                        <select
-                          className="w-full appearance-none rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:bg-slate-50 cursor-pointer text-center"
-                          value=""
-                          onChange={(e) => {
-                            if (e.target.value) {
-                              onStartStageMove(stage.id, e.target.value);
-                            }
-                          }}
-                        >
-                          <option value="">Jump / Transfer to ▾</option>
-                          {otherStages.map((target) => (
-                            <option key={target.id} value={target.id}>
-                              → {target.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-
-                    {/* Record Scrap */}
-                    <button
-                      type="button"
-                      onClick={() => onStartScrap(stage.id)}
-                      className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50/50 px-2 py-1.5 text-[11px] font-bold text-rose-700 hover:bg-rose-100 active:scale-[0.98] transition cursor-pointer"
-                    >
-                      <Flame className="h-3 w-3 text-rose-600" />
-                      <span>Record Scrap Loss</span>
-                    </button>
-                  </>
-                ) : (
-                  <div className="py-2 text-center text-[11px] font-semibold text-slate-400">
-                    No stock in stage
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
     </Card>
   );

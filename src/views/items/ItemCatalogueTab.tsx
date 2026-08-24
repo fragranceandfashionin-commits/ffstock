@@ -106,7 +106,7 @@ export function ItemCatalogueTab({
       const filename = `ffstock_items_inventory_${getTodayDateString()}`;
       downloadCSV(filename, headers, rows);
       toast.success('Items inventory balance CSV exported successfully', 'Export Complete');
-    } catch (err) {
+    } catch {
       toast.error('Failed to export CSV', 'Export Failed');
     }
   };

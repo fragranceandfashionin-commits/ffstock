@@ -149,6 +149,7 @@ export type SimilarItemMatch = {
 
 /**
  * Identifies existing items that closely match a given name to prevent stock fragmentation.
+ * Uses category context to weight match confidence appropriately.
  */
 export function findSimilarItems(
   name: string,
@@ -160,6 +161,7 @@ export function findSimilarItems(
 
   const cleanLower = clean.toLowerCase();
   const norm = normalizeItemName(clean);
+  const targetCategory = (category || '').trim().toLowerCase();
   const matches: SimilarItemMatch[] = [];
 
   for (const itm of existingItems) {
@@ -167,16 +169,26 @@ export function findSimilarItems(
     if (!itmClean) continue;
     const itmLower = itmClean.toLowerCase();
     const itmNorm = normalizeItemName(itmClean);
+    const itmCategory = (itm.category || '').trim().toLowerCase();
+    const sameCategory = !targetCategory || !itmCategory || targetCategory === itmCategory;
 
     // 1. Exact case-insensitive match
     if (itmLower === cleanLower) {
-      matches.push({ item: itm, matchType: 'exact', confidence: 1.0 });
+      matches.push({
+        item: itm,
+        matchType: 'exact',
+        confidence: sameCategory ? 1.0 : 0.9,
+      });
       continue;
     }
 
     // 2. Normalized match (e.g. "20 ml luck" vs "20ml luck", "50-ML-Square" vs "50ml square")
     if (itmNorm === norm && norm.length > 0) {
-      matches.push({ item: itm, matchType: 'normalized', confidence: 0.95 });
+      matches.push({
+        item: itm,
+        matchType: 'normalized',
+        confidence: sameCategory ? 0.95 : 0.85,
+      });
       continue;
     }
 
@@ -187,10 +199,11 @@ export function findSimilarItems(
       const similarity = 1 - dist / maxLen;
 
       if (dist <= 2 || similarity >= 0.75) {
+        const adjustedConfidence = sameCategory ? similarity : similarity * 0.9;
         matches.push({
           item: itm,
           matchType: 'fuzzy',
-          confidence: Math.round(similarity * 100) / 100,
+          confidence: Math.round(adjustedConfidence * 100) / 100,
         });
       }
     }

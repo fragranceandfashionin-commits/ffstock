@@ -161,6 +161,17 @@ export function DashboardView({
     loadData();
   }, [loadData]);
 
+  // Point-in-Time component stock reconciliation
+  useEffect(() => {
+    let isMounted = true;
+    fetchComponentStockSummary(asOfDate || null).then((data) => {
+      if (isMounted) setComponentStocks(data);
+    }).catch(() => {});
+    return () => {
+      isMounted = false;
+    };
+  }, [asOfDate]);
+
   // Realtime live syncing across multi-user terminals
   useEffect(() => {
     let timer: NodeJS.Timeout | null = null;
@@ -414,6 +425,7 @@ export function DashboardView({
         'Batch No',
         'Item SKU',
         'Dispatched Qty',
+        'Variant Name',
         'Color Variant',
         'Cap Name',
         'Atomizer Name',
@@ -427,6 +439,7 @@ export function DashboardView({
         d.batchNo,
         d.itemName,
         d.qty,
+        d.variant_name ?? '',
         d.resolvedColor ?? '',
         d.resolvedCapName ?? '',
         d.resolvedAtomizerName ?? '',
@@ -453,6 +466,7 @@ export function DashboardView({
         'From Stage',
         'To Stage',
         'Qty Moved',
+        'Variant Name',
         'Cap Used',
         'Atomizer Used',
         'Box Used',
@@ -468,6 +482,7 @@ export function DashboardView({
         m.from_stage?.name ?? '',
         m.to_stage?.name ?? '',
         m.qty_moved,
+        m.variant_name ?? '',
         m.cap_name ?? '',
         m.atomizer_name ?? '',
         m.box_name ?? '',
@@ -1148,6 +1163,7 @@ export function DashboardView({
           boxes={boxes}
           calculations={calculations}
           onSuccess={loadData}
+          onNavigateToOutward={(bId) => onViewChange('outward', { batchId: bId })}
         />
       )}
 

@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 import type { BatchStock, LocationStock, StageStock } from './types';
-import type { Stage, InwardBatch, StageMovement, Dispatch, Item, Supplier, BatchWithRelations, ComponentStockSummary, ItemStockReceipt } from './supabase';
+import type { Stage, InwardBatch, StageMovement, Dispatch, Item, Supplier, BatchWithRelations, MovementWithRelations, ComponentStockSummary, ItemStockReceipt } from './supabase';
 import { getTodayDateString } from './utils';
 
 /**
@@ -693,12 +693,22 @@ export async function insertInwardBatches(
   return res.data;
 }
 
+export async function updateInwardBatchBrand(batchId: string, brandName: string | null): Promise<void> {
+  const { error } = await supabase
+    .from('inward_batches')
+    .update({ brand_name: brandName?.trim() || null })
+    .eq('id', batchId);
+  if (error) throw error;
+}
+
+
 export async function insertStageMovement(payload: {
   batch_id: string;
   from_stage_id: string;
   to_stage_id: string;
   qty_moved: number;
   moved_on?: string;
+  variant_name?: string | null;
   cap_name?: string | null;
   atomizer_name?: string | null;
   box_name?: string | null;
@@ -719,6 +729,7 @@ export async function insertStageMovement(payload: {
     to_stage_id: payload.to_stage_id,
     qty_moved: payload.qty_moved,
     moved_on: payload.moved_on || getTodayDateString(),
+    variant_name: payload.variant_name?.trim() || null,
     cap_name: payload.cap_name?.trim() || null,
     atomizer_name: payload.atomizer_name?.trim() || null,
     box_name: payload.box_name?.trim() || null,
@@ -752,6 +763,7 @@ export async function insertDispatch(payload: {
   invoice_no: string;
   qty: number;
   dispatched_on?: string;
+  variant_name?: string | null;
   color?: string | null;
   printing_design?: string | null;
   cap_name?: string | null;
@@ -766,6 +778,7 @@ export async function insertDispatch(payload: {
     invoice_no: payload.invoice_no.trim(),
     qty: payload.qty,
     dispatched_on: payload.dispatched_on || getTodayDateString(),
+    variant_name: payload.variant_name?.trim() || null,
     color: payload.color?.trim() || null,
     printing_design: payload.printing_design?.trim() || null,
     cap_name: payload.cap_name?.trim() || null,
@@ -789,6 +802,7 @@ export async function insertDispatch(payload: {
 
 export type VariantDispatchItem = {
   qty: number;
+  variant_name?: string | null;
   color?: string | null;
   printing_design?: string | null;
   cap_name?: string | null;
@@ -818,6 +832,7 @@ export async function insertMultiVariantDispatches(payload: {
     invoice_no: payload.invoice_no.trim(),
     qty: v.qty,
     dispatched_on: dispatchedOn,
+    variant_name: v.variant_name?.trim() || null,
     color: v.color?.trim() || null,
     printing_design: v.printing_design?.trim() || null,
     cap_name: v.cap_name?.trim() || null,
@@ -875,6 +890,12 @@ export async function insertScrapMovement(payload: {
   from_stage_id: string;
   qty_scrapped: number;
   reason: string;
+  variant_name?: string | null;
+  color?: string | null;
+  printing_design?: string | null;
+  cap_name?: string | null;
+  atomizer_name?: string | null;
+  box_name?: string | null;
   remarks?: string | null;
   done_by?: string | null;
   stages: Stage[];
@@ -894,6 +915,12 @@ export async function insertScrapMovement(payload: {
     from_stage_id: payload.from_stage_id,
     to_stage_id: scrapStage.id,
     qty_moved: payload.qty_scrapped,
+    variant_name: payload.variant_name?.trim() || null,
+    color: payload.color?.trim() || null,
+    printing_design: payload.printing_design?.trim() || null,
+    cap_name: payload.cap_name?.trim() || null,
+    atomizer_name: payload.atomizer_name?.trim() || null,
+    box_name: payload.box_name?.trim() || null,
     remarks: scrapRemark,
     done_by: payload.done_by,
   });
@@ -911,6 +938,7 @@ export async function insertSplitStageMovementAndScrap(payload: {
   qty_forward: number;
   qty_scrapped: number;
   scrap_reason: string;
+  variant_name?: string | null;
   cap_name?: string | null;
   atomizer_name?: string | null;
   box_name?: string | null;
@@ -941,6 +969,7 @@ export async function insertSplitStageMovementAndScrap(payload: {
       p_qty_scrapped: payload.qty_scrapped,
       p_scrap_reason: payload.scrap_reason || 'Defect / Damage on transfer',
       p_scrap_stage_id: scrapStageId,
+      p_variant_name: payload.variant_name?.trim() || null,
       p_cap_name: payload.cap_name?.trim() || null,
       p_atomizer_name: payload.atomizer_name?.trim() || null,
       p_box_name: payload.box_name?.trim() || null,
@@ -970,6 +999,7 @@ export async function insertSplitStageMovementAndScrap(payload: {
     from_stage_id: payload.from_stage_id,
     to_stage_id: payload.to_stage_id,
     qty_moved: payload.qty_forward,
+    variant_name: payload.variant_name,
     cap_name: payload.cap_name,
     atomizer_name: payload.atomizer_name,
     box_name: payload.box_name,
@@ -1000,6 +1030,7 @@ export async function insertSplitStageMovementAndScrap(payload: {
 
 export type VariantMovementItem = {
   qty: number;
+  variant_name?: string | null;
   color?: string | null;
   printing_design?: string | null;
   cap_name?: string | null;
@@ -1070,6 +1101,7 @@ export async function insertMultiVariantStageMovements(payload: {
         to_stage_id: payload.to_stage_id,
         qty_moved: v.qty,
         moved_on: today,
+        variant_name: v.variant_name?.trim() || null,
         color: v.color?.trim() || null,
         printing_design: v.printing_design?.trim() || null,
         cap_name: v.cap_name?.trim() || null,
@@ -1120,6 +1152,7 @@ export async function insertReversalMovement(originalMovement: {
   from_stage_id: string;
   to_stage_id: string;
   qty_moved: number;
+  variant_name?: string | null;
   cap_name?: string | null;
   atomizer_name?: string | null;
   box_name?: string | null;
@@ -1140,6 +1173,7 @@ export async function insertReversalMovement(originalMovement: {
     from_stage_id: originalMovement.to_stage_id, // inverted!
     to_stage_id: originalMovement.from_stage_id, // inverted!
     qty_moved: qty,
+    variant_name: originalMovement.variant_name,
     cap_name: originalMovement.cap_name,
     atomizer_name: originalMovement.atomizer_name,
     box_name: originalMovement.box_name,
@@ -1148,16 +1182,57 @@ export async function insertReversalMovement(originalMovement: {
     cap_item_id: originalMovement.cap_item_id,
     atomizer_item_id: originalMovement.atomizer_item_id,
     box_item_id: originalMovement.box_item_id,
-    cap_qty_used: originalMovement.cap_qty_used ? qty : null,
-    atomizer_qty_used: originalMovement.atomizer_qty_used ? qty : null,
-    box_qty_used: originalMovement.box_qty_used ? qty : null,
+    cap_qty_used: (originalMovement.cap_item_id || originalMovement.cap_qty_used) ? qty : null,
+    atomizer_qty_used: (originalMovement.atomizer_item_id || originalMovement.atomizer_qty_used) ? qty : null,
+    box_qty_used: (originalMovement.box_item_id || originalMovement.box_qty_used) ? qty : null,
     remarks: reversalRemark,
     done_by: doneBy || null,
   });
 }
 
 
-export async function fetchMovements(batchId?: string) {
+function extractRemarksMetadata(remarks?: string | null): Record<string, string> {
+  if (!remarks) return {};
+  const meta: Record<string, string> = {};
+  const regex = /\[([a-zA-Z0-9_]+):\s*([^\]]+)\]/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(remarks)) !== null) {
+    const key = match[1].toLowerCase().trim();
+    const val = match[2].trim();
+    if (key && val) meta[key] = val;
+  }
+  return meta;
+}
+
+function normalizeRawMovementRecord(m: Record<string, unknown>): Record<string, unknown> {
+  const remarks = (m.remarks as string) || '';
+  const meta = extractRemarksMetadata(remarks);
+  return {
+    ...m,
+    variant_name: (m.variant_name as string)?.trim() || meta.variant_name || meta.variant || null,
+    color: (m.color as string)?.trim() || meta.color || null,
+    printing_design: (m.printing_design as string)?.trim() || meta.printing_design || meta.print || null,
+    cap_name: (m.cap_name as string)?.trim() || meta.cap_name || meta.cap || null,
+    atomizer_name: (m.atomizer_name as string)?.trim() || meta.atomizer_name || meta.atomizer || meta.pump || null,
+    box_name: (m.box_name as string)?.trim() || meta.box_name || meta.box || meta.carton || null,
+  };
+}
+
+function normalizeRawDispatchRecord(d: Record<string, unknown>): Record<string, unknown> {
+  const specs = (d.product_specs as string) || '';
+  const meta = extractRemarksMetadata(specs);
+  return {
+    ...d,
+    variant_name: (d.variant_name as string)?.trim() || meta.variant_name || meta.variant || null,
+    color: (d.color as string)?.trim() || meta.color || null,
+    printing_design: (d.printing_design as string)?.trim() || meta.printing_design || meta.print || null,
+    cap_name: (d.cap_name as string)?.trim() || meta.cap_name || meta.cap || null,
+    atomizer_name: (d.atomizer_name as string)?.trim() || meta.atomizer_name || meta.atomizer || meta.pump || null,
+    box_name: (d.box_name as string)?.trim() || meta.box_name || meta.box || null,
+  };
+}
+
+export async function fetchMovements(batchId?: string): Promise<MovementWithRelations[]> {
   try {
     let query = supabase
       .from('stage_movements')
@@ -1169,7 +1244,7 @@ export async function fetchMovements(batchId?: string) {
     const { data, error } = await query;
     if (!error && data) {
       checkRowLimitGuard(data.length, 'stage_movements');
-      return data;
+      return (data as Record<string, unknown>[]).map(normalizeRawMovementRecord) as MovementWithRelations[];
     }
   } catch {
     // Fall back to in-memory join
@@ -1186,14 +1261,17 @@ export async function fetchMovements(batchId?: string) {
   if (rawMovesRes.error) throw rawMovesRes.error;
   checkRowLimitGuard(rawMovesRes.data?.length, 'stage_movements');
   const stageMap = new Map(stages.map((s) => [s.id, s]));
-  return (rawMovesRes.data ?? []).map((m: Record<string, unknown>) => ({
-    ...m,
-    from_stage: stageMap.get(m.from_stage_id as string) ?? null,
-    to_stage: stageMap.get(m.to_stage_id as string) ?? null,
-  }));
+  return (rawMovesRes.data ?? []).map((m: Record<string, unknown>) => {
+    const normalized = normalizeRawMovementRecord(m);
+    return {
+      ...normalized,
+      from_stage: stageMap.get(m.from_stage_id as string) ?? null,
+      to_stage: stageMap.get(m.to_stage_id as string) ?? null,
+    };
+  }) as MovementWithRelations[];
 }
 
-export async function fetchDispatches(batchId?: string) {
+export async function fetchDispatches(batchId?: string): Promise<Dispatch[]> {
   let query = supabase
     .from('dispatches')
     .select('*')
@@ -1203,7 +1281,7 @@ export async function fetchDispatches(batchId?: string) {
   const { data, error } = await query;
   if (error) throw error;
   checkRowLimitGuard(data?.length, 'dispatches');
-  return data ?? [];
+  return (data ?? []).map((d: Record<string, unknown>) => normalizeRawDispatchRecord(d)) as Dispatch[];
 }
 
 export async function fetchStageStock(): Promise<StageStock[]> {
@@ -1419,8 +1497,8 @@ export async function fetchComponentStockFromView(): Promise<ComponentStockViewR
  * 5. Available In-Stock Balance
  * 6. Granular orderUsageList and batchUsageList for 100% auditability
  */
-export async function fetchComponentStockSummary(): Promise<ComponentStockSummary[]> {
-  const [items, stages, batchesData, movementsData, dispatchesData, receipts] = await Promise.all([
+export async function fetchComponentStockSummary(asOfDate?: string | null): Promise<ComponentStockSummary[]> {
+  const [items, stages, batchesData, movementsData, dispatchesData, receiptsData] = await Promise.all([
     fetchItems().catch(() => []),
     fetchStages().catch(() => []),
     fetchPagedRows<Record<string, unknown>>('inward_batches').catch(() => []),
@@ -1431,7 +1509,8 @@ export async function fetchComponentStockSummary(): Promise<ComponentStockSummar
 
   const stageMap = new Map(stages.map((s) => [s.id, s]));
 
-  const rawBatches = batchesData as unknown as {
+  // Apply optional point-in-time historical filter
+  const allBatches = batchesData as unknown as {
     id: string;
     item_id: string;
     batch_no: string;
@@ -1444,17 +1523,21 @@ export async function fetchComponentStockSummary(): Promise<ComponentStockSummar
     atomizer_qty?: number | null;
     box_qty?: number | null;
   }[];
+  const rawBatches = asOfDate ? allBatches.filter((b) => b.received_on <= asOfDate) : allBatches;
 
+  const allReceipts = receiptsData || [];
+  const receipts = asOfDate ? allReceipts.filter((r) => r.received_on <= asOfDate) : allReceipts;
   const receiptsByItem = new Map<string, number>();
   for (const r of (receipts ?? [])) {
     receiptsByItem.set(r.item_id, (receiptsByItem.get(r.item_id) ?? 0) + (Number(r.qty) || 0));
   }
 
-  const rawMovements = movementsData.map((m: Record<string, unknown>) => ({
+  const allMovements = movementsData.map((m: Record<string, unknown>) => ({
     id: (m.id as string) || '',
     batch_id: (m.batch_id as string) || '',
     qty_moved: Number(m.qty_moved || 0),
     moved_on: (m.moved_on as string) || '',
+    variant_name: (m.variant_name as string) || null,
     cap_name: (m.cap_name as string) || null,
     atomizer_name: (m.atomizer_name as string) || null,
     box_name: (m.box_name as string) || null,
@@ -1468,33 +1551,26 @@ export async function fetchComponentStockSummary(): Promise<ComponentStockSummar
     to_stage: stageMap.get(m.to_stage_id as string) ?? null,
     remarks: (m.remarks as string) || null,
   }));
+  const rawMovements = asOfDate ? allMovements.filter((m) => m.moved_on <= asOfDate) : allMovements;
 
-  const rawDispatches = dispatchesData.map((d: Record<string, unknown>) => ({
+  const allDispatches = dispatchesData.map((d: Record<string, unknown>) => ({
     id: (d.id as string) || '',
     batch_id: (d.batch_id as string) || '',
     qty: Number(d.qty || 0),
     customer_name: (d.customer_name as string) || '',
     invoice_no: (d.invoice_no as string) || '',
     dispatched_on: (d.dispatched_on as string) || '',
+    variant_name: (d.variant_name as string) || null,
     cap_name: (d.cap_name as string) || null,
     atomizer_name: (d.atomizer_name as string) || null,
     box_name: (d.box_name as string) || null,
     box_item_id: (d.box_item_id as string) || null,
     color: (d.color as string) || null,
   }));
+  const rawDispatches = asOfDate ? allDispatches.filter((d) => d.dispatched_on <= asOfDate) : allDispatches;
 
   const itemMap = new Map(items.map((i) => [i.id, i]));
   const batchMap = new Map(rawBatches.map((b) => [b.id, b]));
-
-  // Inward received per item
-  const inwardSummaryByItem = new Map<string, { totalQty: number; count: number }>();
-  for (const b of rawBatches) {
-    const prev = inwardSummaryByItem.get(b.item_id) ?? { totalQty: 0, count: 0 };
-    inwardSummaryByItem.set(b.item_id, {
-      totalQty: prev.totalQty + b.qty_received,
-      count: prev.count + 1,
-    });
-  }
 
   // Pre-calculate movements per batch for component attachment lookups
   const movementsByBatch = new Map<string, typeof rawMovements>();
@@ -1645,8 +1721,7 @@ export async function fetchComponentStockSummary(): Promise<ComponentStockSummar
     const usedBatchesMap = new Map<string, { qty: number; latestDate: string }>();
     let latestUsedDate: string | null = null;
 
-    // 1. Analyze Batch Component Usage without multi-stage duplication.
-    // For each batch, calculate the exact component consumption.
+    // 1. Analyze Batch Component Usage with milestone deduplication
     for (const [batchId, bMoves] of movementsByBatch.entries()) {
       const b = batchMap.get(batchId);
       const batchIntakeQty = b?.qty_received ?? 0;
@@ -1686,11 +1761,9 @@ export async function fetchComponentStockSummary(): Promise<ComponentStockSummar
 
       if (!isBatchLinked) continue;
 
-      // Track movement-based component usage and explicit quantity overrides
-      let explicitUsage = 0;
-      let hasExplicitUsage = false;
-      let moveBasedUsage = 0;
-      let hasMoveBasedUsage = false;
+      // Track movement-based component usage deduplicated at the primary assembly milestone stage
+      let assemblyStageUsage = 0;
+      let hasAssemblyMoves = false;
       let batchScrap = 0;
       let maxMovementDate = b?.received_on || '';
 
@@ -1700,19 +1773,18 @@ export async function fetchComponentStockSummary(): Promise<ComponentStockSummar
 
         if (isCap && ((m.cap_item_id && (m.cap_item_id === item.id || itemMap.get(m.cap_item_id)?.name.toLowerCase().trim() === itemNameNorm)) || (m.cap_name && m.cap_name.toLowerCase().trim() === itemNameNorm))) {
           isMoveMatch = true;
-          if (m.cap_qty_used > 0) { explicitQty = m.cap_qty_used; hasExplicitUsage = true; }
+          if (m.cap_qty_used > 0) explicitQty = m.cap_qty_used;
         } else if (isAtomizer && ((m.atomizer_item_id && (m.atomizer_item_id === item.id || itemMap.get(m.atomizer_item_id)?.name.toLowerCase().trim() === itemNameNorm)) || (m.atomizer_name && m.atomizer_name.toLowerCase().trim() === itemNameNorm))) {
           isMoveMatch = true;
-          if (m.atomizer_qty_used > 0) { explicitQty = m.atomizer_qty_used; hasExplicitUsage = true; }
+          if (m.atomizer_qty_used > 0) explicitQty = m.atomizer_qty_used;
         } else if (isPackaging && ((m.box_item_id && (m.box_item_id === item.id || itemMap.get(m.box_item_id)?.name.toLowerCase().trim() === itemNameNorm)) || (m.box_name && m.box_name.toLowerCase().trim() === itemNameNorm))) {
           isMoveMatch = true;
-          if (m.box_qty_used > 0) { explicitQty = m.box_qty_used; hasExplicitUsage = true; }
+          if (m.box_qty_used > 0) explicitQty = m.box_qty_used;
         } else if (!isBottle && (m.cap_item_id === item.id || m.atomizer_item_id === item.id || m.box_item_id === item.id || m.cap_name?.toLowerCase().trim() === itemNameNorm || m.atomizer_name?.toLowerCase().trim() === itemNameNorm || m.box_name?.toLowerCase().trim() === itemNameNorm)) {
           isMoveMatch = true;
         }
 
         if (isMoveMatch) {
-          hasMoveBasedUsage = true;
           const isReversal =
             Boolean(m.remarks && m.remarks.toUpperCase().includes('[REVERSAL')) ||
             Boolean(m.to_stage && m.from_stage && (m.from_stage.sequence_no > m.to_stage.sequence_no || m.from_stage.name === 'Scrap / Defect'));
@@ -1723,28 +1795,44 @@ export async function fetchComponentStockSummary(): Promise<ComponentStockSummar
             batchScrap += effectiveMoveQty;
           } else if (m.from_stage?.name === 'Scrap / Defect') {
             batchScrap = Math.max(0, batchScrap - effectiveMoveQty);
-          } else if (isReversal) {
-            explicitUsage = Math.max(0, explicitUsage - explicitQty);
-            moveBasedUsage = Math.max(0, moveBasedUsage - m.qty_moved);
           } else {
-            explicitUsage += explicitQty;
-            moveBasedUsage += m.qty_moved;
+            // Milestone-based deduplication:
+            // For Caps & Atomizers: assembly occurs when bottles advance out of Filling into Packaging/Ready (sequence_no <= 4 -> > 4)
+            // Or restored when reversed back into Filling (sequence_no > 4 -> <= 4)
+            // For Packaging / Boxes: packaging occurs when bottles advance out of Packaging into Ready (sequence_no <= 5 -> > 5)
+            // Or restored when reversed back into Packaging (sequence_no > 5 -> <= 5)
+            // For general components: count movements advancing out of Raw Stock into production or restored back to Raw
+            const isForwardMilestone = isPackaging
+              ? (m.from_stage?.name === 'Packaging' || (m.from_stage && m.from_stage.sequence_no <= 5 && m.to_stage && m.to_stage.sequence_no > 5))
+              : (isCap || isAtomizer)
+              ? (m.from_stage?.name === 'Filling' || (m.from_stage && m.from_stage.sequence_no <= 4 && m.to_stage && m.to_stage.sequence_no > 4))
+              : (m.from_stage?.sequence_no === 1 && m.to_stage && m.to_stage.sequence_no > 1);
+
+            const isReverseMilestone = isPackaging
+              ? (m.to_stage?.name === 'Packaging' || (m.from_stage && m.from_stage.sequence_no > 5 && m.to_stage && m.to_stage.sequence_no <= 5))
+              : (isCap || isAtomizer)
+              ? (m.to_stage?.name === 'Filling' || (m.from_stage && m.from_stage.sequence_no > 4 && m.to_stage && m.to_stage.sequence_no <= 4))
+              : (m.to_stage?.sequence_no === 1 && m.from_stage && m.from_stage.sequence_no > 1);
+
+            if (isReversal && (isReverseMilestone || isForwardMilestone)) {
+              hasAssemblyMoves = true;
+              assemblyStageUsage = Math.max(0, assemblyStageUsage - effectiveMoveQty);
+            } else if (!isReversal && isForwardMilestone) {
+              hasAssemblyMoves = true;
+              assemblyStageUsage += effectiveMoveQty;
+            }
           }
+
           if (m.moved_on && m.moved_on > maxMovementDate) {
             maxMovementDate = m.moved_on;
           }
         }
       }
 
-      // Calculate effective batch usage:
-      // 1. If explicit component quantities were logged, use that.
-      // 2. If movements specified this component without explicit quantity, use the sum of moved units with this component (e.g. 600 of 1000).
-      // 3. If component was attached at the batch level (and not overridden per-movement), consume the net units moved into production.
+      // Calculate effective batch usage: bounded by physical batch intake
       let effectiveBatchUsage = 0;
-      if (hasExplicitUsage) {
-        effectiveBatchUsage = Math.max(0, explicitUsage);
-      } else if (hasMoveBasedUsage) {
-        effectiveBatchUsage = Math.max(0, moveBasedUsage);
+      if (hasAssemblyMoves && assemblyStageUsage > 0) {
+        effectiveBatchUsage = Math.min(batchComponentIntake, assemblyStageUsage);
       } else if (bMoves.length > 0) {
         const forwardOutFromRaw = bMoves
           .filter((m) => m.from_stage?.sequence_no === 1 && m.to_stage?.sequence_no !== 1)

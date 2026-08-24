@@ -301,7 +301,7 @@ export function calculateDashboardMetrics({
       return cat.includes('bottle') || (!cat.includes('cap') && !cat.includes('atomizer') && !cat.includes('pump') && !cat.includes('spray') && !cat.includes('pack') && !cat.includes('box') && !cat.includes('carton'));
     })
     .reduce((s, bm) => s + (bm.stageQuantities[readyStage?.id ?? ''] ?? 0), 0);
-  const totalBottlesInProduction = Math.max(0, totalBottlesInsideFactory - totalBottlesRaw - totalBottlesReady);
+  const totalBottlesInProduction = Math.max(0, totalBottlesInsideFactory - totalBottlesRaw - totalBottlesReady - scrapTotal);
 
   const capComponentList = componentStocks.filter((c) => {
     const cat = (c.category || '').toLowerCase().trim();

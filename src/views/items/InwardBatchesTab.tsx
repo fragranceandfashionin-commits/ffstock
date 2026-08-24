@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Boxes, PackagePlus, Download, Maximize2, Send, Trash2 } from 'lucide-react';
+import { Boxes, PackagePlus, Download, Maximize2, Send, Trash2, Pencil } from 'lucide-react';
 import {
   Card,
   Button,
@@ -14,7 +14,8 @@ import {
 import type { BatchWithRelations } from '@/lib/supabase';
 import type { View } from '@/lib/types';
 import type { NavigationContext } from '@/components/AppShell';
-import { formatNumber, formatDate, downloadCSV, getTodayDateString } from '@/lib/utils';
+import { updateInwardBatchBrand } from '@/lib/queries';
+import { formatNumber, formatDate, downloadCSV, getTodayDateString, getErrorMessage } from '@/lib/utils';
 import { useToast } from '@/components/Toast';
 
 export type InwardBatchesTabProps = {
@@ -26,6 +27,7 @@ export type InwardBatchesTabProps = {
   onOpenInwardModal: () => void;
   onOpenDeleteBatchModal: (batch: BatchWithRelations) => void;
   onViewChange?: (view: View, context?: NavigationContext) => void;
+  onBatchUpdated?: () => void;
 };
 
 export function InwardBatchesTab({
@@ -37,9 +39,39 @@ export function InwardBatchesTab({
   onOpenInwardModal,
   onOpenDeleteBatchModal,
   onViewChange,
+  onBatchUpdated,
 }: InwardBatchesTabProps) {
   const [zoomImage, setZoomImage] = useState<{ url: string; title: string; batchNo?: string } | null>(null);
+  const [editingBrandBatch, setEditingBrandBatch] = useState<BatchWithRelations | null>(null);
+  const [newBrandValue, setNewBrandValue] = useState('');
+  const [savingBrand, setSavingBrand] = useState(false);
   const toast = useToast();
+
+  const openEditBrand = (b: BatchWithRelations) => {
+    setEditingBrandBatch(b);
+    setNewBrandValue(b.brand_name || '');
+  };
+
+  const handleSaveBrand = async () => {
+    if (!editingBrandBatch) return;
+    setSavingBrand(true);
+    try {
+      await updateInwardBatchBrand(editingBrandBatch.id, newBrandValue.trim() || null);
+      toast.success(
+        newBrandValue.trim()
+          ? `Brand set to "${newBrandValue.trim()}" for Batch ${editingBrandBatch.batch_no}.`
+          : `Batch ${editingBrandBatch.batch_no} set to In-House / No Brand.`,
+        'Brand Updated'
+      );
+      setEditingBrandBatch(null);
+      if (onBatchUpdated) onBatchUpdated();
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Failed to update brand'), 'Update Error');
+    } finally {
+      setSavingBrand(false);
+    }
+  };
+
 
   const filteredBatches = useMemo(() => {
     return batches.filter((b) => {
@@ -94,7 +126,7 @@ export function InwardBatchesTab({
       const filename = `ffstock_inward_batches_${getTodayDateString()}`;
       downloadCSV(filename, headers, rows);
       toast.success('Inward batches registry CSV exported successfully', 'Export Complete');
-    } catch (err) {
+    } catch {
       toast.error('Failed to export batches CSV', 'Export Failed');
     }
   };
@@ -202,10 +234,25 @@ export function InwardBatchesTab({
 
                         <div>
                           <div className="flex items-center gap-1.5 flex-wrap">
-                            {b.brand_name && (
-                              <span className="font-extrabold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md text-xs">
+                            {b.brand_name ? (
+                              <button
+                                type="button"
+                                onClick={() => openEditBrand(b)}
+                                className="font-extrabold text-amber-950 bg-amber-100 border border-amber-300/80 px-2 py-0.5 rounded-md text-xs inline-flex items-center gap-1 cursor-pointer hover:bg-amber-200 transition shadow-2xs"
+                                title="Click to edit brand"
+                              >
                                 🏢 {b.brand_name}
-                              </span>
+                                <Pencil className="h-2.5 w-2.5 opacity-60" />
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => openEditBrand(b)}
+                                className="text-slate-500 text-[11px] font-bold px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 transition cursor-pointer inline-flex items-center gap-1"
+                                title="Click to assign a brand name"
+                              >
+                                + Add Brand
+                              </button>
                             )}
                             <span className="font-mono font-black text-slate-900 text-sm">
                               {b.batch_no}
@@ -329,13 +376,25 @@ export function InwardBatchesTab({
                           </td>
 
                           <td className="px-4 py-3">
-                            {b.brand_name ? (
-                              <span className="inline-flex items-center gap-1 font-black text-indigo-900 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-lg text-xs shadow-2xs">
-                                🏢 {b.brand_name}
-                              </span>
-                            ) : (
-                              <span className="text-slate-400 italic">In-House</span>
-                            )}
+                            <div className="flex items-center gap-1.5 group/brand">
+                              {b.brand_name ? (
+                                <span className="inline-flex items-center gap-1 font-black text-amber-950 bg-amber-100 border border-amber-300/80 px-2.5 py-1 rounded-lg text-xs shadow-2xs">
+                                  🏢 {b.brand_name}
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 italic text-xs font-semibold px-2 py-0.5 rounded bg-slate-100 border border-slate-200">
+                                  In-House
+                                </span>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => openEditBrand(b)}
+                                className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition cursor-pointer opacity-0 group-hover/brand:opacity-100"
+                                title="Edit or assign brand name"
+                              >
+                                <Pencil className="h-3 w-3" />
+                              </button>
+                            </div>
                           </td>
 
                           <td className="px-4 py-3 font-mono font-black text-slate-900 text-xs whitespace-nowrap">
@@ -437,6 +496,64 @@ export function InwardBatchesTab({
           </div>
         </Modal>
       )}
+
+      {/* Quick Edit Brand Modal */}
+      {editingBrandBatch && (
+        <Modal
+          isOpen={Boolean(editingBrandBatch)}
+          onClose={() => setEditingBrandBatch(null)}
+          title={`Edit Brand / Party: Batch ${editingBrandBatch.batch_no}`}
+          maxWidthClass="max-w-md"
+        >
+          <div className="space-y-4">
+            <p className="text-xs text-slate-600">
+              Assign or update the Client / Brand name for this batch. This ensures it displays properly in the Outward Journey and search filters.
+            </p>
+
+            <div>
+              <label htmlFor="batch-brand-edit" className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1">
+                Client / Brand Name
+              </label>
+              <input
+                id="batch-brand-edit"
+                type="text"
+                value={newBrandValue}
+                onChange={(e) => setNewBrandValue(e.target.value)}
+                placeholder="e.g. Royal Club, Bella Vita, FNF (or leave blank for In-House)"
+                className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-bold text-slate-900 focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleSaveBrand();
+                  }
+                }}
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setEditingBrandBatch(null)}
+                disabled={savingBrand}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={handleSaveBrand}
+                disabled={savingBrand}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold"
+              >
+                {savingBrand ? 'Saving…' : 'Save Brand'}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
+

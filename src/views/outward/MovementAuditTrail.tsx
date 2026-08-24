@@ -92,8 +92,13 @@ export function MovementAuditTrail({
                       )}
                     </div>
                   </div>
-                  {(m.color || m.printing_design || m.cap_name || m.atomizer_name || m.box_name) && (
+                  {(m.variant_name || m.color || m.printing_design || m.cap_name || m.atomizer_name || m.box_name) && (
                     <div className="mt-1.5 flex flex-wrap items-center gap-1.5 px-1">
+                      {m.variant_name && (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-indigo-100/90 px-2 py-0.5 text-[10px] font-black text-indigo-900 border border-indigo-300 shadow-2xs">
+                          🏷️ Variant: {m.variant_name}
+                        </span>
+                      )}
                       {m.color && <ColorBadge color={m.color} />}
                       {m.printing_design && <PrintingBadge design={m.printing_design} />}
                       {m.cap_name && (
@@ -160,8 +165,13 @@ export function MovementAuditTrail({
                     </div>
                   </div>
 
-                  {(d.color || d.printing_design || d.cap_name || d.atomizer_name || d.box_name) && (
+                  {(d.variant_name || d.color || d.printing_design || d.cap_name || d.atomizer_name || d.box_name) && (
                     <div className="flex flex-wrap gap-1 pt-1">
+                      {d.variant_name && (
+                        <span className="text-[10px] font-black text-indigo-900 bg-indigo-100 px-1.5 py-0.5 rounded border border-indigo-300">
+                          🏷️ {d.variant_name}
+                        </span>
+                      )}
                       {d.color && <ColorBadge color={d.color} />}
                       {d.printing_design && <PrintingBadge design={d.printing_design} />}
                       {d.cap_name && (
@@ -218,6 +228,11 @@ export function MovementAuditTrail({
                       <td className="px-3 py-2.5 text-slate-600">{d.invoice_no}</td>
                       <td className="px-3 py-2.5">
                         <div className="flex flex-wrap gap-1">
+                          {d.variant_name && (
+                            <span className="text-[10px] font-black text-indigo-900 bg-indigo-100 px-1.5 py-0.5 rounded border border-indigo-300">
+                              🏷️ {d.variant_name}
+                            </span>
+                          )}
                           <ColorBadge color={d.color} />
                           {d.printing_design && <PrintingBadge design={d.printing_design} />}
                           {d.cap_name && (

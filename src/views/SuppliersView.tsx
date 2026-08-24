@@ -1,5 +1,5 @@
-import { useEffect, useState, useRef } from 'react';
-import { Boxes, Save, Trash2, Plus, Phone, Download, ListPlus, FileText, Copy } from 'lucide-react';
+import { useEffect, useState, useRef, useCallback } from 'react';
+import { Boxes, Save, Trash2, Plus, Phone, Download, FileText, Copy } from 'lucide-react';
 import {
   Card,
   PageHeader,
@@ -66,7 +66,7 @@ export function SuppliersView({ initialSupplierId }: SuppliersViewProps = {}) {
   const lastHandledSupplierIdRef = useRef<string | null>(null);
   const toast = useToast();
 
-  const load = async (isSilent = false) => {
+  const load = useCallback(async (isSilent = false) => {
     if (!isSilent) setLoading(true);
     setError(null);
     try {
@@ -82,7 +82,7 @@ export function SuppliersView({ initialSupplierId }: SuppliersViewProps = {}) {
     } finally {
       if (!isSilent) setLoading(false);
     }
-  };
+  }, [initialSupplierId]);
 
   useEffect(() => {
     if (initialSupplierId && suppliers && lastHandledSupplierIdRef.current !== initialSupplierId) {
@@ -94,7 +94,7 @@ export function SuppliersView({ initialSupplierId }: SuppliersViewProps = {}) {
 
   useEffect(() => {
     load();
-  }, []);
+  }, [load]);
 
   // Realtime live syncing across multi-user terminals
   useEffect(() => {
@@ -112,7 +112,7 @@ export function SuppliersView({ initialSupplierId }: SuppliersViewProps = {}) {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [load]);
 
   // Multi Row Operations
   const handleAddMultiRow = () => {

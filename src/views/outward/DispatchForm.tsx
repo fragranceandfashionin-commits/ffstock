@@ -18,6 +18,8 @@ export type DispatchFormProps = {
   setDispatchDate: (val: string) => void;
   dispatchQty: string;
   setDispatchQty: (val: string) => void;
+  dispatchVariantName?: string;
+  setDispatchVariantName?: (val: string) => void;
   dispatchColor: string;
   setDispatchColor: (val: string) => void;
   dispatchCapName: string;
@@ -58,6 +60,8 @@ export function DispatchForm({
   setDispatchDate,
   dispatchQty,
   setDispatchQty,
+  dispatchVariantName = '',
+  setDispatchVariantName,
   dispatchColor,
   setDispatchColor,
   dispatchCapName,
@@ -221,14 +225,19 @@ export function DispatchForm({
                   className="p-3 rounded-xl border border-emerald-100 bg-white shadow-2xs space-y-2 transition hover:border-emerald-300"
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="flex items-center gap-1.5 text-xs font-extrabold text-emerald-900">
-                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-100 text-[10px] font-black text-emerald-800">
+                    <span className="flex items-center gap-1.5 text-xs font-extrabold text-emerald-900 flex-wrap">
+                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-100 text-[10px] font-black text-emerald-800 shrink-0">
                         #{index + 1}
                       </span>
                       <span>Dispatch Variant</span>
+                      {row.variant_name?.trim() && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-black text-emerald-900 bg-emerald-100/90 border border-emerald-300 px-2 py-0.5 rounded-md shadow-2xs">
+                          🏷️ {row.variant_name}
+                        </span>
+                      )}
                       {row.color && (
-                        <span className="ml-1 text-[10px] font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
-                          {row.color}
+                        <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
+                          🎨 {row.color}
                         </span>
                       )}
                     </span>
@@ -247,6 +256,25 @@ export function DispatchForm({
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-start">
+                    {/* Variant Name Input */}
+                    <div className="sm:col-span-3">
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-emerald-950 mb-1 block">
+                        🏷️ Variant Name
+                      </label>
+                      <input
+                        type="text"
+                        className={`${inputClass} text-xs font-bold`}
+                        value={row.variant_name || ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setVariantRows((prev) =>
+                            prev.map((r) => (r.id === row.id ? { ...r, variant_name: val } : r))
+                          );
+                        }}
+                        placeholder="e.g. Velvet Night 50ml, SKU-101…"
+                      />
+                    </div>
+
                     {/* Color Selection & Typing */}
                     <div className="sm:col-span-3">
                       <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 block">
@@ -267,7 +295,7 @@ export function DispatchForm({
                     </div>
 
                     {/* Printing Design Specification */}
-                    <div className="sm:col-span-3">
+                    <div className="sm:col-span-2">
                       <label className="text-[10px] font-bold uppercase tracking-wider text-indigo-700 mb-1 block">
                         🖨️ Printing / Artwork
                       </label>
@@ -315,7 +343,7 @@ export function DispatchForm({
                           const isOutOfStock = avail <= 0;
                           return (
                             <option key={bx.id} value={bx.id}>
-                              {bx.name} ({isOutOfStock ? '0 - OUT OF STOCK' : `${formatNumber(avail)} in stock`})
+                              {bx.name} — {isOutOfStock ? '0 available [OUT OF STOCK]' : `${formatNumber(avail)} available in warehouse`}
                             </option>
                           );
                         })}
@@ -442,6 +470,25 @@ export function DispatchForm({
             <p className="text-[11px] text-emerald-700 font-medium">
               Record the exact assembled product details being shipped to the customer.
             </p>
+            <Field label="Variant Name (Optional)" htmlFor="disp-variant-name">
+              <div className="space-y-1">
+                {dispatchVariantName?.trim() && (
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="inline-flex items-center gap-1 text-[10px] font-black text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-md">
+                      ✓ Preserved finished variant
+                    </span>
+                  </div>
+                )}
+                <input
+                  id="disp-variant-name"
+                  className={inputClass}
+                  value={dispatchVariantName}
+                  onChange={(e) => setDispatchVariantName?.(e.target.value)}
+                  placeholder="e.g. Velvet Night 50ml, Luxury Edition, SKU-A…"
+                  disabled={submitting}
+                />
+              </div>
+            </Field>
             <Field label="Color / Finish" htmlFor="disp-color">
               <ColorSelect
                 value={dispatchColor}

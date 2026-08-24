@@ -118,6 +118,7 @@ export type StageMovement = {
   to_stage_id: string;
   qty_moved: number;
   moved_on: string;
+  variant_name?: string | null;
   cap_name?: string | null;
   atomizer_name?: string | null;
   box_name?: string | null;
@@ -143,6 +144,7 @@ export type Dispatch = {
   customer_name: string;
   invoice_no: string;
   dispatched_on: string;
+  variant_name?: string | null;
   color?: string | null;
   printing_design?: string | null;
   cap_name?: string | null;

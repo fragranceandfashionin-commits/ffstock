@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS stage_movements (
   to_stage_id uuid NOT NULL REFERENCES stages(id),
   qty_moved integer NOT NULL CHECK (qty_moved > 0),
   moved_on date NOT NULL DEFAULT current_date,
+  variant_name text,
   cap_name text,
   atomizer_name text,
   box_name text,
@@ -101,6 +102,7 @@ CREATE TABLE IF NOT EXISTS dispatches (
   customer_name text NOT NULL CHECK (char_length(trim(customer_name)) > 0),
   invoice_no text NOT NULL CHECK (char_length(trim(invoice_no)) > 0),
   dispatched_on date NOT NULL DEFAULT current_date,
+  variant_name text,
   color text,
   printing_design text,
   cap_name text,
@@ -673,6 +675,7 @@ ALTER TABLE inward_batches ADD COLUMN IF NOT EXISTS cap_item_id uuid REFERENCES 
 ALTER TABLE inward_batches ADD COLUMN IF NOT EXISTS atomizer_item_id uuid REFERENCES items(id);
 ALTER TABLE inward_batches ADD COLUMN IF NOT EXISTS box_item_id uuid REFERENCES items(id);
 
+ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS variant_name text;
 ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS cap_name text;
 ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS atomizer_name text;
 ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS box_name text;
@@ -686,6 +689,7 @@ ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS image_url text;
 ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS remarks text;
 ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS done_by text;
 
+ALTER TABLE dispatches ADD COLUMN IF NOT EXISTS variant_name text;
 ALTER TABLE dispatches ADD COLUMN IF NOT EXISTS color text;
 ALTER TABLE dispatches ADD COLUMN IF NOT EXISTS printing_design text;
 ALTER TABLE dispatches ADD COLUMN IF NOT EXISTS cap_name text;
@@ -784,7 +788,14 @@ WITH
   cap_moves_agg AS (
     SELECT 
       sm.cap_item_id AS item_id,
-      COALESCE(SUM(CASE WHEN s_to.name <> 'Scrap / Defect' AND (s_from.name IS NULL OR s_from.name <> 'Scrap / Defect') THEN COALESCE(sm.cap_qty_used, sm.qty_moved) ELSE 0 END), 0) AS qty_used,
+      COALESCE(SUM(
+        CASE 
+          WHEN s_to.name <> 'Scrap / Defect' AND (s_from.name IS NULL OR s_from.name <> 'Scrap / Defect') 
+               AND (s_from.sequence_no <= 4 OR s_from.name = 'Filling' OR s_to.name = 'Packaging')
+          THEN COALESCE(sm.cap_qty_used, sm.qty_moved) 
+          ELSE 0 
+        END
+      ), 0) AS qty_used,
       COALESCE(SUM(
         CASE 
           WHEN s_to.name = 'Scrap / Defect' THEN COALESCE(sm.cap_qty_used, sm.qty_moved)
@@ -792,7 +803,7 @@ WITH
           ELSE 0 
         END
       ), 0) AS qty_scrapped,
-      COUNT(sm.id) AS movement_count
+      COUNT(DISTINCT sm.batch_id) AS movement_count
     FROM stage_movements sm
     LEFT JOIN stages s_to ON s_to.id = sm.to_stage_id
     LEFT JOIN stages s_from ON s_from.id = sm.from_stage_id
@@ -802,7 +813,14 @@ WITH
   atomizer_moves_agg AS (
     SELECT 
       sm.atomizer_item_id AS item_id,
-      COALESCE(SUM(CASE WHEN s_to.name <> 'Scrap / Defect' AND (s_from.name IS NULL OR s_from.name <> 'Scrap / Defect') THEN COALESCE(sm.atomizer_qty_used, sm.qty_moved) ELSE 0 END), 0) AS qty_used,
+      COALESCE(SUM(
+        CASE 
+          WHEN s_to.name <> 'Scrap / Defect' AND (s_from.name IS NULL OR s_from.name <> 'Scrap / Defect') 
+               AND (s_from.sequence_no <= 4 OR s_from.name = 'Filling' OR s_to.name = 'Packaging')
+          THEN COALESCE(sm.atomizer_qty_used, sm.qty_moved) 
+          ELSE 0 
+        END
+      ), 0) AS qty_used,
       COALESCE(SUM(
         CASE 
           WHEN s_to.name = 'Scrap / Defect' THEN COALESCE(sm.atomizer_qty_used, sm.qty_moved)
@@ -810,7 +828,7 @@ WITH
           ELSE 0 
         END
       ), 0) AS qty_scrapped,
-      COUNT(sm.id) AS movement_count
+      COUNT(DISTINCT sm.batch_id) AS movement_count
     FROM stage_movements sm
     LEFT JOIN stages s_to ON s_to.id = sm.to_stage_id
     LEFT JOIN stages s_from ON s_from.id = sm.from_stage_id
@@ -820,7 +838,14 @@ WITH
   box_moves_agg AS (
     SELECT 
       sm.box_item_id AS item_id,
-      COALESCE(SUM(CASE WHEN s_to.name <> 'Scrap / Defect' AND (s_from.name IS NULL OR s_from.name <> 'Scrap / Defect') THEN COALESCE(sm.box_qty_used, sm.qty_moved) ELSE 0 END), 0) AS qty_used,
+      COALESCE(SUM(
+        CASE 
+          WHEN s_to.name <> 'Scrap / Defect' AND (s_from.name IS NULL OR s_from.name <> 'Scrap / Defect') 
+               AND (s_from.sequence_no <= 5 OR s_from.name = 'Packaging' OR s_to.name = 'Ready')
+          THEN COALESCE(sm.box_qty_used, sm.qty_moved) 
+          ELSE 0 
+        END
+      ), 0) AS qty_used,
       COALESCE(SUM(
         CASE 
           WHEN s_to.name = 'Scrap / Defect' THEN COALESCE(sm.box_qty_used, sm.qty_moved)
@@ -828,7 +853,7 @@ WITH
           ELSE 0 
         END
       ), 0) AS qty_scrapped,
-      COUNT(sm.id) AS movement_count
+      COUNT(DISTINCT sm.batch_id) AS movement_count
     FROM stage_movements sm
     LEFT JOIN stages s_to ON s_to.id = sm.to_stage_id
     LEFT JOIN stages s_from ON s_from.id = sm.from_stage_id
@@ -878,6 +903,7 @@ CREATE OR REPLACE FUNCTION record_split_movement_and_scrap(
   p_qty_scrapped integer DEFAULT 0,
   p_scrap_reason text DEFAULT 'Defect / Damage on transfer',
   p_scrap_stage_id uuid DEFAULT NULL,
+  p_variant_name text DEFAULT NULL,
   p_cap_name text DEFAULT NULL,
   p_atomizer_name text DEFAULT NULL,
   p_box_name text DEFAULT NULL,
@@ -910,6 +936,7 @@ BEGIN
       to_stage_id,
       qty_moved,
       moved_on,
+      variant_name,
       cap_name,
       atomizer_name,
       box_name,
@@ -929,6 +956,7 @@ BEGIN
       p_to_stage_id,
       p_qty_forward,
       COALESCE(p_moved_on, current_date),
+      p_variant_name,
       p_cap_name,
       p_atomizer_name,
       p_box_name,
@@ -1022,6 +1050,7 @@ BEGIN
         to_stage_id,
         qty_moved,
         moved_on,
+        variant_name,
         color,
         printing_design,
         cap_name,
@@ -1041,6 +1070,7 @@ BEGIN
         p_to_stage_id,
         v_qty,
         COALESCE(p_moved_on, current_date),
+        NULLIF(v_elem->>'variant_name', ''),
         NULLIF(v_elem->>'color', ''),
         NULLIF(v_elem->>'printing_design', ''),
         NULLIF(v_elem->>'cap_name', ''),

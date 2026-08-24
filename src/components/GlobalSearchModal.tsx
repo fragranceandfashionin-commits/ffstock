@@ -193,16 +193,17 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
       for (const d of dispatches) {
         const matchInvoice = (d.invoice_no || '').toLowerCase().includes(q);
         const matchCust = (d.customer_name || '').toLowerCase().includes(q);
+        const matchVariant = (d.variant_name || '').toLowerCase().includes(q);
         const matchSpecs = (d.product_specs || '').toLowerCase().includes(q);
         const matchColor = (d.color || '').toLowerCase().includes(q);
 
-        if (matchInvoice || matchCust || matchSpecs || matchColor) {
+        if (matchInvoice || matchCust || matchVariant || matchSpecs || matchColor) {
           res.push({
             type: 'dispatch',
             id: `dispatch-${d.id}`,
-            title: `Invoice #${d.invoice_no || '—'}`,
+            title: `Invoice #${d.invoice_no || '—'}${d.variant_name ? ` • 🏷️ ${d.variant_name}` : ''}`,
             subtitle: `Customer: ${d.customer_name} • Shipped: ${formatNumber(d.qty)} pcs`,
-            tag: 'Customer Order',
+            tag: d.variant_name ? `🏷️ ${d.variant_name}` : 'Customer Order',
             meta: `Dispatched ${formatDate(d.dispatched_on)}`,
             dispatch: d,
           });
@@ -233,19 +234,20 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
     // 5. Search Movements & Operations
     if (activeCategory === 'ALL' || activeCategory === 'movement') {
       for (const m of movements) {
+        const matchVariant = (m.variant_name || '').toLowerCase().includes(q);
         const matchRemarks = (m.remarks || '').toLowerCase().includes(q);
         const matchDoneBy = (m.done_by || '').toLowerCase().includes(q);
         const matchCap = (m.cap_name || '').toLowerCase().includes(q);
         const matchAtomizer = (m.atomizer_name || '').toLowerCase().includes(q);
         const matchBox = (m.box_name || '').toLowerCase().includes(q);
 
-        if (matchRemarks || matchDoneBy || matchCap || matchAtomizer || matchBox) {
+        if (matchVariant || matchRemarks || matchDoneBy || matchCap || matchAtomizer || matchBox) {
           res.push({
             type: 'movement',
             id: `movement-${m.id}`,
-            title: `Movement: ${formatNumber(m.qty_moved)} pcs (${m.from_stage?.name ?? 'Stage'} → ${m.to_stage?.name ?? 'Stage'})`,
+            title: `Movement: ${formatNumber(m.qty_moved)} pcs (${m.from_stage?.name ?? 'Stage'} → ${m.to_stage?.name ?? 'Stage'})${m.variant_name ? ` • 🏷️ ${m.variant_name}` : ''}`,
             subtitle: m.remarks ? `Remarks: "${m.remarks}"` : `Logged on ${formatDate(m.moved_on)}`,
-            tag: m.done_by ? `By: ${m.done_by}` : 'Movement',
+            tag: m.variant_name ? `🏷️ ${m.variant_name}` : (m.done_by ? `By: ${m.done_by}` : 'Movement'),
             meta: `${formatDate(m.moved_on)}`,
             movement: m,
           });

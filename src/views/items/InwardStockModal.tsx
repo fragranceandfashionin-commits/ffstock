@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { PackagePlus, Sparkles, PlusCircle, Plus, Check, RotateCcw, Box } from 'lucide-react';
 import { Modal, Field, inputClass, Button, ErrorBanner, Dropzone } from '@/components/ui';
 import { insertInwardBatch } from '@/lib/queries';
-import { supabase, type Item, type Supplier, type ComponentStockSummary } from '@/lib/supabase';
+import { supabase, type Item, type Supplier, type ComponentStockSummary, type BatchWithRelations } from '@/lib/supabase';
 import { getErrorMessage, formatNumber, getTodayDateString } from '@/lib/utils';
 import { useToast } from '@/components/Toast';
 import { QuickSupplierModal } from './QuickSupplierModal';
@@ -14,6 +14,7 @@ export type InwardStockModalProps = {
   onClose: () => void;
   items: Item[];
   suppliers: Supplier[];
+  batches?: BatchWithRelations[];
   caps?: Item[];
   atomizers?: Item[];
   boxes?: Item[];
@@ -29,6 +30,7 @@ export function InwardStockModal({
   onClose,
   items: initialItems,
   suppliers: initialSuppliers,
+  batches = [],
   preselectedItemId,
   onBatchCreated,
   onSupplierCreated,
@@ -37,6 +39,19 @@ export function InwardStockModal({
   // Local items & suppliers lists to ensure instant local updates when (+) modals are used
   const [localItems, setLocalItems] = useState<Item[]>(initialItems);
   const [localSuppliers, setLocalSuppliers] = useState<Supplier[]>(initialSuppliers);
+
+  // Extract distinct known brands from past batches for auto-suggestion
+  const knownBrands = useMemo<string[]>(() => {
+    const brandSet = new Set<string>();
+    for (const b of batches) {
+      if (b.brand_name && b.brand_name.trim()) {
+        brandSet.add(b.brand_name.trim());
+      }
+    }
+    return Array.from(brandSet).sort((a, b) => a.localeCompare(b));
+  }, [batches]);
+
+
 
   // Consignment / Shipment Context (Shared across consecutive batches)
   const [brandName, setBrandName] = useState('');
@@ -408,7 +423,8 @@ export function InwardStockModal({
               >
                 <input
                   id="inward-brand"
-                  className={`${inputClass} font-bold`}
+                  list="inward-brand-suggestions"
+                  className={`${inputClass} font-bold text-slate-950`}
                   value={brandName}
                   onChange={(e) => {
                     setBrandName(e.target.value);
@@ -418,7 +434,34 @@ export function InwardStockModal({
                   }}
                   placeholder="e.g. Royal Club, Bella Vita"
                 />
+                <datalist id="inward-brand-suggestions">
+                  {knownBrands.map((kb) => (
+                    <option key={kb} value={kb} />
+                  ))}
+                </datalist>
+
+                {knownBrands.length > 0 && (
+                  <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                      Recent Brands:
+                    </span>
+                    {knownBrands.slice(0, 4).map((kb) => (
+                      <button
+                        key={kb}
+                        type="button"
+                        onClick={() => {
+                          setBrandName(kb);
+                          generateSmartBatchNo(kb);
+                        }}
+                        className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-900 border border-amber-200 hover:border-amber-300 text-[10px] font-bold hover:bg-amber-100 transition cursor-pointer shadow-2xs"
+                      >
+                        🏢 {kb}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </Field>
+
 
               <Field
                 label="3. Batch No / Lot Code"

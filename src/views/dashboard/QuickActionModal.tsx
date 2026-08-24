@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Zap, Flame, Truck, CheckCircle2, AlertTriangle, AlertCircle } from 'lucide-react';
 import { Modal, Field, Button, ErrorBanner, Badge, ColorChipsInput, PrintingChipsInput } from '@/components/ui';
+import { BatchSearchSelect } from '@/components/BatchSearchSelect';
 import type { BatchWithRelations, Stage, Item, ComponentStockSummary } from '@/lib/supabase';
 import { SCRAP_REASONS, COMMON_COLORS, COMMON_PRINTING_DESIGNS } from '@/lib/supabase';
 import { insertStageMovement, insertScrapMovement, insertDispatch } from '@/lib/queries';
@@ -19,6 +20,7 @@ export type QuickActionModalProps = {
   boxes: Item[];
   calculations: DashboardCalculations;
   onSuccess: () => Promise<void>;
+  onNavigateToOutward?: (batchId: string) => void;
 };
 
 export function QuickActionModal({
@@ -33,12 +35,14 @@ export function QuickActionModal({
   boxes,
   calculations,
   onSuccess,
+  onNavigateToOutward,
 }: QuickActionModalProps) {
   const [tab, setTab] = useState<'move' | 'scrap' | 'dispatch'>(initialTab);
   const [batchId, setBatchId] = useState(initialBatchId || (batches[0]?.id ?? ''));
   const [fromStageId, setFromStageId] = useState('');
   const [toStageId, setToStageId] = useState('');
   const [qty, setQty] = useState('');
+  const [variantName, setVariantName] = useState('');
   const [scrapReason, setScrapReason] = useState<string>(SCRAP_REASONS[0]);
   const [color, setColor] = useState('');
   const [printingDesign, setPrintingDesign] = useState('');
@@ -66,6 +70,7 @@ export function QuickActionModal({
       const targetBatchId = initialBatchId || (batches[0]?.id ?? '');
       setBatchId(targetBatchId);
       setQty('');
+      setVariantName('');
       setScrapReason(SCRAP_REASONS[0]);
       setColor('');
       setPrintingDesign('');
@@ -145,6 +150,11 @@ export function QuickActionModal({
     return fromName.includes('fill') || fromName.includes('assembly');
   }, [stages, fromStageId]);
 
+  const isLeavingPackaging = useMemo(() => {
+    const fromName = stages.find((s) => s.id === fromStageId)?.name?.toLowerCase() || '';
+    return fromName.includes('pack') || fromName.includes('box') || fromName.includes('monocarton');
+  }, [stages, fromStageId]);
+
   const isFillingStage = useMemo(() => {
     const fromName = stages.find((s) => s.id === fromStageId)?.name?.toLowerCase() || '';
     const toName = stages.find((s) => s.id === toStageId)?.name?.toLowerCase() || '';
@@ -156,6 +166,40 @@ export function QuickActionModal({
     const toName = stages.find((s) => s.id === toStageId)?.name?.toLowerCase() || '';
     return fromName.includes('pack') || toName.includes('pack');
   }, [stages, fromStageId, toStageId]);
+
+  // Auto-populate variant and specifications from stage-specific or historical batch movements
+  useEffect(() => {
+    if (selectedBatchItem) {
+      const stageInboundMoves = fromStageId
+        ? selectedBatchItem.movements?.filter((m) => m.to_stage_id === fromStageId)
+        : [];
+      const latestStageMove =
+        stageInboundMoves && stageInboundMoves.length > 0
+          ? stageInboundMoves.slice().reverse().find((m) => m.variant_name?.trim() || m.color)
+          : null;
+
+      const fallbackMove = selectedBatchItem.movements
+        ?.slice()
+        .reverse()
+        .find((m) => m.variant_name?.trim() || m.color || m.printing_design);
+
+      const targetM = latestStageMove || fallbackMove;
+
+      const brand = selectedBatchItem.batch.brand_name?.trim() || selectedBatchItem.batch.item?.name?.trim() || 'Variant';
+      const defaultColor = targetM?.color || selectedBatchItem.batch.color || '';
+      const defaultVariant =
+        targetM?.variant_name?.trim() ||
+        (defaultColor && defaultColor.toLowerCase() !== 'clear' ? `${brand} - ${defaultColor}` : brand);
+      const defaultPrint = targetM?.printing_design || '';
+
+      setVariantName(defaultVariant);
+      if (defaultColor) setColor(defaultColor);
+      if (defaultPrint) setPrintingDesign(defaultPrint);
+      if (selectedBatchItem.resolvedCapName) setCapName(selectedBatchItem.resolvedCapName);
+      if (selectedBatchItem.resolvedAtomizerName) setAtomizerName(selectedBatchItem.resolvedAtomizerName);
+      if (selectedBatchItem.resolvedBoxName) setBoxName(selectedBatchItem.resolvedBoxName);
+    }
+  }, [selectedBatchItem, fromStageId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -220,12 +264,16 @@ export function QuickActionModal({
 
       setSubmitting(true);
       try {
+        const latestM = selectedBatchItem?.movements?.slice().reverse().find((m) => m.variant_name?.trim());
+        const resolvedVariantName = variantName.trim() || latestM?.variant_name?.trim() || null;
+
         await insertStageMovement({
           batch_id: batchId,
           from_stage_id: fromStageId,
           to_stage_id: toStageId,
           qty_moved: qtyNum,
           moved_on: getTodayDateString(),
+          variant_name: resolvedVariantName,
           color: color.trim() || null,
           printing_design: printingDesign.trim() || null,
           cap_item_id: capItemId || null,
@@ -265,11 +313,17 @@ export function QuickActionModal({
 
       setSubmitting(true);
       try {
+        const latestM = selectedBatchItem?.movements?.slice().reverse().find((m) => m.variant_name?.trim());
+        const resolvedVariantName = variantName.trim() || latestM?.variant_name?.trim() || null;
+
         await insertScrapMovement({
           batch_id: batchId,
           from_stage_id: fromStageId,
           qty_scrapped: qtyNum,
           reason: scrapReason,
+          variant_name: resolvedVariantName,
+          color: color.trim() || null,
+          printing_design: printingDesign.trim() || null,
           remarks: remarks.trim() || null,
           done_by: doneBy.trim() || null,
           stages,
@@ -299,12 +353,16 @@ export function QuickActionModal({
 
       setSubmitting(true);
       try {
+        const latestM = selectedBatchItem?.movements?.slice().reverse().find((m) => m.variant_name?.trim());
+        const resolvedVariantName = variantName.trim() || latestM?.variant_name?.trim() || null;
+
         await insertDispatch({
           batch_id: batchId,
           customer_name: customerName.trim(),
           invoice_no: invoiceNo.trim(),
           qty: qtyNum,
           dispatched_on: dispatchDate,
+          variant_name: resolvedVariantName,
           product_specs: remarks.trim() || null,
         });
         setSuccess(`Successfully recorded shipment of ${formatNumber(qtyNum)} units.`);
@@ -377,12 +435,16 @@ export function QuickActionModal({
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Batch Selector */}
-          <Field label="Select Batch / Party" required>
-            <select
-              value={batchId}
-              onChange={(e) => {
-                setBatchId(e.target.value);
-                const bItem = calculations.batchMatrix.find((bm) => bm.batch.id === e.target.value);
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+              Select Batch / Party <span className="text-rose-500 font-bold">*</span>
+            </label>
+            <BatchSearchSelect
+              batches={batches}
+              selectedBatchId={batchId}
+              onSelectBatch={(newBatchId) => {
+                setBatchId(newBatchId);
+                const bItem = calculations.batchMatrix.find((bm) => bm.batch.id === newBatchId);
                 if (bItem && bItem.activeStages.length > 0) {
                   setFromStageId(bItem.activeStages[0].stageId);
                   const currentSeq = bItem.activeStages[0].sequenceNo;
@@ -390,16 +452,10 @@ export function QuickActionModal({
                   if (nextStage) setToStageId(nextStage.id);
                 }
               }}
-              className={inputClass}
-              required
-            >
-              {batches.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.brand_name ? `[${b.brand_name}] Batch ${b.batch_no}` : `Batch ${b.batch_no}`} — {b.item?.name ?? 'Item'} ({formatNumber(b.qty_received)} inward)
-                </option>
-              ))}
-            </select>
-          </Field>
+              placeholder="Search or pick batch..."
+              compact={false}
+            />
+          </div>
 
           {/* Stage Move Fields */}
           {tab === 'move' ? (
@@ -478,6 +534,35 @@ export function QuickActionModal({
                 </div>
               </Field>
 
+              <Field label="Variant Name (Optional)">
+                <input
+                  type="text"
+                  value={variantName}
+                  onChange={(e) => setVariantName(e.target.value)}
+                  placeholder="e.g. Velvet Night 50ml, SKU-101…"
+                  className={inputClass}
+                />
+              </Field>
+
+              {onNavigateToOutward && (
+                <div className="flex items-center justify-between p-2.5 rounded-xl bg-indigo-50/80 border border-indigo-200">
+                  <div className="text-xs text-indigo-950">
+                    <span className="font-extrabold flex items-center gap-1">🎨 Multi-Variant Split & Matrix</span>
+                    <p className="text-[11px] text-indigo-700">Split into multiple colors, prints or variant rows simultaneously.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose();
+                      onNavigateToOutward(batchId);
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shrink-0 shadow-2xs cursor-pointer"
+                  >
+                    Open Matrix ➔
+                  </button>
+                </div>
+              )}
+
               {/* Coloring Stage */}
               {(isColoringStage || (!isPrintingStage && !isFillingStage && !isPackagingStage)) && (
                 <div className="rounded-xl border border-sky-200 bg-sky-50/30 p-3.5 space-y-2">
@@ -508,32 +593,24 @@ export function QuickActionModal({
                 </div>
               )}
 
-              {/* Filling Stage */}
-              {isFillingStage && (
-                <div className={`rounded-xl border p-3.5 space-y-3 shadow-2xs ${
-                  isLeavingFilling ? 'border-violet-300 bg-gradient-to-r from-violet-50/90 to-sky-50/70 ring-1 ring-violet-200' : 'border-violet-200 bg-gradient-to-r from-violet-50/80 to-sky-50/80'
-                }`}>
+              {/* Filling Stage (Caps & Atomizers Assembly) */}
+              {isLeavingFilling ? (
+                <div className="rounded-xl border p-3.5 space-y-3 shadow-2xs border-violet-300 bg-gradient-to-r from-violet-50/90 to-sky-50/70 ring-1 ring-violet-200">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-black uppercase tracking-wider text-violet-900 flex items-center gap-1.5">
                       🧴 Caps & 💨 Atomizers Assembly (Filling Stage)
-                      {isLeavingFilling && <span className="text-rose-600 font-extrabold text-sm">*</span>}
+                      <span className="text-rose-600 font-extrabold text-sm">*</span>
                     </span>
-                    {isLeavingFilling ? (
-                      <Badge label="Mandatory for Advance" variant="rose" size="sm" />
-                    ) : (
-                      <Badge label="Filling BOM Stock" variant="violet" size="sm" />
-                    )}
+                    <Badge label="Mandatory for Advance" variant="rose" size="sm" />
                   </div>
-                  {isLeavingFilling && (
-                    <p className="text-[11px] text-violet-900 font-semibold leading-relaxed">
-                      ⚠️ Bottles cannot move from the Filling stage without assembling an Atomizer pump and Cap closure.
-                    </p>
-                  )}
+                  <p className="text-[11px] text-violet-900 font-semibold leading-relaxed">
+                    ⚠️ Bottles cannot move from the Filling stage without assembling an Atomizer pump and Cap closure.
+                  </p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <Field label={`Cap / Closure (Warehouse Stock)${isLeavingFilling ? ' *' : ''}`} required={isLeavingFilling}>
+                    <Field label="Cap / Closure (Warehouse Stock) *" required>
                       <select
                         className={`${inputClass} ${
-                          isLeavingFilling && !capItemId && !capName.trim() ? 'border-amber-300 bg-amber-50/30' : ''
+                          !capItemId && !capName.trim() ? 'border-amber-300 bg-amber-50/30' : ''
                         }`}
                         value={capItemId}
                         onChange={(e) => {
@@ -575,17 +652,17 @@ export function QuickActionModal({
                         }
                         return null;
                       })()}
-                      {isLeavingFilling && !capItemId && !capName.trim() && (
+                      {!capItemId && !capName.trim() && (
                         <div className="mt-1 text-[11px] font-semibold text-rose-600 flex items-center gap-1">
                           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
                           <span>Cap closure is required.</span>
                         </div>
                       )}
                     </Field>
-                    <Field label={`Atomizer / Pump (Warehouse Stock)${isLeavingFilling ? ' *' : ''}`} required={isLeavingFilling}>
+                    <Field label="Atomizer / Pump (Warehouse Stock) *" required>
                       <select
                         className={`${inputClass} ${
-                          isLeavingFilling && !atomizerItemId && !atomizerName.trim() ? 'border-amber-300 bg-amber-50/30' : ''
+                          !atomizerItemId && !atomizerName.trim() ? 'border-amber-300 bg-amber-50/30' : ''
                         }`}
                         value={atomizerItemId}
                         onChange={(e) => {
@@ -627,7 +704,7 @@ export function QuickActionModal({
                         }
                         return null;
                       })()}
-                      {isLeavingFilling && !atomizerItemId && !atomizerName.trim() && (
+                      {!atomizerItemId && !atomizerName.trim() && (
                         <div className="mt-1 text-[11px] font-semibold text-rose-600 flex items-center gap-1">
                           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
                           <span>Atomizer pump is required.</span>
@@ -656,10 +733,21 @@ export function QuickActionModal({
                     </Field>
                   </div>
                 </div>
-              )}
+              ) : (capName || atomizerName) ? (
+                <div className="rounded-xl border border-violet-200 bg-violet-50/50 p-3 flex items-center justify-between gap-2 shadow-2xs">
+                  <div className="flex items-center gap-2 text-xs font-bold text-violet-950">
+                    <span>🧴 Assembled:</span>
+                    {capName && <span className="bg-white px-2 py-0.5 rounded border border-violet-200">Cap: {capName}</span>}
+                    {atomizerName && <span className="bg-white px-2 py-0.5 rounded border border-sky-200 text-sky-900">Pump: {atomizerName}</span>}
+                  </div>
+                  <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded">
+                    ✓ Assembled at Filling
+                  </span>
+                </div>
+              ) : null}
 
-              {/* Packaging Stage */}
-              {isPackagingStage && (
+              {/* Packaging Stage (Box / Monocarton Packaging) */}
+              {(isLeavingPackaging || (isLeavingFilling && stages.find((s) => s.id === toStageId)?.name?.toLowerCase().includes('ready'))) && (
                 <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3.5 space-y-3 shadow-2xs">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-black uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
@@ -842,6 +930,16 @@ export function QuickActionModal({
                   />
                 </Field>
               </div>
+
+              <Field label="Variant Name (Optional)">
+                <input
+                  type="text"
+                  value={variantName}
+                  onChange={(e) => setVariantName(e.target.value)}
+                  placeholder="e.g. Velvet Night 50ml, SKU-101…"
+                  className={inputClass}
+                />
+              </Field>
 
               <Field
                 label="Dispatch Quantity (from Ready stage)"
