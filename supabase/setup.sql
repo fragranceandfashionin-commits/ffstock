@@ -598,8 +598,18 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
   IF TG_OP = 'UPDATE' THEN
-    RAISE EXCEPTION 'Batch details cannot be edited. The batch is the source of truth for its quantity.';
+    -- Prevent altering immutable financial and intake ledger columns
+    IF NEW.qty_received <> OLD.qty_received
+       OR NEW.item_id <> OLD.item_id
+       OR NEW.supplier_id <> OLD.supplier_id
+       OR NEW.received_on <> OLD.received_on
+       OR NEW.id <> OLD.id THEN
+      RAISE EXCEPTION 'Core batch ledger quantities, item, supplier, and received date cannot be edited. The batch is the source of truth for its intake quantity.';
+    END IF;
+    -- Non-financial metadata updates (brand_name, location, image_url, color, component item IDs) are permitted
+    RETURN NEW;
   END IF;
+
   -- DELETE: only while nothing downstream references this batch.
   IF EXISTS (SELECT 1 FROM stage_movements sm WHERE sm.batch_id = OLD.id)
      OR EXISTS (SELECT 1 FROM dispatches d WHERE d.batch_id = OLD.id) THEN
@@ -618,6 +628,10 @@ CREATE TRIGGER allow_empty_batch_delete_inward_batches
 DROP POLICY IF EXISTS "shared_delete_inward_batches" ON inward_batches;
 CREATE POLICY "shared_delete_inward_batches"
   ON inward_batches FOR DELETE TO anon, authenticated USING (true);
+
+DROP POLICY IF EXISTS "shared_update_inward_batches" ON inward_batches;
+CREATE POLICY "shared_update_inward_batches"
+  ON inward_batches FOR UPDATE TO anon, authenticated USING (true) WITH CHECK (true);
 
 -- ============================================================
 -- PART 6: Scrap / Defect Tracking & Concurrent Stage Movement Validation
@@ -1128,6 +1142,203 @@ BEGIN
   );
 END;
 $$;
+
+-- ============================================================
+-- PART 11: Item Stock Receipts Table & Unified Component Stock View
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS item_stock_receipts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  item_id uuid NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  supplier_id uuid REFERENCES suppliers(id) ON DELETE SET NULL,
+  qty integer NOT NULL CHECK (qty > 0),
+  received_on date NOT NULL DEFAULT current_date,
+  invoice_no text,
+  location text,
+  remarks text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS item_stock_receipts_item_id_idx ON item_stock_receipts(item_id);
+CREATE INDEX IF NOT EXISTS item_stock_receipts_received_on_idx ON item_stock_receipts(received_on DESC);
+
+ALTER TABLE item_stock_receipts ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+  DROP POLICY IF EXISTS "shared_select_item_stock_receipts" ON item_stock_receipts;
+  DROP POLICY IF EXISTS "shared_insert_item_stock_receipts" ON item_stock_receipts;
+  DROP POLICY IF EXISTS "shared_update_item_stock_receipts" ON item_stock_receipts;
+  DROP POLICY IF EXISTS "shared_delete_item_stock_receipts" ON item_stock_receipts;
+
+  CREATE POLICY "shared_select_item_stock_receipts" ON item_stock_receipts FOR SELECT TO anon, authenticated USING (true);
+  CREATE POLICY "shared_insert_item_stock_receipts" ON item_stock_receipts FOR INSERT TO anon, authenticated WITH CHECK (true);
+  CREATE POLICY "shared_update_item_stock_receipts" ON item_stock_receipts FOR UPDATE TO anon, authenticated USING (true) WITH CHECK (true);
+  CREATE POLICY "shared_delete_item_stock_receipts" ON item_stock_receipts FOR DELETE TO anon, authenticated USING (true);
+END $$;
+
+ALTER TABLE inward_batches ADD COLUMN IF NOT EXISTS brand_name text;
+CREATE INDEX IF NOT EXISTS idx_inward_batches_brand_name ON inward_batches(brand_name);
+
+CREATE OR REPLACE VIEW v_component_stock
+WITH (security_invoker = true) AS
+WITH
+  receipts_agg AS (
+    SELECT item_id, COALESCE(SUM(qty), 0) AS qty, COUNT(id) AS receipt_count
+    FROM item_stock_receipts
+    GROUP BY item_id
+  ),
+  direct_batches_agg AS (
+    SELECT item_id, COALESCE(SUM(qty_received), 0) AS qty, COUNT(id) AS batch_count
+    FROM inward_batches
+    GROUP BY item_id
+  ),
+  attached_caps_agg AS (
+    SELECT cap_item_id AS item_id, COALESCE(SUM(COALESCE(cap_qty, qty_received)), 0) AS qty, COUNT(id) AS batch_count
+    FROM inward_batches
+    WHERE cap_item_id IS NOT NULL AND (item_id IS NULL OR cap_item_id <> item_id)
+    GROUP BY cap_item_id
+  ),
+  attached_atomizers_agg AS (
+    SELECT atomizer_item_id AS item_id, COALESCE(SUM(COALESCE(atomizer_qty, qty_received)), 0) AS qty, COUNT(id) AS batch_count
+    FROM inward_batches
+    WHERE atomizer_item_id IS NOT NULL 
+      AND (item_id IS NULL OR atomizer_item_id <> item_id)
+      AND (cap_item_id IS NULL OR atomizer_item_id <> cap_item_id)
+    GROUP BY atomizer_item_id
+  ),
+  attached_boxes_agg AS (
+    SELECT box_item_id AS item_id, COALESCE(SUM(COALESCE(box_qty, qty_received)), 0) AS qty, COUNT(id) AS batch_count
+    FROM inward_batches
+    WHERE box_item_id IS NOT NULL 
+      AND (item_id IS NULL OR box_item_id <> item_id)
+      AND (cap_item_id IS NULL OR box_item_id <> cap_item_id)
+      AND (atomizer_item_id IS NULL OR box_item_id <> atomizer_item_id)
+    GROUP BY box_item_id
+  ),
+  cap_moves_agg AS (
+    SELECT 
+      sm.cap_item_id AS item_id,
+      COALESCE(SUM(
+        CASE 
+          WHEN s_to.name = 'Scrap / Defect' OR s_from.name = 'Scrap / Defect' THEN 0
+          -- Forward milestone assembly
+          WHEN (s_from.name = 'Filling' OR (s_from.sequence_no <= 4 AND s_to.sequence_no > 4))
+               AND NOT (COALESCE(sm.remarks, '') ILIKE '%[REVERSAL%' OR (s_from.sequence_no > s_to.sequence_no))
+          THEN COALESCE(sm.cap_qty_used, sm.qty_moved)
+          -- Reverse milestone return
+          WHEN (s_to.name = 'Filling' OR (s_from.sequence_no > 4 AND s_to.sequence_no <= 4))
+               AND (COALESCE(sm.remarks, '') ILIKE '%[REVERSAL%' OR (s_from.sequence_no > s_to.sequence_no))
+          THEN -COALESCE(sm.cap_qty_used, sm.qty_moved)
+          ELSE 0 
+        END
+      ), 0) AS qty_used,
+      COALESCE(SUM(
+        CASE 
+          WHEN s_to.name = 'Scrap / Defect' THEN COALESCE(sm.cap_qty_used, sm.qty_moved)
+          WHEN s_from.name = 'Scrap / Defect' THEN -COALESCE(sm.cap_qty_used, sm.qty_moved)
+          ELSE 0 
+        END
+      ), 0) AS qty_scrapped,
+      COUNT(DISTINCT sm.batch_id) AS movement_count
+    FROM stage_movements sm
+    LEFT JOIN stages s_to ON s_to.id = sm.to_stage_id
+    LEFT JOIN stages s_from ON s_from.id = sm.from_stage_id
+    WHERE sm.cap_item_id IS NOT NULL
+    GROUP BY sm.cap_item_id
+  ),
+  atomizer_moves_agg AS (
+    SELECT 
+      sm.atomizer_item_id AS item_id,
+      COALESCE(SUM(
+        CASE 
+          WHEN s_to.name = 'Scrap / Defect' OR s_from.name = 'Scrap / Defect' THEN 0
+          -- Forward milestone assembly
+          WHEN (s_from.name = 'Filling' OR (s_from.sequence_no <= 4 AND s_to.sequence_no > 4))
+               AND NOT (COALESCE(sm.remarks, '') ILIKE '%[REVERSAL%' OR (s_from.sequence_no > s_to.sequence_no))
+          THEN COALESCE(sm.atomizer_qty_used, sm.qty_moved)
+          -- Reverse milestone return
+          WHEN (s_to.name = 'Filling' OR (s_from.sequence_no > 4 AND s_to.sequence_no <= 4))
+               AND (COALESCE(sm.remarks, '') ILIKE '%[REVERSAL%' OR (s_from.sequence_no > s_to.sequence_no))
+          THEN -COALESCE(sm.atomizer_qty_used, sm.qty_moved)
+          ELSE 0 
+        END
+      ), 0) AS qty_used,
+      COALESCE(SUM(
+        CASE 
+          WHEN s_to.name = 'Scrap / Defect' THEN COALESCE(sm.atomizer_qty_used, sm.qty_moved)
+          WHEN s_from.name = 'Scrap / Defect' THEN -COALESCE(sm.atomizer_qty_used, sm.qty_moved)
+          ELSE 0 
+        END
+      ), 0) AS qty_scrapped,
+      COUNT(DISTINCT sm.batch_id) AS movement_count
+    FROM stage_movements sm
+    LEFT JOIN stages s_to ON s_to.id = sm.to_stage_id
+    LEFT JOIN stages s_from ON s_from.id = sm.from_stage_id
+    WHERE sm.atomizer_item_id IS NOT NULL
+    GROUP BY sm.atomizer_item_id
+  ),
+  box_moves_agg AS (
+    SELECT 
+      sm.box_item_id AS item_id,
+      COALESCE(SUM(
+        CASE 
+          WHEN s_to.name = 'Scrap / Defect' OR s_from.name = 'Scrap / Defect' THEN 0
+          -- Forward milestone packaging
+          WHEN (s_from.name = 'Packaging' OR (s_from.sequence_no <= 5 AND s_to.sequence_no > 5))
+               AND NOT (COALESCE(sm.remarks, '') ILIKE '%[REVERSAL%' OR (s_from.sequence_no > s_to.sequence_no))
+          THEN COALESCE(sm.box_qty_used, sm.qty_moved)
+          -- Reverse milestone return
+          WHEN (s_to.name = 'Packaging' OR (s_from.sequence_no > 5 AND s_to.sequence_no <= 5))
+               AND (COALESCE(sm.remarks, '') ILIKE '%[REVERSAL%' OR (s_from.sequence_no > s_to.sequence_no))
+          THEN -COALESCE(sm.box_qty_used, sm.qty_moved)
+          ELSE 0 
+        END
+      ), 0) AS qty_used,
+      COALESCE(SUM(
+        CASE 
+          WHEN s_to.name = 'Scrap / Defect' THEN COALESCE(sm.box_qty_used, sm.qty_moved)
+          WHEN s_from.name = 'Scrap / Defect' THEN -COALESCE(sm.box_qty_used, sm.qty_moved)
+          ELSE 0 
+        END
+      ), 0) AS qty_scrapped,
+      COUNT(DISTINCT sm.batch_id) AS movement_count
+    FROM stage_movements sm
+    LEFT JOIN stages s_to ON s_to.id = sm.to_stage_id
+    LEFT JOIN stages s_from ON s_from.id = sm.from_stage_id
+    WHERE sm.box_item_id IS NOT NULL
+    GROUP BY sm.box_item_id
+  ),
+  dispatches_box_agg AS (
+    SELECT box_item_id AS item_id, COALESCE(SUM(qty), 0) AS qty
+    FROM dispatches
+    WHERE box_item_id IS NOT NULL
+    GROUP BY box_item_id
+  )
+SELECT
+  i.id AS item_id,
+  i.name AS item_name,
+  i.category,
+  i.unit,
+  (COALESCE(r.qty, 0) + COALESCE(db.qty, 0) + COALESCE(ac.qty, 0) + COALESCE(aa.qty, 0) + COALESCE(ab.qty, 0)) AS total_inwarded,
+  (COALESCE(r.receipt_count, 0) + COALESCE(db.batch_count, 0) + COALESCE(ac.batch_count, 0) + COALESCE(aa.batch_count, 0) + COALESCE(ab.batch_count, 0)) AS inward_batch_count,
+  GREATEST(0, (COALESCE(cm.qty_used, 0) + COALESCE(am.qty_used, 0) + COALESCE(bm.qty_used, 0) + (CASE WHEN lower(i.category) = 'bottle' THEN COALESCE(db.qty, 0) ELSE 0 END))) AS total_used,
+  (COALESCE(cm.movement_count, 0) + COALESCE(am.movement_count, 0) + COALESCE(bm.movement_count, 0) + (CASE WHEN lower(i.category) = 'bottle' THEN COALESCE(db.batch_count, 0) ELSE 0 END)) AS used_in_batch_count,
+  GREATEST(0, (COALESCE(cm.qty_scrapped, 0) + COALESCE(am.qty_scrapped, 0) + COALESCE(bm.qty_scrapped, 0))) AS total_scrapped,
+  COALESCE(dbx.qty, 0) AS total_dispatched,
+  GREATEST(0, (COALESCE(r.qty, 0) + COALESCE(db.qty, 0) + COALESCE(ac.qty, 0) + COALESCE(aa.qty, 0) + COALESCE(ab.qty, 0)) 
+    - GREATEST(0, (COALESCE(cm.qty_used, 0) + COALESCE(am.qty_used, 0) + COALESCE(bm.qty_used, 0) + (CASE WHEN lower(i.category) = 'bottle' THEN COALESCE(db.qty, 0) ELSE 0 END)))
+    - GREATEST(0, (COALESCE(cm.qty_scrapped, 0) + COALESCE(am.qty_scrapped, 0) + COALESCE(bm.qty_scrapped, 0)))) AS available_stock
+FROM items i
+LEFT JOIN receipts_agg r ON r.item_id = i.id
+LEFT JOIN direct_batches_agg db ON db.item_id = i.id
+LEFT JOIN attached_caps_agg ac ON ac.item_id = i.id
+LEFT JOIN attached_atomizers_agg aa ON aa.item_id = i.id
+LEFT JOIN attached_boxes_agg ab ON ab.item_id = i.id
+LEFT JOIN cap_moves_agg cm ON cm.item_id = i.id
+LEFT JOIN atomizer_moves_agg am ON am.item_id = i.id
+LEFT JOIN box_moves_agg bm ON bm.item_id = i.id
+LEFT JOIN dispatches_box_agg dbx ON dbx.item_id = i.id;
 
 
 

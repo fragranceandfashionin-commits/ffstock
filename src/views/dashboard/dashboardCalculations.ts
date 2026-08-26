@@ -59,9 +59,9 @@ export function calculateDashboardMetrics({
   const referenceDate = asOfDate ? new Date(`${asOfDate}T23:59:59`) : new Date();
 
 
-  // Helper to determine if a batch is a primary Bottle batch vs a Component batch
-  const isBottleBatch = (b: BatchWithRelations) => {
-    const cat = (b.item?.category || 'Bottle').toLowerCase().trim();
+  // Helper to determine if a category/batch is a primary Bottle batch vs a Component batch
+  const isBottleCategory = (categoryStr?: string | null) => {
+    const cat = (categoryStr || 'Bottle').toLowerCase().trim();
     return (
       cat === 'bottle' ||
       (!cat.includes('cap') &&
@@ -74,6 +74,10 @@ export function calculateDashboardMetrics({
         !cat.includes('closure') &&
         !cat.includes('label'))
     );
+  };
+
+  const isBottleBatch = (b: BatchWithRelations) => {
+    return isBottleCategory(b.item?.category);
   };
 
   // Build fast lookup maps for ComponentStockSummary
@@ -388,16 +392,25 @@ export function calculateDashboardMetrics({
 
     const totalStageQty = batchesAtStage.reduce((sum, item) => sum + item.qty, 0);
     const bottlesQty = batchesAtStage
-      .filter((item) => item.category === 'Bottle')
+      .filter((item) => isBottleCategory(item.category))
       .reduce((sum, item) => sum + item.qty, 0);
     const capsQty = batchesAtStage
-      .filter((item) => item.category === 'Cap')
+      .filter((item) => {
+        const cat = (item.category || '').toLowerCase().trim();
+        return cat.includes('cap') || cat.includes('closure');
+      })
       .reduce((sum, item) => sum + item.qty, 0);
     const atomizersQty = batchesAtStage
-      .filter((item) => item.category === 'Atomizer')
+      .filter((item) => {
+        const cat = (item.category || '').toLowerCase().trim();
+        return cat.includes('atomizer') || cat.includes('pump') || cat.includes('spray');
+      })
       .reduce((sum, item) => sum + item.qty, 0);
     const boxesQty = batchesAtStage
-      .filter((item) => item.category === 'Packaging')
+      .filter((item) => {
+        const cat = (item.category || '').toLowerCase().trim();
+        return cat.includes('packaging') || cat.includes('pack') || cat.includes('box') || cat.includes('carton') || cat.includes('mono');
+      })
       .reduce((sum, item) => sum + item.qty, 0);
 
     return {
@@ -510,31 +523,25 @@ export function calculateDashboardMetrics({
   });
 
   // 4-Pillar Inventory Totals
-  const bottleBatches = batches.filter((b) => {
-    const cat = (b.item?.category || 'Bottle').toLowerCase().trim();
-    return cat.includes('bottle') || (!cat.includes('cap') && !cat.includes('atomizer') && !cat.includes('pump') && !cat.includes('spray') && !cat.includes('pack') && !cat.includes('box') && !cat.includes('carton'));
-  });
+  const bottleBatches = batches.filter(isBottleBatch);
   const totalBottlesInwarded = bottleBatches.reduce((s, b) => s + b.qty_received, 0);
   const totalBottlesDispatched = enrichedDispatches
-    .filter((d) => {
-      const cat = (d.batch?.item?.category || 'Bottle').toLowerCase().trim();
-      return cat.includes('bottle') || (!cat.includes('cap') && !cat.includes('atomizer') && !cat.includes('pump') && !cat.includes('spray') && !cat.includes('pack') && !cat.includes('box') && !cat.includes('carton'));
-    })
+    .filter((d) => isBottleCategory(d.batch?.item?.category))
     .reduce((s, d) => s + d.qty, 0);
   const totalBottlesInsideFactory = Math.max(0, totalBottlesInwarded - totalBottlesDispatched);
   const totalBottlesRaw = batchMatrix
-    .filter((bm) => {
-      const cat = (bm.batch.item?.category || 'Bottle').toLowerCase().trim();
-      return cat.includes('bottle') || (!cat.includes('cap') && !cat.includes('atomizer') && !cat.includes('pump') && !cat.includes('spray') && !cat.includes('pack') && !cat.includes('box') && !cat.includes('carton'));
-    })
+    .filter((bm) => isBottleBatch(bm.batch))
     .reduce((s, bm) => s + (bm.stageQuantities[rawStage?.id ?? ''] ?? 0), 0);
   const totalBottlesReady = batchMatrix
-    .filter((bm) => {
-      const cat = (bm.batch.item?.category || 'Bottle').toLowerCase().trim();
-      return cat.includes('bottle') || (!cat.includes('cap') && !cat.includes('atomizer') && !cat.includes('pump') && !cat.includes('spray') && !cat.includes('pack') && !cat.includes('box') && !cat.includes('carton'));
-    })
+    .filter((bm) => isBottleBatch(bm.batch))
     .reduce((s, bm) => s + (bm.stageQuantities[readyStage?.id ?? ''] ?? 0), 0);
-  const totalBottlesInProduction = Math.max(0, totalBottlesInsideFactory - totalBottlesRaw - totalBottlesReady - scrapTotal);
+  
+  const scrapStage = stages.find((s) => s.name === 'Scrap / Defect' || s.name.toLowerCase().includes('scrap'));
+  const totalBottlesScrapped = batchMatrix
+    .filter((bm) => isBottleBatch(bm.batch))
+    .reduce((s, bm) => s + (scrapStage ? (bm.stageQuantities[scrapStage.id] ?? 0) : 0), 0);
+  
+  const totalBottlesInProduction = Math.max(0, totalBottlesInsideFactory - totalBottlesRaw - totalBottlesReady - totalBottlesScrapped);
 
   const capComponentList = componentStocks.filter((c) => {
     const cat = (c.category || '').toLowerCase().trim();
@@ -601,6 +608,7 @@ export function calculateDashboardMetrics({
     totalBottlesInsideFactory,
     totalBottlesRaw,
     totalBottlesReady,
+    totalBottlesScrapped,
     totalBottlesInProduction,
     totalCapsInwarded,
     totalCapsUsed,

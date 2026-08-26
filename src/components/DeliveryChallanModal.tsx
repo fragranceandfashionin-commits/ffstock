@@ -151,7 +151,7 @@ export function DeliveryChallanModal({
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+        <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 no-print">
           <Button variant="outline" type="button" onClick={onClose}>
             Close
           </Button>

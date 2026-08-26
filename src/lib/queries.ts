@@ -1734,24 +1734,32 @@ export async function fetchComponentStockSummary(asOfDate?: string | null): Prom
         isBatchLinked = b?.item_id === item.id || (b?.item_id ? (itemMap.get(b.item_id)?.name.toLowerCase().trim() === itemNameNorm) : false);
       } else if (isCap) {
         isBatchLinked =
+          b?.item_id === item.id ||
+          (b?.item_id ? (itemMap.get(b.item_id)?.name.toLowerCase().trim() === itemNameNorm) : false) ||
           Boolean(b?.cap_item_id && (b.cap_item_id === item.id || itemMap.get(b.cap_item_id)?.name.toLowerCase().trim() === itemNameNorm)) ||
           bMoves.some((m) => Boolean(m.cap_item_id && (m.cap_item_id === item.id || itemMap.get(m.cap_item_id)?.name.toLowerCase().trim() === itemNameNorm)) ||
                             Boolean(m.cap_name && m.cap_name.toLowerCase().trim() === itemNameNorm));
         if (b?.cap_qty && b.cap_qty > 0) batchComponentIntake = b.cap_qty;
       } else if (isAtomizer) {
         isBatchLinked =
+          b?.item_id === item.id ||
+          (b?.item_id ? (itemMap.get(b.item_id)?.name.toLowerCase().trim() === itemNameNorm) : false) ||
           Boolean(b?.atomizer_item_id && (b.atomizer_item_id === item.id || itemMap.get(b.atomizer_item_id)?.name.toLowerCase().trim() === itemNameNorm)) ||
           bMoves.some((m) => Boolean(m.atomizer_item_id && (m.atomizer_item_id === item.id || itemMap.get(m.atomizer_item_id)?.name.toLowerCase().trim() === itemNameNorm)) ||
                             Boolean(m.atomizer_name && m.atomizer_name.toLowerCase().trim() === itemNameNorm));
         if (b?.atomizer_qty && b.atomizer_qty > 0) batchComponentIntake = b.atomizer_qty;
       } else if (isPackaging) {
         isBatchLinked =
+          b?.item_id === item.id ||
+          (b?.item_id ? (itemMap.get(b.item_id)?.name.toLowerCase().trim() === itemNameNorm) : false) ||
           Boolean(b?.box_item_id && (b.box_item_id === item.id || itemMap.get(b.box_item_id)?.name.toLowerCase().trim() === itemNameNorm)) ||
           bMoves.some((m) => Boolean(m.box_item_id && (m.box_item_id === item.id || itemMap.get(m.box_item_id)?.name.toLowerCase().trim() === itemNameNorm)) ||
                             Boolean(m.box_name && m.box_name.toLowerCase().trim() === itemNameNorm));
         if (b?.box_qty && b.box_qty > 0) batchComponentIntake = b.box_qty;
       } else {
         isBatchLinked =
+          b?.item_id === item.id ||
+          (b?.item_id ? (itemMap.get(b.item_id)?.name.toLowerCase().trim() === itemNameNorm) : false) ||
           Boolean(b?.cap_item_id === item.id || b?.atomizer_item_id === item.id || b?.box_item_id === item.id) ||
           bMoves.some((m) => m.cap_item_id === item.id || m.atomizer_item_id === item.id || m.box_item_id === item.id ||
                             m.cap_name?.toLowerCase().trim() === itemNameNorm ||
@@ -2037,15 +2045,16 @@ export async function fetchComponentStockSummary(asOfDate?: string | null): Prom
 
     // 4. Accurate 5-State Balance Math:
     // Available Loose Stock = Unallocated in Items section + Bottle Raw Stock in Stage 1
-    // In Factory Assembled = Consumed - Dispatched - Scrapped (for Bottles: WIP in downstream stages + Ready)
+    // In Factory Assembled = Consumed into production - Dispatched in orders (for Bottles: WIP in downstream stages + Ready)
     // Dispatched = Dispatched in customer orders
+    // Invariant: totalInwarded = availableStock + totalInFactoryAssembled + totalDispatchedInOrders + totalScrapped
     const availableStock = isBottle
       ? (unallocatedWarehouseStock + bottleAvailableRawStock)
       : Math.max(0, totalInwarded - totalUsed - totalScrapped);
 
     const totalInFactoryAssembled = isBottle
       ? bottleInFactoryWip
-      : Math.max(0, totalUsed - totalDispatchedInOrders - totalScrapped);
+      : Math.max(0, totalUsed - totalDispatchedInOrders);
 
     const stockDeficit = 0;
 

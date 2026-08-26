@@ -920,3 +920,6 @@ export function PrintingChipsInput({
     </div>
   );
 }
+
+export { ItemSearchSelect } from './ItemSearchSelect';
+export { SupplierSearchSelect } from './SupplierSearchSelect';

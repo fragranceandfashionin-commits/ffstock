@@ -47,7 +47,7 @@
   box-shadow: 4px 0 6px -2px rgba(0, 0, 0, 0.05);
 }
 
-/* Print utilities for factory reports */
+/* Print utilities for factory reports and delivery challans */
 @media print {
   body {
     background: white !important;
@@ -63,4 +63,33 @@
     break-inside: avoid;
     box-shadow: none !important;
   }
+
+  /* Modal print normalization for Challans & Gate Passes */
+  .fixed.inset-0.z-50 {
+    position: static !important;
+    background: transparent !important;
+    padding: 0 !important;
+    display: block !important;
+  }
+  .fixed.inset-0.z-50 > div {
+    max-height: none !important;
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  .fixed.inset-0.z-50 .overflow-y-auto {
+    overflow: visible !important;
+  }
+
+  #printable-delivery-challan {
+    border: 2px solid #334155 !important;
+    padding: 24px !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
 }
+

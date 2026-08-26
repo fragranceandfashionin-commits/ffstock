@@ -283,14 +283,17 @@ export function BatchSearchSelect({
         handleSetIsOpen(false);
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setHighlightedIndex((prev) => (prev + 1 < filteredBatches.length ? prev + 1 : 0));
-        // Scroll item into view
-        const el = listRef.current?.children[highlightedIndex + 1] as HTMLElement;
+        if (filteredBatches.length === 0) return;
+        const nextIndex = (highlightedIndex + 1) % filteredBatches.length;
+        setHighlightedIndex(nextIndex);
+        const el = listRef.current?.children[nextIndex] as HTMLElement;
         el?.scrollIntoView({ block: 'nearest' });
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setHighlightedIndex((prev) => (prev - 1 >= 0 ? prev - 1 : filteredBatches.length - 1));
-        const el = listRef.current?.children[highlightedIndex - 1] as HTMLElement;
+        if (filteredBatches.length === 0) return;
+        const nextIndex = highlightedIndex - 1 < 0 ? filteredBatches.length - 1 : highlightedIndex - 1;
+        setHighlightedIndex(nextIndex);
+        const el = listRef.current?.children[nextIndex] as HTMLElement;
         el?.scrollIntoView({ block: 'nearest' });
       } else if (e.key === 'Enter') {
         e.preventDefault();

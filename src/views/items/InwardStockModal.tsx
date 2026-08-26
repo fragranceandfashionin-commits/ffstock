@@ -1,6 +1,17 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { PackagePlus, Sparkles, PlusCircle, Plus, Check, RotateCcw, Box } from 'lucide-react';
-import { Modal, Field, inputClass, Button, ErrorBanner, Dropzone } from '@/components/ui';
+import { PackagePlus, Sparkles, PlusCircle, Plus, Check, RotateCcw, Box, Search, History, ArrowRight, X } from 'lucide-react';
+import {
+  Modal,
+  Field,
+  inputClass,
+  Button,
+  ErrorBanner,
+  Dropzone,
+  ItemCategoryBadge,
+  ColorBadge,
+  ItemSearchSelect,
+  SupplierSearchSelect,
+} from '@/components/ui';
 import { insertInwardBatch } from '@/lib/queries';
 import { supabase, type Item, type Supplier, type ComponentStockSummary, type BatchWithRelations } from '@/lib/supabase';
 import { getErrorMessage, formatNumber, getTodayDateString } from '@/lib/utils';
@@ -51,8 +62,6 @@ export function InwardStockModal({
     return Array.from(brandSet).sort((a, b) => a.localeCompare(b));
   }, [batches]);
 
-
-
   // Consignment / Shipment Context (Shared across consecutive batches)
   const [brandName, setBrandName] = useState('');
   const [supplierId, setSupplierId] = useState('');
@@ -67,6 +76,11 @@ export function InwardStockModal({
   const [imagePreview, setImagePreview] = useState('');
   const [imageUrl, setImageUrl] = useState('');
 
+  // Existing Batch Quick-Fill Search State
+  const [showBatchAutofill, setShowBatchAutofill] = useState(false);
+  const [batchSearchQuery, setBatchSearchQuery] = useState('');
+  const [autofilledBatch, setAutofilledBatch] = useState<BatchWithRelations | null>(null);
+
   // Session Statistics for Multi-Batch Inward
   const [sessionBatchCount, setSessionBatchCount] = useState(0);
   const [lastLoggedBatch, setLastLoggedBatch] = useState<{ batchNo: string; qty: number; itemName: string } | null>(null);
@@ -78,7 +92,6 @@ export function InwardStockModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const itemSelectRef = useRef<HTMLSelectElement>(null);
   const qtyInputRef = useRef<HTMLInputElement>(null);
   const toast = useToast();
 
@@ -114,6 +127,39 @@ export function InwardStockModal({
     [brandName, generateBatchNoString]
   );
 
+  // Filtered past batches for the quick autofill search
+  const filteredPastBatches = useMemo(() => {
+    const q = batchSearchQuery.trim().toLowerCase();
+    if (!q) return batches.slice(0, 6);
+    return batches
+      .filter((b) => {
+        const bNo = (b.batch_no || '').toLowerCase();
+        const bBrand = (b.brand_name || '').toLowerCase();
+        const bItem = (b.item?.name || '').toLowerCase();
+        const bSup = (b.supplier?.name || '').toLowerCase();
+        const bLoc = (b.location || '').toLowerCase();
+        return bNo.includes(q) || bBrand.includes(q) || bItem.includes(q) || bSup.includes(q) || bLoc.includes(q);
+      })
+      .slice(0, 8);
+  }, [batches, batchSearchQuery]);
+
+  // Autofill form from an existing batch
+  const handleSelectExistingBatch = (b: BatchWithRelations) => {
+    setInwardItemId(b.item_id);
+    setBrandName(b.brand_name || '');
+    setSupplierId(b.supplier_id);
+    setLocation(b.location || '');
+    setBatchNo(b.batch_no); // Keeps batch number for direct top-up / add
+    setAutofilledBatch(b);
+    setShowBatchAutofill(false);
+    setBatchSearchQuery('');
+    setError(null);
+    toast.success(`Loaded details from Batch ${b.batch_no} (${b.item?.name || 'Stock Item'})`, 'Batch Loaded');
+    setTimeout(() => {
+      qtyInputRef.current?.focus();
+    }, 50);
+  };
+
   // Initialize or reset form when modal opens
   useEffect(() => {
     if (isOpen) {
@@ -133,6 +179,8 @@ export function InwardStockModal({
       setError(null);
       setSessionBatchCount(0);
       setLastLoggedBatch(null);
+      setAutofilledBatch(null);
+      setShowBatchAutofill(false);
     } else {
       clearPhoto();
       setError(null);
@@ -165,9 +213,7 @@ export function InwardStockModal({
     setQtyReceived('');
     clearPhoto();
     setError(null);
-    if (itemSelectRef.current) {
-      itemSelectRef.current.focus();
-    }
+    setAutofilledBatch(null);
   };
 
   // Save Inward Batch (Handles both continuous "Add Another" and "Save & Close")
@@ -176,8 +222,7 @@ export function InwardStockModal({
     setError(null);
 
     if (!inwardItemId || inwardItemId === NEW_OPTION) {
-      setError('Please select a stock item / SKU received.');
-      itemSelectRef.current?.focus();
+      setError('Please search and select a stock item / SKU received.');
       return;
     }
     if (!batchNo.trim()) {
@@ -185,7 +230,7 @@ export function InwardStockModal({
       return;
     }
     if (!supplierId || supplierId === NEW_OPTION) {
-      setError('Please select a supplier / vendor.');
+      setError('Please search and select a supplier / vendor.');
       return;
     }
     const qtyNum = Number(qtyReceived);
@@ -266,6 +311,7 @@ export function InwardStockModal({
         setBrandName('');
         setQtyReceived('');
         setLocation('');
+        setAutofilledBatch(null);
         clearPhoto();
         onClose();
       } else {
@@ -274,8 +320,9 @@ export function InwardStockModal({
         // Auto-generate fresh unique batch number
         setBatchNo(generateBatchNoString(brandName));
         setQtyReceived('');
+        setAutofilledBatch(null);
         clearPhoto();
-        // Shift focus to quantity or item selector for instant entry
+        // Shift focus to quantity input for instant entry
         setTimeout(() => {
           if (qtyInputRef.current) {
             qtyInputRef.current.focus();
@@ -329,19 +376,132 @@ export function InwardStockModal({
         maxWidthClass="max-w-3xl"
       >
         <div className="space-y-4">
-          {/* HEADER SUMMARY & CONTINUOUS ENTRY BADGE */}
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2">
+          {/* HEADER SUMMARY & BATCH AUTOFILL QUICK BAR */}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
             <p className="text-xs text-slate-600 leading-relaxed max-w-xl">
               Log incoming physical shipments from suppliers. Tag the <strong>Client / Brand Name</strong>, generate unique <strong>Batch Numbers</strong>, and allocate warehouse storage bays.
             </p>
 
-            {sessionBatchCount > 0 && (
-              <span className="flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 shrink-0 animate-in fade-in">
-                <Check className="h-3.5 w-3.5 text-emerald-600" />
-                <span>{sessionBatchCount} {sessionBatchCount === 1 ? 'Batch' : 'Batches'} Logged</span>
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {batches.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowBatchAutofill(!showBatchAutofill)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold transition border cursor-pointer ${
+                    showBatchAutofill
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
+                      : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300'
+                  }`}
+                  title="Search any past batch to autofill Item, Brand, Supplier, and Location in 1-click"
+                >
+                  <History className="h-3.5 w-3.5" />
+                  <span>{showBatchAutofill ? 'Hide Batch Search' : '⚡ Quick-Fill from Past Batch'}</span>
+                </button>
+              )}
+
+              {sessionBatchCount > 0 && (
+                <span className="flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 shrink-0 animate-in fade-in">
+                  <Check className="h-3.5 w-3.5 text-emerald-600" />
+                  <span>{sessionBatchCount} {sessionBatchCount === 1 ? 'Batch' : 'Batches'} Logged</span>
+                </span>
+              )}
+            </div>
           </div>
+
+          {/* QUICK-FILL FROM PAST BATCH SEARCH DRAWER */}
+          {showBatchAutofill && (
+            <div className="rounded-2xl border-2 border-indigo-200 bg-gradient-to-r from-indigo-50/70 via-slate-50 to-indigo-50/50 p-3.5 space-y-2.5 animate-in fade-in zoom-in-95 duration-150 shadow-sm">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-indigo-600" />
+                  <span className="text-xs font-black uppercase tracking-wider text-indigo-950">
+                    Search Past Batches to Autofill All Fields
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowBatchAutofill(false)}
+                  className="rounded-lg p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* Search input for past batches */}
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-indigo-500 pointer-events-none" />
+                <input
+                  type="text"
+                  value={batchSearchQuery}
+                  onChange={(e) => setBatchSearchQuery(e.target.value)}
+                  placeholder="Type batch # (e.g. CU9, RC-2608), brand, item name, or vendor to autofill…"
+                  className="w-full rounded-xl border border-indigo-300 bg-white pl-9 pr-8 py-2 text-xs sm:text-sm font-bold text-slate-900 placeholder:text-slate-400 placeholder:font-normal focus:border-indigo-600 focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 shadow-2xs"
+                  autoFocus
+                />
+                {batchSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setBatchSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 hover:bg-slate-100"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Batch result chips */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                {filteredPastBatches.map((b) => (
+                  <button
+                    key={b.id}
+                    type="button"
+                    onClick={() => handleSelectExistingBatch(b)}
+                    className="text-left p-2.5 rounded-xl border border-slate-200 bg-white hover:border-indigo-400 hover:bg-indigo-50/60 transition flex items-center justify-between gap-2 cursor-pointer group shadow-2xs"
+                  >
+                    <div className="space-y-1 min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-mono text-xs font-black text-indigo-900 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-200">
+                          {b.batch_no}
+                        </span>
+                        {b.brand_name && (
+                          <span className="text-[10px] font-extrabold text-amber-900 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                            🏢 {b.brand_name}
+                          </span>
+                        )}
+                        <ItemCategoryBadge category={b.item?.category} />
+                      </div>
+                      <p className="text-xs font-bold text-slate-900 truncate">
+                        {b.item?.name ?? 'Stock Item'}
+                      </p>
+                      <p className="text-[10px] text-slate-500 truncate">
+                        Vendor: {b.supplier?.name} • Bay: {b.location || 'N/A'}
+                      </p>
+                    </div>
+                    <ArrowRight className="h-4 w-4 text-slate-300 group-hover:text-indigo-600 group-hover:translate-x-0.5 transition shrink-0" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Autofilled Active Banner */}
+          {autofilledBatch && (
+            <div className="flex items-center justify-between bg-indigo-50 border border-indigo-200 rounded-xl px-3 py-2 text-xs text-indigo-950 animate-in fade-in">
+              <div className="flex items-center gap-2 truncate">
+                <Sparkles className="h-4 w-4 text-indigo-600 shrink-0" />
+                <span className="truncate">
+                  Autofilled from past <strong>Batch {autofilledBatch.batch_no}</strong> ({autofilledBatch.brand_name || 'In-House'} • {autofilledBatch.item?.name}). Keeping batch number adds units directly. Click <strong>Auto</strong> to generate a new batch code.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAutofilledBatch(null)}
+                className="text-[11px] font-bold text-indigo-700 hover:text-indigo-900 shrink-0 ml-2 underline cursor-pointer"
+              >
+                Clear Tag
+              </button>
+            </div>
+          )}
 
           {/* Last Logged Batch Flash Banner */}
           {sessionBatchCount > 0 && lastLoggedBatch && (
@@ -368,38 +528,40 @@ export function InwardStockModal({
             }}
             className="space-y-4"
           >
-            {/* ROW 1: STOCK ITEM SELECTION WITH PROMINENT (+) BUTTON */}
+            {/* ROW 1: SEARCHABLE STOCK ITEM SELECTION WITH PROMINENT (+) BUTTON */}
             <Field
               label="1. Stock Item / SKU Received"
               htmlFor="inward-item"
               required
-              hint="Select the primary bottle, cap, atomizer, box or component, or click (+) to register new SKU"
+              hint="Search by item name, vendor/supplier, brand, color, category, or click (+) to register new SKU"
             >
-              <div className="flex gap-2">
-                <select
-                  ref={itemSelectRef}
-                  id="inward-item"
-                  className={`${inputClass} font-bold text-slate-950 bg-slate-50 focus:bg-white flex-1`}
-                  value={inwardItemId}
-                  onChange={(e) => {
-                    if (e.target.value === NEW_OPTION) {
-                      setShowAddItemModal(true);
-                    } else {
-                      setInwardItemId(e.target.value);
+              <div className="flex gap-2 items-center">
+                <ItemSearchSelect
+                  items={localItems}
+                  batches={batches}
+                  selectedItemId={inwardItemId}
+                  onSelectItem={(id) => {
+                    setInwardItemId(id);
+                    setError(null);
+                    // If no supplier or brand selected yet, check if there's a recent batch for this item to save user clicks
+                    const recentBatch = batches.find((b) => b.item_id === id);
+                    if (recentBatch) {
+                      if (!supplierId && recentBatch.supplier_id) {
+                        setSupplierId(recentBatch.supplier_id);
+                      }
+                      if (!brandName && recentBatch.brand_name) {
+                        setBrandName(recentBatch.brand_name);
+                        generateSmartBatchNo(recentBatch.brand_name);
+                      }
+                      if (!location && recentBatch.location) {
+                        setLocation(recentBatch.location);
+                      }
                     }
                   }}
-                  required
-                >
-                  <option value="">Select stock item…</option>
-                  <option value={NEW_OPTION} className="font-bold text-emerald-700 bg-emerald-50">
-                    ➕ Register new Master Component SKU…
-                  </option>
-                  {localItems.map((itm) => (
-                    <option key={itm.id} value={itm.id}>
-                      [{itm.category || 'Bottle'}] {itm.name}{itm.color ? ` (${itm.color})` : ''} — Unit: {itm.unit || 'pcs'}
-                    </option>
-                  ))}
-                </select>
+                  onAddNewSku={() => setShowAddItemModal(true)}
+                  error={Boolean(error && (!inwardItemId || inwardItemId === NEW_OPTION))}
+                  className="flex-1"
+                />
 
                 <Button
                   type="button"
@@ -407,7 +569,7 @@ export function InwardStockModal({
                   size="sm"
                   onClick={() => setShowAddItemModal(true)}
                   title="Quick-Register New Master Component SKU (+)"
-                  className="shrink-0 min-w-[38px] min-h-[38px] text-emerald-700 bg-emerald-50 border-emerald-300 hover:bg-emerald-100 cursor-pointer shadow-2xs"
+                  className="shrink-0 min-w-[42px] min-h-[42px] text-emerald-700 bg-emerald-50 border-emerald-300 hover:bg-emerald-100 cursor-pointer shadow-2xs"
                 >
                   <PlusCircle className="h-4 w-4" />
                 </Button>
@@ -462,7 +624,6 @@ export function InwardStockModal({
                 )}
               </Field>
 
-
               <Field
                 label="3. Batch No / Lot Code"
                 htmlFor="inward-batch-no"
@@ -493,45 +654,33 @@ export function InwardStockModal({
               </Field>
             </div>
 
-            {/* ROW 3: SUPPLIER & QUANTITY WITH PROMINENT (+) BUTTON */}
+            {/* ROW 3: SEARCHABLE SUPPLIER & QUANTITY WITH PROMINENT (+) BUTTON */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field
                 label="4. Supplier / Vendor"
                 htmlFor="inward-supplier"
                 required
-                hint="Choose supplier or click (+) to add new"
+                hint="Search supplier or click (+) to add new"
               >
-                <div className="flex gap-2">
-                  <select
-                    id="inward-supplier"
-                    className={inputClass}
-                    value={supplierId}
-                    onChange={(e) => {
-                      if (e.target.value === NEW_OPTION) {
-                        setShowSupplierModal(true);
-                      } else {
-                        setSupplierId(e.target.value);
-                      }
+                <div className="flex gap-2 items-center">
+                  <SupplierSearchSelect
+                    suppliers={localSuppliers}
+                    selectedSupplierId={supplierId}
+                    onSelectSupplier={(id) => {
+                      setSupplierId(id);
+                      setError(null);
                     }}
-                    required
-                  >
-                    <option value="">Select supplier…</option>
-                    <option value={NEW_OPTION} className="font-bold text-emerald-700 bg-emerald-50">
-                      ➕ Add new supplier / factory…
-                    </option>
-                    {localSuppliers.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
+                    onAddNewSupplier={() => setShowSupplierModal(true)}
+                    error={Boolean(error && (!supplierId || supplierId === NEW_OPTION))}
+                    className="flex-1"
+                  />
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
                     onClick={() => setShowSupplierModal(true)}
                     title="Quick-Add New Supplier (+)"
-                    className="shrink-0 min-w-[38px] min-h-[38px] text-emerald-700 bg-emerald-50 border-emerald-300 hover:bg-emerald-100 cursor-pointer shadow-2xs"
+                    className="shrink-0 min-w-[42px] min-h-[42px] text-emerald-700 bg-emerald-50 border-emerald-300 hover:bg-emerald-100 cursor-pointer shadow-2xs"
                   >
                     <PlusCircle className="h-4 w-4" />
                   </Button>
