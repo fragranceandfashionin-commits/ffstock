@@ -59,11 +59,239 @@ export function calculateDashboardMetrics({
   const referenceDate = asOfDate ? new Date(`${asOfDate}T23:59:59`) : new Date();
 
 
+  // Helper to determine if a batch is a primary Bottle batch vs a Component batch
+  const isBottleBatch = (b: BatchWithRelations) => {
+    const cat = (b.item?.category || 'Bottle').toLowerCase().trim();
+    return (
+      cat === 'bottle' ||
+      (!cat.includes('cap') &&
+        !cat.includes('atomizer') &&
+        !cat.includes('pump') &&
+        !cat.includes('spray') &&
+        !cat.includes('pack') &&
+        !cat.includes('box') &&
+        !cat.includes('carton') &&
+        !cat.includes('closure') &&
+        !cat.includes('label'))
+    );
+  };
+
+  // Build fast lookup maps for ComponentStockSummary
+  const csMapByItemId = new Map<string, ComponentStockSummary>();
+  const csMapByNameAndCategory = new Map<string, ComponentStockSummary>();
+  for (const cs of componentStocks) {
+    if (cs.item?.id) {
+      csMapByItemId.set(cs.item.id, cs);
+    }
+    const key = `${(cs.item?.name || '').toLowerCase().trim()}:::${(cs.category || '').toLowerCase().trim()}`;
+    if (!csMapByNameAndCategory.has(key)) {
+      csMapByNameAndCategory.set(key, cs);
+    }
+  }
+
+  const findComponentSummaryForBatch = (b: BatchWithRelations): ComponentStockSummary | null => {
+    if (b.item_id && csMapByItemId.has(b.item_id)) {
+      return csMapByItemId.get(b.item_id)!;
+    }
+    const bName = (b.item?.name || '').toLowerCase().trim();
+    const bCat = (b.item?.category || '').toLowerCase().trim();
+    const key = `${bName}:::${bCat}`;
+    if (csMapByNameAndCategory.has(key)) {
+      return csMapByNameAndCategory.get(key)!;
+    }
+    for (const cs of componentStocks) {
+      if ((cs.item?.name || '').toLowerCase().trim() === bName) {
+        return cs;
+      }
+    }
+    return null;
+  };
+
+  // Group component batches by matched ComponentStockSummary for FIFO allocation
+  const componentBatchesBySummary = new Map<string, BatchWithRelations[]>();
+  for (const b of batches) {
+    if (isBottleBatch(b)) continue;
+    const cs = findComponentSummaryForBatch(b);
+    const csKey = cs ? cs.item.id : `fallback-${b.item_id || b.id}`;
+    const list = componentBatchesBySummary.get(csKey) ?? [];
+    list.push(b);
+    componentBatchesBySummary.set(csKey, list);
+  }
+
+  // Pre-calculate allocated usage for each component batch using strict FIFO
+  type ComponentBatchAllocation = {
+    dispatchedQty: number;
+    inFactoryAssembledQty: number;
+    scrappedQty: number;
+    availableRawQty: number;
+    allocatedDispatches: Dispatch[];
+    allocatedCustomerNames: string[];
+  };
+
+  const componentBatchAllocations = new Map<string, ComponentBatchAllocation>();
+
+  for (const [csKey, compBatches] of componentBatchesBySummary.entries()) {
+    const cs = csMapByItemId.get(csKey) || componentStocks.find((c) => c.item.id === csKey);
+    if (!cs) continue;
+
+    // Sort batches in chronological FIFO order (received_on ASC, created_at ASC)
+    const sortedCompBatches = [...compBatches].sort((a, b) => {
+      const dateDiff = (a.received_on || '').localeCompare(b.received_on || '');
+      if (dateDiff !== 0) return dateDiff;
+      return (a.created_at || '').localeCompare(b.created_at || '');
+    });
+
+    const dispatchOrderQueue = [...(cs.orderUsageList || [])].map((order) => ({
+      ...order,
+      remainingQty: order.qtyUsed,
+    }));
+    let remainingAssembled = cs.totalInFactoryAssembled;
+    let remainingScrap = cs.totalScrapped;
+
+    for (const b of sortedCompBatches) {
+      const bDirectMoves = movementsByBatch.get(b.id) ?? [];
+      const bDirectDispatches = dispatchesByBatch.get(b.id) ?? [];
+      const hasDirectActivity = bDirectMoves.length > 0 || bDirectDispatches.length > 0;
+
+      // If user directly moved/dispatched this batch explicitly, respect direct activity
+      if (hasDirectActivity) continue;
+
+      let remainingBatchCapacity = b.qty_received;
+      let batchDispatchedQty = 0;
+      const allocatedDispatches: Dispatch[] = [];
+      const customerNamesSet = new Set<string>();
+
+      // 1. Allocate from FIFO Dispatch Orders
+      for (const order of dispatchOrderQueue) {
+        if (remainingBatchCapacity <= 0) break;
+        if (order.remainingQty <= 0) continue;
+
+        const takeQty = Math.min(remainingBatchCapacity, order.remainingQty);
+        batchDispatchedQty += takeQty;
+        remainingBatchCapacity -= takeQty;
+        order.remainingQty -= takeQty;
+
+        if (order.customerName) {
+          customerNamesSet.add(order.customerName);
+        }
+
+        allocatedDispatches.push({
+          id: `comp-disp-${order.dispatchId}-${b.id}`,
+          batch_id: b.id,
+          qty: takeQty,
+          customer_name: order.customerName,
+          invoice_no: order.invoiceNo,
+          dispatched_on: order.dispatchedOn,
+          variant_name: null,
+          color: null,
+          printing_design: null,
+          cap_name: null,
+          atomizer_name: null,
+          box_name: null,
+          box_item_id: null,
+          product_specs: `Component attached on dispatched batch ${order.batchNo}`,
+          created_at: order.dispatchedOn,
+        });
+      }
+
+      // 2. Allocate from Assembled in Factory WIP
+      let batchAssembledQty = 0;
+      if (remainingBatchCapacity > 0 && remainingAssembled > 0) {
+        batchAssembledQty = Math.min(remainingBatchCapacity, remainingAssembled);
+        remainingBatchCapacity -= batchAssembledQty;
+        remainingAssembled -= batchAssembledQty;
+      }
+
+      // 3. Allocate from Scrapped Defect
+      let batchScrappedQty = 0;
+      if (remainingBatchCapacity > 0 && remainingScrap > 0) {
+        batchScrappedQty = Math.min(remainingBatchCapacity, remainingScrap);
+        remainingBatchCapacity -= batchScrappedQty;
+        remainingScrap -= batchScrappedQty;
+      }
+
+      // 4. Remaining capacity is live available Raw Stock on the shelf
+      const batchAvailableRaw = Math.max(0, remainingBatchCapacity);
+
+      componentBatchAllocations.set(b.id, {
+        dispatchedQty: batchDispatchedQty,
+        inFactoryAssembledQty: batchAssembledQty,
+        scrappedQty: batchScrappedQty,
+        availableRawQty: batchAvailableRaw,
+        allocatedDispatches,
+        allocatedCustomerNames: Array.from(customerNamesSet),
+      });
+    }
+  }
+
   // For every batch, calculate its exact stock in each stage and aging
   const batchMatrix: BatchMatrixRow[] = batches.map((b) => {
     const stockByStage = new Map<string, number>();
     for (const s of stages) stockByStage.set(s.id, 0);
 
+    const isBottle = isBottleBatch(b);
+    const compAlloc = !isBottle ? componentBatchAllocations.get(b.id) : null;
+
+    if (compAlloc) {
+      // Component batch: populate stage quantities from allocation
+      if (rawStage) stockByStage.set(rawStage.id, compAlloc.availableRawQty);
+      if (readyStage && compAlloc.inFactoryAssembledQty > 0) {
+        stockByStage.set(readyStage.id, compAlloc.inFactoryAssembledQty);
+      }
+      const scrapStage = stages.find((s) => s.name === 'Scrap / Defect' || s.name.toLowerCase().includes('scrap'));
+      if (scrapStage && compAlloc.scrappedQty > 0) {
+        stockByStage.set(scrapStage.id, compAlloc.scrappedQty);
+      }
+
+      const dispatchedQty = compAlloc.dispatchedQty;
+      const inFactoryQty = Math.max(0, compAlloc.availableRawQty + compAlloc.inFactoryAssembledQty);
+      const bDispatches = compAlloc.allocatedDispatches;
+      const bMovements = movementsByBatch.get(b.id) ?? [];
+      const customerNames = compAlloc.allocatedCustomerNames;
+
+      // Stage-specific amounts
+      const stageQuantities: Record<string, number> = {};
+      const activeStages: { stageId: string; stageName: string; sequenceNo: number; qty: number }[] = [];
+
+      for (const s of processStages) {
+        const q = Math.max(0, stockByStage.get(s.id) ?? 0);
+        stageQuantities[s.id] = q;
+        if (q > 0) {
+          activeStages.push({ stageId: s.id, stageName: s.name, sequenceNo: s.sequence_no, qty: q });
+        }
+      }
+
+      const isRawOnly = (stageQuantities[rawStage?.id ?? ''] ?? 0) === inFactoryQty && inFactoryQty > 0;
+      const isReadyOnly = (stageQuantities[readyStage?.id ?? ''] ?? 0) === inFactoryQty && inFactoryQty > 0;
+      const isInProduction = activeStages.some(
+        (as) => as.stageName !== 'Raw Stock' && as.stageName !== 'Ready' && as.qty > 0
+      );
+
+      const receivedDate = new Date(b.received_on);
+      const ageInDays = Math.max(0, Math.floor((referenceDate.getTime() - receivedDate.getTime()) / (1000 * 60 * 60 * 24)));
+      const isStalled = inFactoryQty > 0 && ageInDays >= 7;
+
+      return {
+        batch: b,
+        stageQuantities,
+        activeStages,
+        dispatchedQty,
+        inFactoryQty,
+        dispatches: bDispatches,
+        movements: bMovements,
+        customerNames,
+        isRawOnly,
+        isReadyOnly,
+        isInProduction,
+        ageInDays,
+        isStalled,
+        resolvedCapName: null,
+        resolvedAtomizerName: null,
+        resolvedBoxName: null,
+      };
+    }
+
+    // Standard carrier batch processing (Bottles & directly moved items)
     // Raw Stock initial intake
     if (rawStage) stockByStage.set(rawStage.id, b.qty_received);
 
@@ -185,8 +413,8 @@ export function calculateDashboardMetrics({
 
   // Overall Factory Hard-Count Metrics
   const totalReceived = batches.reduce((sum, b) => sum + b.qty_received, 0);
-  const totalDispatched = dispatches.reduce((sum, d) => sum + d.qty, 0);
-  const totalInsideFactory = Math.max(0, totalReceived - totalDispatched);
+  const totalDispatched = batchMatrix.reduce((sum, bm) => sum + bm.dispatchedQty, 0);
+  const totalInsideFactory = batchMatrix.reduce((sum, bm) => sum + bm.inFactoryQty, 0);
   const rawStockTotal = stageBreakdown.find((s) => s.stage.name === 'Raw Stock')?.totalQty ?? 0;
   const readyStockTotal = stageBreakdown.find((s) => s.stage.name === 'Ready')?.totalQty ?? 0;
   const scrapTotal = stageBreakdown.find((s) => s.stage.name === 'Scrap / Defect')?.totalQty ?? 0;
@@ -202,7 +430,12 @@ export function calculateDashboardMetrics({
   const dispatchedBatchesCount = batchMatrix.filter((b) => b.dispatchedQty > 0).length;
   const stalledBatches = batchMatrix.filter((b) => b.isStalled);
 
-  const uniqueCustomers = Array.from(new Set(dispatches.map((d) => d.customer_name).filter(Boolean)));
+  const uniqueCustomers = Array.from(
+    new Set([
+      ...dispatches.map((d) => d.customer_name),
+      ...batchMatrix.flatMap((bm) => bm.customerNames),
+    ].filter(Boolean))
+  );
   const uniqueCustomersCount = uniqueCustomers.length;
 
   const activeRacks = Array.from(new Set(batchMatrix.filter((b) => b.inFactoryQty > 0).map((b) => b.batch.location).filter(Boolean)));
