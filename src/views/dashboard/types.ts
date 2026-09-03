@@ -1,4 +1,4 @@
-import type { BatchWithRelations, MovementWithRelations, Dispatch } from '@/lib/supabase';
+import type { BatchWithRelations, MovementWithRelations, Dispatch, BatchAllocationWithRelations } from '@/lib/supabase';
 
 export type DashboardTab = 'batch-matrix' | 'stages' | 'transitions' | 'dispatches' | 'locations' | 'components';
 
@@ -44,6 +44,18 @@ export type InspectedBatchItem = {
   resolvedCapName: string | null;
   resolvedAtomizerName: string | null;
   resolvedBoxName: string | null;
+  allocatedOutQty: number;
+  allocatedInQty: number;
+  netReceivedQty: number;
+  allocationsOut: BatchAllocationWithRelations[];
+  allocationsIn: BatchAllocationWithRelations[];
+  rawStockQty: number;
+  wipQty: number;
+  readyQty: number;
+  scrappedQty: number;
+  isComponentBatch: boolean;
+  componentTypeLabel?: string;
+  componentFittedQty?: number;
 };
 
 export type BatchMatrixRow = InspectedBatchItem;

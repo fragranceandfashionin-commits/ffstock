@@ -1,4 +1,4 @@
-import type { BatchWithRelations, Dispatch, MovementWithRelations, Stage, ComponentStockSummary } from '@/lib/supabase';
+import type { BatchWithRelations, Dispatch, MovementWithRelations, Stage, ComponentStockSummary, BatchAllocationWithRelations } from '@/lib/supabase';
 import type { BatchMatrixRow } from './types';
 
 export function calculateDashboardMetrics({
@@ -7,6 +7,7 @@ export function calculateDashboardMetrics({
   movements: rawMovements,
   dispatches: rawDispatches,
   componentStocks,
+  allocations = [],
   asOfDate,
 }: {
   stages: Stage[] | null;
@@ -14,6 +15,7 @@ export function calculateDashboardMetrics({
   movements: MovementWithRelations[];
   dispatches: Dispatch[];
   componentStocks: ComponentStockSummary[];
+  allocations?: BatchAllocationWithRelations[];
   asOfDate?: string | null;
 }) {
   if (!stages || !rawBatches) return null;
@@ -30,6 +32,27 @@ export function calculateDashboardMetrics({
   const dispatches = asOfDate
     ? rawDispatches.filter((d) => d.dispatched_on <= asOfDate)
     : rawDispatches;
+
+  const rawAllocations = asOfDate
+    ? (allocations || []).filter((a) => a.allocated_on <= asOfDate)
+    : (allocations || []);
+
+  const allocOutByBatch = new Map<string, number>();
+  const allocInByBatch = new Map<string, number>();
+  const allocsOutListByBatch = new Map<string, BatchAllocationWithRelations[]>();
+  const allocsInListByBatch = new Map<string, BatchAllocationWithRelations[]>();
+  for (const a of rawAllocations) {
+    allocOutByBatch.set(a.source_batch_id, (allocOutByBatch.get(a.source_batch_id) ?? 0) + (Number(a.qty) || 0));
+    allocInByBatch.set(a.destination_batch_id, (allocInByBatch.get(a.destination_batch_id) ?? 0) + (Number(a.qty) || 0));
+
+    const outList = allocsOutListByBatch.get(a.source_batch_id) ?? [];
+    outList.push(a);
+    allocsOutListByBatch.set(a.source_batch_id, outList);
+
+    const inList = allocsInListByBatch.get(a.destination_batch_id) ?? [];
+    inList.push(a);
+    allocsInListByBatch.set(a.destination_batch_id, inList);
+  }
 
   const processStages = stages.filter((s) => s.name !== 'Dispatched');
   const rawStage = stages.find((s) => s.name === 'Raw Stock');
@@ -160,7 +183,9 @@ export function calculateDashboardMetrics({
       // If user directly moved/dispatched this batch explicitly, respect direct activity
       if (hasDirectActivity) continue;
 
-      let remainingBatchCapacity = b.qty_received;
+      const bAllocOut = allocOutByBatch.get(b.id) ?? 0;
+      const bAllocIn = allocInByBatch.get(b.id) ?? 0;
+      let remainingBatchCapacity = Math.max(0, b.qty_received - bAllocOut + bAllocIn);
       let batchDispatchedQty = 0;
       const allocatedDispatches: Dispatch[] = [];
       const customerNamesSet = new Set<string>();
@@ -275,6 +300,12 @@ export function calculateDashboardMetrics({
       const ageInDays = Math.max(0, Math.floor((referenceDate.getTime() - receivedDate.getTime()) / (1000 * 60 * 60 * 24)));
       const isStalled = inFactoryQty > 0 && ageInDays >= 7;
 
+      const bAllocOut = allocOutByBatch.get(b.id) ?? 0;
+      const bAllocIn = allocInByBatch.get(b.id) ?? 0;
+      const batchNetReceived = Math.max(0, b.qty_received - bAllocOut + bAllocIn);
+      const bAllocationsOut = allocsOutListByBatch.get(b.id) ?? [];
+      const bAllocationsIn = allocsInListByBatch.get(b.id) ?? [];
+
       return {
         batch: b,
         stageQuantities,
@@ -292,12 +323,30 @@ export function calculateDashboardMetrics({
         resolvedCapName: null,
         resolvedAtomizerName: null,
         resolvedBoxName: null,
+        allocatedOutQty: bAllocOut,
+        allocatedInQty: bAllocIn,
+        netReceivedQty: batchNetReceived,
+        allocationsOut: bAllocationsOut,
+        allocationsIn: bAllocationsIn,
+        rawStockQty: compAlloc.availableRawQty,
+        wipQty: 0,
+        readyQty: compAlloc.inFactoryAssembledQty,
+        scrappedQty: compAlloc.scrappedQty,
+        isComponentBatch: true,
+        componentTypeLabel: b.item?.category || 'Component',
+        componentFittedQty: compAlloc.dispatchedQty,
       };
     }
 
     // Standard carrier batch processing (Bottles & directly moved items)
+    const bAllocOut = allocOutByBatch.get(b.id) ?? 0;
+    const bAllocIn = allocInByBatch.get(b.id) ?? 0;
+    const batchNetReceived = Math.max(0, b.qty_received - bAllocOut + bAllocIn);
+    const bAllocationsOut = allocsOutListByBatch.get(b.id) ?? [];
+    const bAllocationsIn = allocsInListByBatch.get(b.id) ?? [];
+
     // Raw Stock initial intake
-    if (rawStage) stockByStage.set(rawStage.id, b.qty_received);
+    if (rawStage) stockByStage.set(rawStage.id, batchNetReceived);
 
     // Apply stage movements
     const bMovements = movementsByBatch.get(b.id) ?? [];
@@ -313,7 +362,7 @@ export function calculateDashboardMetrics({
       stockByStage.set(readyStage.id, (stockByStage.get(readyStage.id) ?? 0) - dispatchedQty);
     }
 
-    const inFactoryQty = Math.max(0, b.qty_received - dispatchedQty);
+    const inFactoryQty = Math.max(0, batchNetReceived - dispatchedQty);
 
     // Stage-specific amounts
     const stageQuantities: Record<string, number> = {};
@@ -355,6 +404,12 @@ export function calculateDashboardMetrics({
       bMovements.slice().reverse().find((m) => m.box_name)?.box_name ||
       null;
 
+    const rawStockQty = stageQuantities[rawStage?.id ?? ''] ?? 0;
+    const readyQty = stageQuantities[readyStage?.id ?? ''] ?? 0;
+    const scrapStage = stages.find((s) => s.name === 'Scrap / Defect' || s.name.toLowerCase().includes('scrap'));
+    const scrappedQty = scrapStage ? (stageQuantities[scrapStage.id] ?? 0) : 0;
+    const wipQty = Math.max(0, inFactoryQty - rawStockQty - readyQty - scrappedQty);
+
     return {
       batch: b,
       stageQuantities,
@@ -372,6 +427,16 @@ export function calculateDashboardMetrics({
       resolvedCapName,
       resolvedAtomizerName,
       resolvedBoxName,
+      allocatedOutQty: bAllocOut,
+      allocatedInQty: bAllocIn,
+      netReceivedQty: batchNetReceived,
+      allocationsOut: bAllocationsOut,
+      allocationsIn: bAllocationsIn,
+      rawStockQty,
+      wipQty,
+      readyQty,
+      scrappedQty,
+      isComponentBatch: false,
     };
   });
 

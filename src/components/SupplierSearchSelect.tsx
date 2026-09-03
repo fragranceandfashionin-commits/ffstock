@@ -64,9 +64,8 @@ export function SupplierSearchSelect({
     if (!q) return suppliers;
     return suppliers.filter((s) => {
       const nameMatch = (s.name || '').toLowerCase().includes(q);
-      const contactMatch = (s.contact_info || '').toLowerCase().includes(q);
-      const notesMatch = (s.notes || '').toLowerCase().includes(q);
-      return nameMatch || contactMatch || notesMatch;
+      const contactMatch = (s.contact || '').toLowerCase().includes(q);
+      return nameMatch || contactMatch;
     });
   }, [suppliers, searchQuery]);
 
@@ -273,9 +272,9 @@ export function SupplierSearchSelect({
                       <p className="font-bold text-slate-900 text-xs sm:text-sm truncate">
                         <HighlightMatch text={s.name} query={searchQuery} />
                       </p>
-                      {s.contact_info && (
+                      {s.contact && (
                         <p className="text-[11px] text-slate-400 truncate">
-                          <HighlightMatch text={s.contact_info} query={searchQuery} />
+                          <HighlightMatch text={s.contact} query={searchQuery} />
                         </p>
                       )}
                     </div>

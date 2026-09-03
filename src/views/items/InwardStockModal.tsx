@@ -8,7 +8,6 @@ import {
   ErrorBanner,
   Dropzone,
   ItemCategoryBadge,
-  ColorBadge,
   ItemSearchSelect,
   SupplierSearchSelect,
 } from '@/components/ui';

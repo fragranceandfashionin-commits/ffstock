@@ -16,6 +16,7 @@ import {
   fetchSuppliers,
   fetchItems,
   fetchComponentStockSummary,
+  fetchBatchAllocations,
 } from '@/lib/queries';
 import type {
   Stage,
@@ -25,6 +26,7 @@ import type {
   Supplier,
   Item,
   ComponentStockSummary,
+  BatchAllocationWithRelations,
 } from '@/lib/supabase';
 import { supabase, ITEM_CATEGORIES, COMMON_COLORS } from '@/lib/supabase';
 import type { LocationStock, View } from '@/lib/types';
@@ -50,6 +52,7 @@ import { ReversalModal } from './dashboard/ReversalModal';
 import { MilestoneDrilldownModal } from './dashboard/MilestoneDrilldownModal';
 import { ComponentDrilldownModal } from './dashboard/ComponentDrilldownModal';
 import { BatchInspectionModal } from './dashboard/BatchInspectionModal';
+import { AllocateModal } from './items/AllocateModal';
 import type { NavigationContext } from '@/components/AppShell';
 
 export type DashboardViewProps = {
@@ -76,6 +79,7 @@ export function DashboardView({
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [componentStocks, setComponentStocks] = useState<ComponentStockSummary[]>([]);
+  const [allocations, setAllocations] = useState<BatchAllocationWithRelations[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -116,6 +120,8 @@ export function DashboardView({
   const [challanModalOpen, setChallanModalOpen] = useState(false);
   const [challanDispatch, setChallanDispatch] = useState<(Dispatch & { batch?: BatchWithRelations; batchNo?: string; itemName?: string; supplierName?: string }) | null>(null);
 
+  const [allocateModalBatch, setAllocateModalBatch] = useState<BatchWithRelations | null>(null);
+
   // Load Data
   const loadData = useCallback(async () => {
     try {
@@ -129,6 +135,7 @@ export function DashboardView({
         suppliersData,
         itemsData,
         componentStocksData,
+        allocationsData,
       ] = await Promise.all([
         fetchStages(),
         fetchBatches(),
@@ -138,6 +145,7 @@ export function DashboardView({
         fetchSuppliers(),
         fetchItems(),
         fetchComponentStockSummary(),
+        fetchBatchAllocations().catch(() => [] as BatchAllocationWithRelations[]),
       ]);
 
       setStages(stagesData);
@@ -148,6 +156,7 @@ export function DashboardView({
       setSuppliers(suppliersData);
       setItems(itemsData);
       setComponentStocks(componentStocksData);
+      setAllocations(allocationsData);
     } catch (err) {
       const msg = getErrorMessage(err, 'Failed to load factory dashboard records');
       setError(msg);
@@ -185,6 +194,7 @@ export function DashboardView({
     const channel = supabase
       .channel('dashboard-realtime-sync')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'inward_batches' }, debouncedReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'batch_allocations' }, debouncedReload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'stage_movements' }, debouncedReload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'dispatches' }, debouncedReload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'item_stock_receipts' }, debouncedReload)
@@ -206,9 +216,10 @@ export function DashboardView({
       movements,
       dispatches,
       componentStocks,
+      allocations,
       asOfDate: asOfDate || null,
     });
-  }, [stages, batches, movements, dispatches, componentStocks, asOfDate]);
+  }, [stages, batches, movements, dispatches, componentStocks, allocations, asOfDate]);
 
   const lastHandledBatchRef = useRef<string | null>(null);
   const lastHandledDispatchRef = useRef<string | null>(null);
@@ -255,6 +266,16 @@ export function DashboardView({
           resolvedCapName: null,
           resolvedAtomizerName: null,
           resolvedBoxName: null,
+          allocatedOutQty: 0,
+          allocatedInQty: 0,
+          netReceivedQty: initialInspectBatch.qty_received,
+          allocationsOut: [],
+          allocationsIn: [],
+          rawStockQty: initialInspectBatch.qty_received,
+          wipQty: 0,
+          readyQty: 0,
+          scrappedQty: 0,
+          isComponentBatch: false,
         });
       }
     }
@@ -1093,6 +1114,7 @@ export function DashboardView({
           onSetZoomImageUrl={setZoomImageUrl}
           onSetInspectedBatchItem={setInspectedBatchItem}
           onOpenQuickModal={openQuickModal}
+          onOpenAllocateModal={(b) => setAllocateModalBatch(b)}
         />
       )}
 
@@ -1210,6 +1232,20 @@ export function DashboardView({
           onOpenChallanModal={(d) => {
             setChallanDispatch(d);
             setChallanModalOpen(true);
+          }}
+          onOpenAllocateModal={(b) => setAllocateModalBatch(b)}
+        />
+      )}
+
+      {allocateModalBatch && (
+        <AllocateModal
+          isOpen={Boolean(allocateModalBatch)}
+          onClose={() => setAllocateModalBatch(null)}
+          sourceBatch={allocateModalBatch}
+          allBatches={batches || []}
+          onAllocationComplete={() => {
+            setAllocateModalBatch(null);
+            loadData();
           }}
         />
       )}

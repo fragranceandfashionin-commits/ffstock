@@ -232,6 +232,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     const channel = supabase
       .channel(`outward-realtime-sync-${batchId || 'global'}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'inward_batches' }, debouncedBatchesRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'batch_allocations' }, debouncedBatchesRefresh)
       .on(
         'postgres_changes',
         batchId ? { event: '*', schema: 'public', table: 'stage_movements', filter: `batch_id=eq.${batchId}` } : { event: '*', schema: 'public', table: 'stage_movements' },

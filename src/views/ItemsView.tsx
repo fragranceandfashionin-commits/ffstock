@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { Tag, Boxes, PackagePlus } from 'lucide-react';
+import { Tag, Boxes, PackagePlus, ArrowRightLeft } from 'lucide-react';
 import { PageHeader, ErrorBanner, Button, ConfirmModal } from '@/components/ui';
 import { useToast } from '@/components/Toast';
 import {
@@ -11,19 +11,20 @@ import {
   fetchCaps,
   fetchAtomizers,
   fetchBoxes,
+  fetchBatchAllocations,
 } from '@/lib/queries';
-import { supabase, type Item, type ComponentStockSummary, type Supplier, type BatchWithRelations } from '@/lib/supabase';
+import { supabase, type Item, type ComponentStockSummary, type Supplier, type BatchWithRelations, type BatchAllocationWithRelations } from '@/lib/supabase';
 import type { View } from '@/lib/types';
 import type { NavigationContext } from '@/components/AppShell';
 import { getErrorMessage } from '@/lib/utils';
 
-// Subcomponents
 import { ItemCatalogueTab } from './items/ItemCatalogueTab';
 import { InwardBatchesTab } from './items/InwardBatchesTab';
 import { InwardStockModal } from './items/InwardStockModal';
 import { AddItemModal } from './items/AddItemModal';
 import { EditItemModal } from './items/EditItemModal';
 import { ItemAuditModal } from './items/ItemAuditModal';
+import { AllocateModal } from './items/AllocateModal';
 import type { CategoryAggregates } from './items/types';
 
 export type ItemsViewProps = {
@@ -53,6 +54,7 @@ export function ItemsView({
   const [caps, setCaps] = useState<Item[]>([]);
   const [atomizers, setAtomizers] = useState<Item[]>([]);
   const [boxes, setBoxes] = useState<Item[]>([]);
+  const [allocations, setAllocations] = useState<BatchAllocationWithRelations[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -71,6 +73,7 @@ export function ItemsView({
   const [preselectedInwardItemId, setPreselectedInwardItemId] = useState(initialItemId || '');
   const [deleteModalBatch, setDeleteModalBatch] = useState<BatchWithRelations | null>(null);
   const [deletingBatch, setDeletingBatch] = useState(false);
+  const [allocateModalBatch, setAllocateModalBatch] = useState<BatchWithRelations | null>(null);
 
   const [inspectedItemSummary, setInspectedItemSummary] = useState<ComponentStockSummary | null>(null);
   const lastHandledItemIdRef = useRef<string | null>(null);
@@ -81,7 +84,7 @@ export function ItemsView({
     if (!isSilent) setLoading(true);
     setError(null);
     try {
-      const [itms, summary, supps, b, used, c, a, bx] = await Promise.all([
+      const [itms, summary, supps, b, used, c, a, bx, allocs] = await Promise.all([
         fetchItems(),
         fetchComponentStockSummary().catch(() => [] as ComponentStockSummary[]),
         fetchSuppliers().catch(() => [] as Supplier[]),
@@ -90,6 +93,7 @@ export function ItemsView({
         fetchCaps().catch(() => [] as Item[]),
         fetchAtomizers().catch(() => [] as Item[]),
         fetchBoxes().catch(() => [] as Item[]),
+        fetchBatchAllocations().catch(() => [] as BatchAllocationWithRelations[]),
       ]);
 
       setItems(itms);
@@ -99,6 +103,7 @@ export function ItemsView({
       setCaps(c);
       setAtomizers(a);
       setBoxes(bx);
+      setAllocations(allocs);
 
       const sMap = new Map<string, ComponentStockSummary>();
       for (const s of summary) sMap.set(s.item.id, s);
@@ -146,6 +151,7 @@ export function ItemsView({
       .channel('items-and-batches-realtime-sync')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, debouncedReload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'inward_batches' }, debouncedReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'batch_allocations' }, debouncedReload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'item_stock_receipts' }, debouncedReload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'stage_movements' }, debouncedReload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'dispatches' }, debouncedReload)
@@ -298,14 +304,29 @@ export function ItemsView({
         title="Items & Stock Management"
         subtitle="Manage master catalogue SKUs, receive stock batches with brand name tagging, and launch batches directly into the production pipeline."
         action={
-          <Button
-            variant="primary"
-            onClick={() => openInwardStockModal()}
-            className="font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm py-2 px-4 rounded-xl flex items-center gap-2 text-xs cursor-pointer"
-          >
-            <PackagePlus className="h-4 w-4 text-emerald-100" />
-            <span>Inward Stock & Batch</span>
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (batches && batches.length > 0) {
+                  setAllocateModalBatch(batches[0]);
+                }
+              }}
+              className="font-bold bg-teal-50/80 hover:bg-teal-100 text-teal-900 border-teal-300 shadow-2xs py-2 px-3.5 rounded-xl flex items-center gap-1.5 text-xs cursor-pointer"
+              title="Transfer / Allocate stock between batches"
+            >
+              <ArrowRightLeft className="h-4 w-4 text-teal-600" />
+              <span>Allocate Stock</span>
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => openInwardStockModal()}
+              className="font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm py-2 px-4 rounded-xl flex items-center gap-2 text-xs cursor-pointer"
+            >
+              <PackagePlus className="h-4 w-4 text-emerald-100" />
+              <span>Inward Stock & Batch</span>
+            </Button>
+          </div>
         }
       />
 
@@ -370,12 +391,14 @@ export function ItemsView({
       {activeTab === 'batches' && (
         <InwardBatchesTab
           batches={batches}
+          allocations={allocations}
           usedBatchIds={usedBatchIds}
           searchQuery={searchQuery}
           onSearchQueryChange={setSearchQuery}
           loading={loading}
           onOpenInwardModal={() => openInwardStockModal()}
           onOpenDeleteBatchModal={(batch) => setDeleteModalBatch(batch)}
+          onOpenAllocateModal={(batch) => setAllocateModalBatch(batch)}
           onViewChange={onViewChange}
           onBatchUpdated={() => load(true)}
         />
@@ -442,7 +465,18 @@ export function ItemsView({
         />
       )}
 
-      {/* MODAL 5: CONFIRM DELETE ITEM */}
+      {/* MODAL 5: ALLOCATE STOCK BETWEEN BATCHES */}
+      {allocateModalBatch && (
+        <AllocateModal
+          isOpen={Boolean(allocateModalBatch)}
+          onClose={() => setAllocateModalBatch(null)}
+          sourceBatch={allocateModalBatch}
+          allBatches={batches}
+          onAllocationComplete={() => load(true)}
+        />
+      )}
+
+      {/* MODAL 6: CONFIRM DELETE ITEM */}
       {deleteModalItem && (
         <ConfirmModal
           isOpen={Boolean(deleteModalItem)}
@@ -456,7 +490,7 @@ export function ItemsView({
         />
       )}
 
-      {/* MODAL 6: CONFIRM DELETE INWARD BATCH */}
+      {/* MODAL 7: CONFIRM DELETE INWARD BATCH */}
       {deleteModalBatch && (
         <ConfirmModal
           isOpen={Boolean(deleteModalBatch)}

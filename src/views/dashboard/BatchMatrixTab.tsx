@@ -1,8 +1,9 @@
 import {
-  AlertCircle, ChevronDown, ChevronRight, Maximize2, MapPin, Clock, Zap, Truck, History, ArrowRight
+  AlertCircle, ChevronDown, ChevronRight, Maximize2, MapPin, Clock, Zap, Truck, History, ArrowRight,
+  ArrowRightLeft, Layers
 } from 'lucide-react';
 import { Card, Button, Badge, ItemCategoryBadge, ColorBadge } from '@/components/ui';
-import type { Stage } from '@/lib/supabase';
+import type { Stage, BatchWithRelations } from '@/lib/supabase';
 import type { BatchMatrixRow, InspectedBatchItem } from './types';
 import { formatNumber, formatDate } from '@/lib/utils';
 
@@ -19,6 +20,7 @@ export type BatchMatrixTabProps = {
   onSetZoomImageUrl: (data: { url: string; title: string; batchNo: string } | null) => void;
   onSetInspectedBatchItem: (item: InspectedBatchItem) => void;
   onOpenQuickModal: (batchId?: string, defaultTab?: 'move' | 'scrap' | 'dispatch') => void;
+  onOpenAllocateModal?: (batch: BatchWithRelations) => void;
 };
 
 export function BatchMatrixTab({
@@ -34,6 +36,7 @@ export function BatchMatrixTab({
   onSetZoomImageUrl,
   onSetInspectedBatchItem,
   onOpenQuickModal,
+  onOpenAllocateModal,
 }: BatchMatrixTabProps) {
   return (
     <Card className="p-0 overflow-hidden border-slate-200 shadow-2xs">
@@ -130,6 +133,23 @@ export function BatchMatrixTab({
                           </span>
                           <ItemCategoryBadge category={item.batch.item?.category} />
                           <ColorBadge color={item.batch.color} />
+                          {item.allocatedOutQty > 0 && (
+                            <span className="inline-flex items-center gap-1 font-bold text-amber-900 bg-amber-50 border border-amber-300 px-1.5 py-0.5 rounded text-[10px]">
+                              <ArrowRightLeft className="h-2.5 w-2.5 text-amber-600" />
+                              -{formatNumber(item.allocatedOutQty)} Alloc
+                            </span>
+                          )}
+                          {item.allocatedInQty > 0 && (
+                            <span className="inline-flex items-center gap-1 font-bold text-emerald-900 bg-emerald-50 border border-emerald-300 px-1.5 py-0.5 rounded text-[10px]">
+                              <ArrowRightLeft className="h-2.5 w-2.5 text-emerald-600" />
+                              +{formatNumber(item.allocatedInQty)} Recv
+                            </span>
+                          )}
+                          {item.isComponentBatch && (
+                            <span className="inline-flex items-center gap-1 font-bold text-violet-900 bg-violet-50 border border-violet-200 px-1.5 py-0.5 rounded text-[10px]">
+                              🔩 {item.componentTypeLabel || 'Component'}
+                            </span>
+                          )}
                         </div>
                         <p className="font-bold text-slate-800 text-xs mt-0.5 leading-snug">
                           {item.batch.item?.name ?? '—'}
@@ -168,18 +188,27 @@ export function BatchMatrixTab({
                       <p className="font-black text-slate-900 text-sm mt-0.5">
                         {formatNumber(item.batch.qty_received)}
                       </p>
+                      {(item.allocatedOutQty > 0 || item.allocatedInQty > 0) && (
+                        <p className="text-[10px] font-bold text-amber-700 mt-0.5">
+                          Net: {formatNumber(item.netReceivedQty)}
+                        </p>
+                      )}
                     </div>
                     <div className="border-x border-slate-200">
                       <p className="text-[10px] uppercase font-black text-emerald-800">On-Floor</p>
                       <p className="font-black text-emerald-700 text-sm mt-0.5">
                         {formatNumber(item.inFactoryQty)}
                       </p>
+                      <p className="text-[9px] text-slate-500 font-medium">Raw: {formatNumber(item.rawStockQty)}</p>
                     </div>
                     <div>
                       <p className="text-[10px] uppercase font-black text-violet-800">Shipped</p>
                       <p className="font-black text-violet-700 text-sm mt-0.5">
                         {item.dispatchedQty > 0 ? formatNumber(item.dispatchedQty) : '0'}
                       </p>
+                      {item.isComponentBatch && (
+                        <p className="text-[9px] text-violet-600 font-medium">BOM Fitted</p>
+                      )}
                     </div>
                   </div>
 
@@ -237,12 +266,23 @@ export function BatchMatrixTab({
                       ) : (
                         <>
                           <ChevronRight className="h-3.5 w-3.5" />
-                          <span>Timeline ({item.movements.length + item.dispatches.length})</span>
+                          <span>Timeline ({item.movements.length + item.dispatches.length + item.allocationsOut.length + item.allocationsIn.length})</span>
                         </>
                       )}
                     </button>
 
                     <div className="flex items-center gap-1.5">
+                      {onOpenAllocateModal && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onOpenAllocateModal(item.batch)}
+                          className="text-xs font-bold text-teal-800 bg-teal-50 hover:bg-teal-100 border-teal-200 min-h-[36px] px-2"
+                          title="Allocate stock"
+                        >
+                          <ArrowRightLeft className="h-3 w-3 text-teal-600" />
+                        </Button>
+                      )}
                       <Button
                         variant="outline"
                         size="sm"
@@ -272,6 +312,15 @@ export function BatchMatrixTab({
                           {item.batch.batch_no} History
                         </span>
                         <div className="flex gap-1.5">
+                          {onOpenAllocateModal && (
+                            <button
+                              type="button"
+                              onClick={() => onOpenAllocateModal(item.batch)}
+                              className="px-2 py-1 text-[11px] font-bold bg-teal-700 text-white rounded-md cursor-pointer"
+                            >
+                              ⇄ Alloc
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => onOpenQuickModal(item.batch.id, 'move')}
@@ -289,8 +338,72 @@ export function BatchMatrixTab({
                         </div>
                       </div>
 
+                      {/* Reconciliation Equation Bar */}
+                      <div className="p-2.5 rounded-lg bg-slate-800/90 border border-slate-700 text-[11px] font-mono space-y-1">
+                        <div className="text-amber-400 font-bold uppercase text-[10px] flex items-center gap-1">
+                          <Layers className="h-3 w-3" />
+                          Stock Reconciliation:
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5 text-slate-300 font-semibold">
+                          <span>Intake: {formatNumber(item.batch.qty_received)}</span>
+                          {item.allocatedOutQty > 0 && <span className="text-amber-400">-{formatNumber(item.allocatedOutQty)} alloc</span>}
+                          {item.allocatedInQty > 0 && <span className="text-emerald-400">+{formatNumber(item.allocatedInQty)} recv</span>}
+                          <span>= Net: <strong className="text-indigo-300">{formatNumber(item.netReceivedQty)}</strong></span>
+                        </div>
+                        <div className="text-[10px] text-slate-400 pt-0.5 border-t border-slate-700 flex flex-wrap gap-2">
+                          <span>Raw: <strong className="text-emerald-300">{formatNumber(item.rawStockQty)}</strong></span>
+                          <span>WIP: <strong className="text-amber-300">{formatNumber(item.wipQty)}</strong></span>
+                          <span>Ready: <strong className="text-sky-300">{formatNumber(item.readyQty)}</strong></span>
+                          <span>Dispatched: <strong className="text-violet-300">{formatNumber(item.dispatchedQty)}</strong></span>
+                        </div>
+                      </div>
+
+                      {/* Stock Allocations History if any */}
+                      {(item.allocationsOut.length > 0 || item.allocationsIn.length > 0) && (
+                        <div className="space-y-1.5 border-t border-slate-800 pt-2">
+                          <p className="text-[10px] font-bold uppercase text-teal-400 flex items-center gap-1">
+                            <ArrowRightLeft className="h-3 w-3 text-teal-400" />
+                            Stock Allocations ({item.allocationsOut.length + item.allocationsIn.length})
+                          </p>
+                          <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                            {item.allocationsOut.map((a) => (
+                              <div
+                                key={a.id}
+                                className="p-2 rounded-lg bg-slate-800 border border-amber-900/60 text-xs flex justify-between items-center"
+                              >
+                                <div>
+                                  <div className="flex items-center gap-1 font-bold text-amber-300">
+                                    <span>Allocated Out ➔ {a.destination_batch?.batch_no || 'Dest'}</span>
+                                  </div>
+                                  <p className="text-[10px] text-slate-400">{formatDate(a.allocated_on)} {a.allocated_by ? `• by ${a.allocated_by}` : ''} {a.remarks ? `• "${a.remarks}"` : ''}</p>
+                                </div>
+                                <span className="font-extrabold text-amber-400 text-xs">
+                                  -{formatNumber(a.qty)} pcs
+                                </span>
+                              </div>
+                            ))}
+                            {item.allocationsIn.map((a) => (
+                              <div
+                                key={a.id}
+                                className="p-2 rounded-lg bg-slate-800 border border-emerald-900/60 text-xs flex justify-between items-center"
+                              >
+                                <div>
+                                  <div className="flex items-center gap-1 font-bold text-emerald-300">
+                                    <span>Received In ➔ from {a.source_batch?.batch_no || 'Source'}</span>
+                                  </div>
+                                  <p className="text-[10px] text-slate-400">{formatDate(a.allocated_on)} {a.allocated_by ? `• by ${a.allocated_by}` : ''} {a.remarks ? `• "${a.remarks}"` : ''}</p>
+                                </div>
+                                <span className="font-extrabold text-emerald-400 text-xs">
+                                  +{formatNumber(a.qty)} pcs
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       {/* Movement History */}
-                      <div className="space-y-1.5">
+                      <div className="space-y-1.5 border-t border-slate-800 pt-2">
                         <p className="text-[10px] font-bold uppercase text-slate-400 flex items-center gap-1">
                           <History className="h-3 w-3 text-indigo-400" />
                           Stage Movements ({item.movements.length})
@@ -366,7 +479,7 @@ export function BatchMatrixTab({
                   <th className="px-3 py-3 min-w-[120px]">Supplier</th>
                   <th className="px-3 py-3 min-w-[80px]">Rack</th>
                   <th className="px-3 py-3 text-center min-w-[90px]">Floor Aging</th>
-                  <th className="px-3 py-3 text-right font-black text-slate-900 min-w-[90px]">
+                  <th className="px-3 py-3 text-right font-black text-slate-900 min-w-[100px]" title="Gross intake units received into warehouse">
                     Inward Total
                   </th>
                   {processStages.map((s) => (
@@ -375,18 +488,19 @@ export function BatchMatrixTab({
                       className={`px-3 py-3 text-right min-w-[105px] ${
                         selectedStageId === s.id ? 'bg-amber-100 text-amber-950 font-black' : ''
                       }`}
+                      title={s.name === 'Raw Stock' ? 'Virgin unconverted units remaining in storage rack (Intake - Allocations Out + In - Moved)' : undefined}
                     >
                       {s.name}
                     </th>
                   ))}
-                  <th className="px-3 py-3 text-right font-black text-violet-900 min-w-[95px]">
+                  <th className="px-3 py-3 text-right font-black text-violet-900 min-w-[95px]" title="Finished units shipped to customers with invoices">
                     Dispatched
                   </th>
-                  <th className="px-4 py-3 text-right font-black text-emerald-900 bg-emerald-50/50 min-w-[110px]">
+                  <th className="px-4 py-3 text-right font-black text-emerald-900 bg-emerald-50/50 min-w-[110px]" title="Live physical stock inside factory = Raw + In Production (WIP) + Ready">
                     On-Floor Balance
                   </th>
                   <th className="px-4 py-3 min-w-[140px]">Customer Link</th>
-                  <th className="px-4 py-3 text-right min-w-[210px]">Action</th>
+                  <th className="px-4 py-3 text-right min-w-[240px]">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
@@ -451,8 +565,34 @@ export function BatchMatrixTab({
                               )}
                               <span className="font-mono font-black">{item.batch.batch_no}</span>
                             </div>
-                            <div className="flex items-center gap-1 mt-0.5">
+                            <div className="flex items-center gap-1 mt-0.5 flex-wrap">
                               <ColorBadge color={item.batch.color} />
+                              {item.allocatedOutQty > 0 && (
+                                <span
+                                  className="inline-flex items-center gap-1 font-bold text-amber-900 bg-amber-50 border border-amber-300 px-1.5 py-0.5 rounded text-[10px] leading-tight"
+                                  title={`Allocated ${formatNumber(item.allocatedOutQty)} pcs to other batches`}
+                                >
+                                  <ArrowRightLeft className="h-2.5 w-2.5 text-amber-600" />
+                                  -{formatNumber(item.allocatedOutQty)} Alloc
+                                </span>
+                              )}
+                              {item.allocatedInQty > 0 && (
+                                <span
+                                  className="inline-flex items-center gap-1 font-bold text-emerald-900 bg-emerald-50 border border-emerald-300 px-1.5 py-0.5 rounded text-[10px] leading-tight"
+                                  title={`Received ${formatNumber(item.allocatedInQty)} pcs from other batches`}
+                                >
+                                  <ArrowRightLeft className="h-2.5 w-2.5 text-emerald-600" />
+                                  +{formatNumber(item.allocatedInQty)} Recv
+                                </span>
+                              )}
+                              {item.isComponentBatch && (
+                                <span
+                                  className="inline-flex items-center gap-1 font-bold text-violet-900 bg-violet-50 border border-violet-200 px-1.5 py-0.5 rounded text-[10px] leading-tight"
+                                  title={`${item.componentTypeLabel || 'Component'}: fitted on dispatches`}
+                                >
+                                  🔩 {item.componentTypeLabel || 'Component'}
+                                </span>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -499,7 +639,24 @@ export function BatchMatrixTab({
 
                       {/* Inward Total */}
                       <td className="px-3 py-3.5 text-right font-black text-slate-900">
-                        {formatNumber(item.batch.qty_received)}
+                        <div>{formatNumber(item.batch.qty_received)}</div>
+                        {(item.allocatedOutQty > 0 || item.allocatedInQty > 0) && (
+                          <div className="text-[10px] font-bold mt-0.5">
+                            {item.allocatedOutQty > 0 && (
+                              <span className="text-amber-800 bg-amber-50 border border-amber-200 px-1 py-0.2 rounded inline-block mr-0.5" title="Allocated Out">
+                                -{formatNumber(item.allocatedOutQty)}
+                              </span>
+                            )}
+                            {item.allocatedInQty > 0 && (
+                              <span className="text-emerald-800 bg-emerald-50 border border-emerald-200 px-1 py-0.2 rounded inline-block mr-0.5" title="Allocated In">
+                                +{formatNumber(item.allocatedInQty)}
+                              </span>
+                            )}
+                            <span className="text-slate-500 font-semibold block text-[9px]">
+                              net: {formatNumber(item.netReceivedQty)}
+                            </span>
+                          </div>
+                        )}
                       </td>
 
                       {/* Stage Columns */}
@@ -517,6 +674,8 @@ export function BatchMatrixTab({
                           >
                             {qty > 0 ? (
                               <span className="font-black text-slate-900">{formatNumber(qty)}</span>
+                            ) : item.isComponentBatch && s.name !== 'Raw Stock' ? (
+                              <span className="text-slate-300 text-xs" title="Component fitted on assembly/dispatch directly">—</span>
                             ) : (
                               '—'
                             )}
@@ -526,7 +685,16 @@ export function BatchMatrixTab({
 
                       {/* Dispatched */}
                       <td className="px-3 py-3.5 text-right font-black text-violet-800">
-                        {item.dispatchedQty > 0 ? formatNumber(item.dispatchedQty) : '—'}
+                        {item.dispatchedQty > 0 ? (
+                          <div>
+                            <span>{formatNumber(item.dispatchedQty)}</span>
+                            {item.isComponentBatch && (
+                              <span className="block text-[9px] font-medium text-violet-600">BOM Fitted</span>
+                            )}
+                          </div>
+                        ) : (
+                          '—'
+                        )}
                       </td>
 
                       {/* Factory Balance */}
@@ -552,9 +720,21 @@ export function BatchMatrixTab({
                         )}
                       </td>
 
-                      {/* Actions: Inspect 360° & Move/Ship */}
+                      {/* Actions: Allocate, Inspect 360° & Move/Ship */}
                       <td className="px-4 py-3.5 text-right">
                         <div className="flex items-center justify-end gap-1.5">
+                          {onOpenAllocateModal && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => onOpenAllocateModal(item.batch)}
+                              className="text-xs font-bold text-teal-800 bg-teal-50/70 hover:bg-teal-100 border-teal-300 shadow-2xs cursor-pointer inline-flex items-center"
+                              title="Allocate stock from this batch to another batch"
+                            >
+                              <ArrowRightLeft className="h-3 w-3 text-teal-600 mr-1" />
+                              Allocate
+                            </Button>
+                          )}
                           <Button
                             variant="outline"
                             size="sm"
@@ -607,6 +787,17 @@ export function BatchMatrixTab({
                     </div>
 
                     <div className="flex items-center gap-2">
+                      {onOpenAllocateModal && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => onOpenAllocateModal(item.batch)}
+                          className="text-xs font-bold bg-teal-700 hover:bg-teal-600 text-white border-none cursor-pointer"
+                        >
+                          <ArrowRightLeft className="h-3.5 w-3.5" />
+                          Allocate Stock
+                        </Button>
+                      )}
                       <Button
                         variant="secondary"
                         size="sm"
@@ -628,8 +819,53 @@ export function BatchMatrixTab({
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-4">
-                    {/* Movement History */}
+                  {/* 5-Pillar Reconciliation Equation Bar */}
+                  <div className="p-3 bg-slate-800/90 rounded-xl border border-slate-700 text-xs text-slate-200 mt-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-700/80 pb-2 mb-2">
+                      <span className="font-black text-amber-300 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                        <Layers className="h-3.5 w-3.5 text-amber-400" />
+                        Batch Lifecycle Reconciliation Equation
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        Mathematical Proof: Intake - Allocations Out + In = Net Available = Raw + WIP + Ready + Dispatched
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs font-mono font-bold">
+                      <span className="px-2 py-1 bg-slate-900 rounded border border-slate-700 text-white">
+                        Intake: {formatNumber(item.batch.qty_received)}
+                      </span>
+                      {item.allocatedOutQty > 0 && (
+                        <span className="px-2 py-1 bg-amber-950/80 text-amber-300 rounded border border-amber-800">
+                          - Alloc Out: {formatNumber(item.allocatedOutQty)}
+                        </span>
+                      )}
+                      {item.allocatedInQty > 0 && (
+                        <span className="px-2 py-1 bg-emerald-950/80 text-emerald-300 rounded border border-emerald-800">
+                          + Alloc In: {formatNumber(item.allocatedInQty)}
+                        </span>
+                      )}
+                      <span className="text-slate-400">=</span>
+                      <span className="px-2 py-1 bg-indigo-950/80 text-indigo-300 rounded border border-indigo-700 font-black">
+                        Net Available: {formatNumber(item.netReceivedQty)}
+                      </span>
+                      <span className="text-slate-400">➔</span>
+                      <span className="px-2 py-1 bg-slate-900 text-emerald-300 rounded border border-emerald-800">
+                        Raw Stock: {formatNumber(item.rawStockQty)}
+                      </span>
+                      <span className="px-2 py-1 bg-slate-900 text-amber-300 rounded border border-amber-800">
+                        WIP: {formatNumber(item.wipQty)}
+                      </span>
+                      <span className="px-2 py-1 bg-slate-900 text-sky-300 rounded border border-sky-800">
+                        Ready: {formatNumber(item.readyQty)}
+                      </span>
+                      <span className="px-2 py-1 bg-slate-900 text-violet-300 rounded border border-violet-800">
+                        Dispatched: {formatNumber(item.dispatchedQty)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 mt-4">
+                    {/* Column 1: Movement History */}
                     <div className="space-y-2">
                       <h5 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                         <History className="h-4 w-4 text-indigo-400" />
@@ -674,7 +910,7 @@ export function BatchMatrixTab({
                                 <span className="font-extrabold text-emerald-400 text-sm">
                                   {formatNumber(m.qty_moved)}
                                 </span>
-                                <p className="text-[10px] text-slate-400">bottles moved</p>
+                                <p className="text-[10px] text-slate-400">units moved</p>
                               </div>
                             </div>
                           ))}
@@ -682,7 +918,65 @@ export function BatchMatrixTab({
                       )}
                     </div>
 
-                    {/* Dispatch History */}
+                    {/* Column 2: Stock Allocations History */}
+                    <div className="space-y-2">
+                      <h5 className="text-xs font-bold uppercase tracking-wider text-teal-400 flex items-center gap-1.5">
+                        <ArrowRightLeft className="h-4 w-4 text-teal-400" />
+                        Stock Allocations ({item.allocationsOut.length + item.allocationsIn.length})
+                      </h5>
+                      {item.allocationsOut.length === 0 && item.allocationsIn.length === 0 ? (
+                        <p className="text-xs text-slate-500 italic py-2">
+                          No stock transfers or allocations recorded for this batch.
+                        </p>
+                      ) : (
+                        <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                          {item.allocationsOut.map((a) => (
+                            <div
+                              key={a.id}
+                              className="flex items-center justify-between p-2.5 rounded-xl bg-slate-800/80 border border-amber-900/60 text-xs"
+                            >
+                              <div>
+                                <div className="flex items-center gap-1 font-bold text-amber-300">
+                                  <span>Allocated Out ➔ Batch {a.destination_batch?.batch_no || 'Destination'}</span>
+                                </div>
+                                <p className="text-[10px] text-slate-400 mt-0.5">
+                                  {formatDate(a.allocated_on)} {a.allocated_by ? `• by ${a.allocated_by}` : ''} {a.remarks ? `• "${a.remarks}"` : ''}
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <span className="font-extrabold text-amber-400 text-sm">
+                                  -{formatNumber(a.qty)}
+                                </span>
+                                <p className="text-[10px] text-slate-400">pcs allocated</p>
+                              </div>
+                            </div>
+                          ))}
+                          {item.allocationsIn.map((a) => (
+                            <div
+                              key={a.id}
+                              className="flex items-center justify-between p-2.5 rounded-xl bg-slate-800/80 border border-emerald-900/60 text-xs"
+                            >
+                              <div>
+                                <div className="flex items-center gap-1 font-bold text-emerald-300">
+                                  <span>Received In ➔ from Batch {a.source_batch?.batch_no || 'Source'}</span>
+                                </div>
+                                <p className="text-[10px] text-slate-400 mt-0.5">
+                                  {formatDate(a.allocated_on)} {a.allocated_by ? `• by ${a.allocated_by}` : ''} {a.remarks ? `• "${a.remarks}"` : ''}
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <span className="font-extrabold text-emerald-400 text-sm">
+                                  +{formatNumber(a.qty)}
+                                </span>
+                                <p className="text-[10px] text-slate-400">pcs received</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Column 3: Dispatch History */}
                     <div className="space-y-2">
                       <h5 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                         <Truck className="h-4 w-4 text-violet-400" />

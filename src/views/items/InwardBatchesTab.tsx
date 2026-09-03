@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Boxes, PackagePlus, Download, Maximize2, Send, Trash2, Pencil } from 'lucide-react';
+import { Boxes, PackagePlus, Download, Maximize2, Send, Trash2, Pencil, ArrowRightLeft } from 'lucide-react';
 import {
   Card,
   Button,
@@ -11,41 +11,61 @@ import {
   EmptyState,
   Modal,
 } from '@/components/ui';
-import type { BatchWithRelations } from '@/lib/supabase';
+import type { BatchWithRelations, BatchAllocationWithRelations } from '@/lib/supabase';
 import type { View } from '@/lib/types';
 import type { NavigationContext } from '@/components/AppShell';
 import { updateInwardBatchBrand } from '@/lib/queries';
 import { formatNumber, formatDate, downloadCSV, getTodayDateString, getErrorMessage } from '@/lib/utils';
 import { useToast } from '@/components/Toast';
+import { AllocationsLedgerModal } from './AllocationsLedgerModal';
 
 export type InwardBatchesTabProps = {
   batches: BatchWithRelations[];
+  allocations?: BatchAllocationWithRelations[];
   usedBatchIds: Set<string>;
   searchQuery: string;
   onSearchQueryChange: (q: string) => void;
   loading: boolean;
   onOpenInwardModal: () => void;
   onOpenDeleteBatchModal: (batch: BatchWithRelations) => void;
+  onOpenAllocateModal: (batch: BatchWithRelations) => void;
   onViewChange?: (view: View, context?: NavigationContext) => void;
   onBatchUpdated?: () => void;
 };
 
 export function InwardBatchesTab({
   batches,
+  allocations = [],
   usedBatchIds,
   searchQuery,
   onSearchQueryChange,
   loading,
   onOpenInwardModal,
   onOpenDeleteBatchModal,
+  onOpenAllocateModal,
   onViewChange,
   onBatchUpdated,
 }: InwardBatchesTabProps) {
   const [zoomImage, setZoomImage] = useState<{ url: string; title: string; batchNo?: string } | null>(null);
   const [editingBrandBatch, setEditingBrandBatch] = useState<BatchWithRelations | null>(null);
+  const [showAllocationsLedger, setShowAllocationsLedger] = useState(false);
   const [newBrandValue, setNewBrandValue] = useState('');
   const [savingBrand, setSavingBrand] = useState(false);
   const toast = useToast();
+
+  const { allocOutByBatch, allocInByBatch } = useMemo(() => {
+    const outMap = new Map<string, number>();
+    const inMap = new Map<string, number>();
+    for (const a of allocations) {
+      if (a.source_batch_id) {
+        outMap.set(a.source_batch_id, (outMap.get(a.source_batch_id) || 0) + Number(a.qty || 0));
+      }
+      if (a.destination_batch_id) {
+        inMap.set(a.destination_batch_id, (inMap.get(a.destination_batch_id) || 0) + Number(a.qty || 0));
+      }
+    }
+    return { allocOutByBatch: outMap, allocInByBatch: inMap };
+  }, [allocations]);
 
   const openEditBrand = (b: BatchWithRelations) => {
     setEditingBrandBatch(b);
@@ -152,6 +172,16 @@ export function InwardBatchesTab({
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowAllocationsLedger(true)}
+              className="text-xs font-bold text-teal-800 bg-teal-50/60 hover:bg-teal-100 border-teal-200 shadow-2xs cursor-pointer inline-flex items-center gap-1"
+              title="View complete stock allocation audit trail across all batches"
+            >
+              <ArrowRightLeft className="h-3.5 w-3.5 text-teal-600" />
+              Allocations Ledger
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -272,6 +302,11 @@ export function InwardBatchesTab({
                           {formatNumber(b.qty_received)}
                         </p>
                         <p className="text-[10px] font-bold text-slate-500">{b.item?.unit || 'pcs'}</p>
+                        {((allocOutByBatch.get(b.id) || 0) > 0 || (allocInByBatch.get(b.id) || 0) > 0) && (
+                          <p className="text-[10px] font-bold text-amber-700 mt-0.5">
+                            Net: {formatNumber(Math.max(0, b.qty_received - (allocOutByBatch.get(b.id) || 0) + (allocInByBatch.get(b.id) || 0)))}
+                          </p>
+                        )}
                       </div>
                     </div>
 
@@ -290,6 +325,16 @@ export function InwardBatchesTab({
                       </span>
 
                       <div className="flex items-center gap-1.5">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onOpenAllocateModal(b)}
+                          className="text-xs font-bold text-teal-800 border-teal-300 bg-teal-50/70 hover:bg-teal-100 min-h-[34px] cursor-pointer inline-flex items-center gap-1"
+                          title="Allocate stock from this batch to another batch"
+                        >
+                          <ArrowRightLeft className="h-3 w-3 text-teal-600" />
+                          Allocate
+                        </Button>
                         {onViewChange && (
                           <Button
                             variant="primary"
@@ -305,7 +350,7 @@ export function InwardBatchesTab({
                           type="button"
                           onClick={() => onOpenDeleteBatchModal(b)}
                           className="rounded-xl min-w-[34px] min-h-[34px] flex items-center justify-center text-rose-600 hover:bg-rose-50 border border-rose-200 cursor-pointer"
-                          title={isUsed ? 'Cannot delete batch with movement history' : 'Delete batch'}
+                          title={isUsed ? 'Cannot delete batch with movement or allocation history' : 'Delete batch'}
                           aria-label={`Delete batch ${b.batch_no}`}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -420,9 +465,28 @@ export function InwardBatchesTab({
                           </td>
 
                           <td className="px-3.5 py-3 text-right whitespace-nowrap">
-                            <span className="font-black text-emerald-950 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg text-xs shadow-2xs">
-                              {formatNumber(b.qty_received)} <span className="text-[10px] font-normal text-slate-500">{b.item?.unit || 'pcs'}</span>
-                            </span>
+                            <div className="inline-flex flex-col items-end">
+                              <span className="font-black text-emerald-950 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg text-xs shadow-2xs">
+                                {formatNumber(b.qty_received)} <span className="text-[10px] font-normal text-slate-500">{b.item?.unit || 'pcs'}</span>
+                              </span>
+                              {((allocOutByBatch.get(b.id) || 0) > 0 || (allocInByBatch.get(b.id) || 0) > 0) && (
+                                <div className="flex items-center gap-1 mt-1 text-[10px] font-bold">
+                                  {(allocOutByBatch.get(b.id) || 0) > 0 && (
+                                    <span className="text-amber-800 bg-amber-50 border border-amber-200 px-1 rounded" title="Allocated Out">
+                                      -{formatNumber(allocOutByBatch.get(b.id) || 0)}
+                                    </span>
+                                  )}
+                                  {(allocInByBatch.get(b.id) || 0) > 0 && (
+                                    <span className="text-emerald-800 bg-emerald-50 border border-emerald-200 px-1 rounded" title="Allocated In">
+                                      +{formatNumber(allocInByBatch.get(b.id) || 0)}
+                                    </span>
+                                  )}
+                                  <span className="text-slate-500 font-medium">
+                                    net: {formatNumber(Math.max(0, b.qty_received - (allocOutByBatch.get(b.id) || 0) + (allocInByBatch.get(b.id) || 0)))}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
                           </td>
 
                           <td className="px-3.5 py-3 whitespace-nowrap font-semibold text-slate-700">
@@ -446,6 +510,16 @@ export function InwardBatchesTab({
                           </td>
 
                           <td className="px-4 py-3 text-right whitespace-nowrap space-x-1.5">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => onOpenAllocateModal(b)}
+                              className="text-[11px] py-1 px-2.5 font-bold text-teal-800 border-teal-300 bg-teal-50/70 hover:bg-teal-100 shadow-2xs cursor-pointer inline-flex items-center gap-1"
+                              title="Allocate stock from this batch to another batch"
+                            >
+                              <ArrowRightLeft className="h-3 w-3 text-teal-600" />
+                              Allocate
+                            </Button>
                             {onViewChange && (
                               <Button
                                 variant="primary"
@@ -463,7 +537,7 @@ export function InwardBatchesTab({
                               size="sm"
                               onClick={() => onOpenDeleteBatchModal(b)}
                               className="text-[11px] py-1 px-2 font-bold text-rose-700 border-rose-300 bg-rose-50/50 hover:bg-rose-100 shadow-2xs cursor-pointer"
-                              title={isUsed ? 'Cannot delete batch with movement history' : 'Delete inward batch'}
+                              title={isUsed ? 'Cannot delete batch with movement or allocation history' : 'Delete inward batch'}
                             >
                               <Trash2 className="h-3 w-3" />
                             </Button>
@@ -552,6 +626,14 @@ export function InwardBatchesTab({
             </div>
           </div>
         </Modal>
+      )}
+
+      {/* Allocations Ledger Modal */}
+      {showAllocationsLedger && (
+        <AllocationsLedgerModal
+          isOpen={showAllocationsLedger}
+          onClose={() => setShowAllocationsLedger(false)}
+        />
       )}
     </div>
   );

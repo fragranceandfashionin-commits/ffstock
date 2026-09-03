@@ -205,6 +205,25 @@ export type ItemStockReceipt = {
   supplier?: Supplier | null;
 };
 
+export type BatchAllocation = {
+  id: string;
+  source_batch_id: string;
+  destination_batch_id: string;
+  qty: number;
+  allocation_type: string;
+  item_id?: string | null;
+  allocated_on: string;
+  remarks: string | null;
+  allocated_by: string | null;
+  created_at: string;
+};
+
+export type BatchAllocationWithRelations = BatchAllocation & {
+  source_batch?: BatchWithRelations | null;
+  destination_batch?: BatchWithRelations | null;
+  item?: Item | null;
+};
+
 export type ComponentStockSummary = {
   item: Item;
   category: string;

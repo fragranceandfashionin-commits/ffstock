@@ -1,6 +1,19 @@
 import { supabase } from './supabase';
 import type { BatchStock, LocationStock, StageStock } from './types';
-import type { Stage, InwardBatch, StageMovement, Dispatch, Item, Supplier, BatchWithRelations, MovementWithRelations, ComponentStockSummary, ItemStockReceipt } from './supabase';
+import type {
+  Stage,
+  InwardBatch,
+  StageMovement,
+  Dispatch,
+  Item,
+  Supplier,
+  BatchWithRelations,
+  MovementWithRelations,
+  ComponentStockSummary,
+  ItemStockReceipt,
+  BatchAllocation,
+  BatchAllocationWithRelations,
+} from './supabase';
 import { getTodayDateString } from './utils';
 
 /**
@@ -1355,7 +1368,7 @@ export async function fetchBatchStock(batchId: string): Promise<BatchStock[]> {
   }
 
   // Fallback: stock computed locally (used until the migration is applied).
-  const [stagesResult, batchResult, movementsResult, dispatchesResult] = await Promise.all([
+  const [stagesResult, batchResult, movementsResult, dispatchesResult, allocsOutRes, allocsInRes] = await Promise.all([
     fetchStages(),
     supabase.from('inward_batches').select('qty_received').eq('id', batchId).maybeSingle(),
     supabase
@@ -1363,6 +1376,12 @@ export async function fetchBatchStock(batchId: string): Promise<BatchStock[]> {
       .select('from_stage_id, to_stage_id, qty_moved')
       .eq('batch_id', batchId),
     supabase.from('dispatches').select('qty').eq('batch_id', batchId),
+    Promise.resolve(
+      supabase.from('batch_allocations').select('qty').eq('source_batch_id', batchId)
+    ).catch(() => ({ data: [] as { qty: number }[], error: null })),
+    Promise.resolve(
+      supabase.from('batch_allocations').select('qty').eq('destination_batch_id', batchId)
+    ).catch(() => ({ data: [] as { qty: number }[], error: null })),
   ]);
 
   if (batchResult.error) throw batchResult.error;
@@ -1372,11 +1391,15 @@ export async function fetchBatchStock(batchId: string): Promise<BatchStock[]> {
   const batch = batchResult.data as { qty_received: number } | null;
   if (!batch) return [];
 
+  const allocOutTotal = ((allocsOutRes.data || []) as { qty: number }[]).reduce((acc, a) => acc + (Number(a.qty) || 0), 0);
+  const allocInTotal = ((allocsInRes.data || []) as { qty: number }[]).reduce((acc, a) => acc + (Number(a.qty) || 0), 0);
+  const netReceived = Math.max(0, batch.qty_received - allocOutTotal + allocInTotal);
+
   const stockByStage = new Map<string, number>();
   for (const stage of stagesResult) stockByStage.set(stage.id, 0);
 
   const rawStage = stagesResult.find((s) => s.name === 'Raw Stock');
-  if (rawStage) stockByStage.set(rawStage.id, batch.qty_received);
+  if (rawStage) stockByStage.set(rawStage.id, netReceived);
 
   for (const m of (movementsResult.data ?? []) as Pick<StageMovement, 'from_stage_id' | 'to_stage_id' | 'qty_moved'>[]) {
     stockByStage.set(m.from_stage_id, (stockByStage.get(m.from_stage_id) ?? 0) - m.qty_moved);
@@ -1402,21 +1425,27 @@ export async function fetchBatchStock(batchId: string): Promise<BatchStock[]> {
 }
 
 /**
- * Batch ids that already have ledger history (movements or dispatches).
+ * Batch ids that already have ledger history (movements, dispatches, or allocations).
  * Used to decide which inward batches can still be deleted: a batch is only
- * deletable while nothing downstream references it (see migration
- * 20260813150000).
+ * deletable while nothing downstream references it.
  */
 export async function fetchUsedBatchIds(): Promise<Set<string>> {
-  const [moves, disps] = await Promise.all([
+  const [moves, disps, allocs] = await Promise.all([
     supabase.from('stage_movements').select('batch_id'),
     supabase.from('dispatches').select('batch_id'),
+    Promise.resolve(
+      supabase.from('batch_allocations').select('source_batch_id, destination_batch_id')
+    ).catch(() => ({ data: [] as { source_batch_id?: string; destination_batch_id?: string }[], error: null })),
   ]);
   if (moves.error) throw moves.error;
   if (disps.error) throw disps.error;
   const used = new Set<string>();
   for (const m of (moves.data ?? []) as Pick<StageMovement, 'batch_id'>[]) used.add(m.batch_id);
   for (const d of (disps.data ?? []) as Pick<Dispatch, 'batch_id'>[]) used.add(d.batch_id);
+  for (const a of (allocs.data ?? []) as { source_batch_id?: string; destination_batch_id?: string }[]) {
+    if (a.source_batch_id) used.add(a.source_batch_id);
+    if (a.destination_batch_id) used.add(a.destination_batch_id);
+  }
   return used;
 }
 
@@ -1424,6 +1453,133 @@ export async function fetchBatchAvailableAtStage(batchId: string, stageId: strin
   const stock = await fetchBatchStock(batchId);
   const entry = stock.find((s) => s.stage_id === stageId);
   return entry?.qty ?? 0;
+}
+
+export async function fetchBatchAvailableRawStock(batchId: string): Promise<number> {
+  const stock = await fetchBatchStock(batchId);
+  const rawEntry = stock.find((s) => s.sequence_no === 1 || s.stage_name === 'Raw Stock');
+  return rawEntry?.qty ?? 0;
+}
+
+/**
+ * Executes an atomic stock allocation from one batch to another.
+ */
+export async function allocateStockBetweenBatches(payload: {
+  source_batch_id: string;
+  destination_batch_id: string;
+  qty: number;
+  allocation_type?: string;
+  item_id?: string | null;
+  remarks?: string | null;
+  allocated_by?: string | null;
+  allocated_on?: string;
+}): Promise<{
+  allocation_id: string;
+  source_batch_id: string;
+  source_batch_no: string;
+  destination_batch_id: string;
+  destination_batch_no: string;
+  qty_allocated: number;
+  source_new_raw_qty: number;
+  destination_new_raw_qty: number;
+  allocated_on: string;
+}> {
+  // 1. Try atomic database RPC
+  const { data, error } = await supabase.rpc('allocate_stock_between_batches', {
+    p_source_batch_id: payload.source_batch_id,
+    p_destination_batch_id: payload.destination_batch_id,
+    p_qty: payload.qty,
+    p_allocation_type: payload.allocation_type || 'primary',
+    p_item_id: payload.item_id || null,
+    p_remarks: payload.remarks?.trim() || null,
+    p_allocated_by: payload.allocated_by?.trim() || null,
+    p_allocated_on: payload.allocated_on || getTodayDateString(),
+  });
+
+  if (!error && data) {
+    return data as {
+      allocation_id: string;
+      source_batch_id: string;
+      source_batch_no: string;
+      destination_batch_id: string;
+      destination_batch_no: string;
+      qty_allocated: number;
+      source_new_raw_qty: number;
+      destination_new_raw_qty: number;
+      allocated_on: string;
+    };
+  }
+
+  if (error && error.code !== 'PGRST202') {
+    throw error;
+  }
+
+  // 2. Fallback: direct table insert
+  const { data: insertData, error: insertError } = await supabase
+    .from('batch_allocations')
+    .insert({
+      source_batch_id: payload.source_batch_id,
+      destination_batch_id: payload.destination_batch_id,
+      qty: payload.qty,
+      allocation_type: payload.allocation_type || 'primary',
+      item_id: payload.item_id || null,
+      remarks: payload.remarks?.trim() || null,
+      allocated_by: payload.allocated_by?.trim() || null,
+      allocated_on: payload.allocated_on || getTodayDateString(),
+    })
+    .select('id')
+    .single();
+
+  if (insertError) throw insertError;
+
+  return {
+    allocation_id: insertData?.id || '',
+    source_batch_id: payload.source_batch_id,
+    source_batch_no: '',
+    destination_batch_id: payload.destination_batch_id,
+    destination_batch_no: '',
+    qty_allocated: payload.qty,
+    source_new_raw_qty: 0,
+    destination_new_raw_qty: 0,
+    allocated_on: payload.allocated_on || getTodayDateString(),
+  };
+}
+
+/**
+ * Fetches all stock allocations, optionally filtered by a specific batch (source or destination).
+ */
+export async function fetchBatchAllocations(batchId?: string): Promise<BatchAllocationWithRelations[]> {
+  try {
+    let query = supabase
+      .from('batch_allocations')
+      .select('*, item:items(*)')
+      .order('allocated_on', { ascending: false })
+      .order('created_at', { ascending: false });
+
+    if (batchId) {
+      query = query.or(`source_batch_id.eq.${batchId},destination_batch_id.eq.${batchId}`);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      if (error.code === 'PGRST205' || error.code === '42P01') return [];
+      throw error;
+    }
+
+    if (!data || data.length === 0) return [];
+
+    const batches = await fetchBatches().catch(() => []);
+    const batchMap = new Map(batches.map((b) => [b.id, b]));
+
+    return (data as (BatchAllocation & { item: Item | null })[]).map((alloc) => ({
+      ...alloc,
+      source_batch: batchMap.get(alloc.source_batch_id) || null,
+      destination_batch: batchMap.get(alloc.destination_batch_id) || null,
+    }));
+  } catch (err) {
+    console.warn('Failed to fetch batch allocations:', err);
+    return [];
+  }
 }
 
 /**
@@ -1498,16 +1654,28 @@ export async function fetchComponentStockFromView(): Promise<ComponentStockViewR
  * 6. Granular orderUsageList and batchUsageList for 100% auditability
  */
 export async function fetchComponentStockSummary(asOfDate?: string | null): Promise<ComponentStockSummary[]> {
-  const [items, stages, batchesData, movementsData, dispatchesData, receiptsData] = await Promise.all([
+  const [items, stages, batchesData, movementsData, dispatchesData, receiptsData, allocationsData] = await Promise.all([
     fetchItems().catch(() => []),
     fetchStages().catch(() => []),
     fetchPagedRows<Record<string, unknown>>('inward_batches').catch(() => []),
     fetchPagedRows<Record<string, unknown>>('stage_movements').catch(() => []),
     fetchPagedRows<Record<string, unknown>>('dispatches').catch(() => []),
     fetchItemStockReceipts().catch(() => []),
+    fetchPagedRows<Record<string, unknown>>('batch_allocations').catch(() => []),
   ]);
 
   const stageMap = new Map(stages.map((s) => [s.id, s]));
+
+  const rawAllocations = asOfDate
+    ? (allocationsData as unknown as { source_batch_id: string; destination_batch_id: string; qty: number; allocated_on: string }[]).filter((a) => a.allocated_on <= asOfDate)
+    : (allocationsData as unknown as { source_batch_id: string; destination_batch_id: string; qty: number; allocated_on: string }[]);
+
+  const allocOutByBatch = new Map<string, number>();
+  const allocInByBatch = new Map<string, number>();
+  for (const a of rawAllocations) {
+    allocOutByBatch.set(a.source_batch_id, (allocOutByBatch.get(a.source_batch_id) ?? 0) + (Number(a.qty) || 0));
+    allocInByBatch.set(a.destination_batch_id, (allocInByBatch.get(a.destination_batch_id) ?? 0) + (Number(a.qty) || 0));
+  }
 
   // Apply optional point-in-time historical filter
   const allBatches = batchesData as unknown as {
@@ -1875,7 +2043,9 @@ export async function fetchComponentStockSummary(asOfDate?: string | null): Prom
     if (isBottle) {
       for (const b of rawBatches) {
         if (b.item_id !== item.id && (itemMap.get(b.item_id)?.name.toLowerCase().trim() !== itemNameNorm)) continue;
-        const intake = b.qty_received;
+        const bAllocOut = allocOutByBatch.get(b.id) ?? 0;
+        const bAllocIn = allocInByBatch.get(b.id) ?? 0;
+        const intake = Math.max(0, b.qty_received - bAllocOut + bAllocIn);
         const bMoves = movementsByBatch.get(b.id) ?? [];
 
         const forwardOutFromRaw = bMoves
@@ -1993,7 +2163,9 @@ export async function fetchComponentStockSummary(asOfDate?: string | null): Prom
     let directCount = 0;
     for (const b of rawBatches) {
       if (b.item_id === item.id || (itemMap.get(b.item_id)?.name.toLowerCase().trim() === itemNameNorm && (itemMap.get(b.item_id)?.category || '').toLowerCase() === itemCat.toLowerCase())) {
-        directInwardQty += b.qty_received;
+        const bAllocOut = allocOutByBatch.get(b.id) ?? 0;
+        const bAllocIn = allocInByBatch.get(b.id) ?? 0;
+        directInwardQty += Math.max(0, b.qty_received - bAllocOut + bAllocIn);
         directCount++;
         accountedBatchIds.add(b.id);
       }

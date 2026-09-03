@@ -1,6 +1,6 @@
 import {
   Box, Maximize2, Clock, Truck, AlertTriangle, CheckCircle, TrendingUp, PackageCheck, Layers,
-  History, ArrowRight, Zap, Flame, Printer
+  History, ArrowRight, Zap, Flame, Printer, ArrowRightLeft
 } from 'lucide-react';
 import { Modal, Button, ItemCategoryBadge, ColorBadge, PrintingBadge } from '@/components/ui';
 import type { Stage, BatchWithRelations, Dispatch } from '@/lib/supabase';
@@ -17,16 +17,17 @@ export type BatchInspectionModalProps = {
   onOpenChallanModal: (
     d: Dispatch & { batch?: BatchWithRelations; batchNo?: string; itemName?: string; supplierName?: string }
   ) => void;
+  onOpenAllocateModal?: (batch: BatchWithRelations) => void;
 };
 
 export function BatchInspectionModal({
   inspectedBatchItem,
   onClose,
-  stages,
   processStages,
   onSetZoomImageUrl,
   onOpenQuickModal,
   onOpenChallanModal,
+  onOpenAllocateModal,
 }: BatchInspectionModalProps) {
   if (!inspectedBatchItem) return null;
 
@@ -83,6 +84,23 @@ export function BatchInspectionModal({
                 </span>
                 <ItemCategoryBadge category={inspectedBatchItem.batch.item?.category} />
                 <ColorBadge color={inspectedBatchItem.batch.color} />
+                {inspectedBatchItem.allocatedOutQty > 0 && (
+                  <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded-lg border border-amber-700 shadow-2xs">
+                    <ArrowRightLeft className="h-3 w-3" />
+                    -{formatNumber(inspectedBatchItem.allocatedOutQty)} Allocated
+                  </span>
+                )}
+                {inspectedBatchItem.allocatedInQty > 0 && (
+                  <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-300 bg-emerald-950/80 px-2 py-0.5 rounded-lg border border-emerald-700 shadow-2xs">
+                    <ArrowRightLeft className="h-3 w-3" />
+                    +{formatNumber(inspectedBatchItem.allocatedInQty)} Received
+                  </span>
+                )}
+                {inspectedBatchItem.isComponentBatch && (
+                  <span className="inline-flex items-center gap-1 text-xs font-bold text-violet-300 bg-violet-950/80 px-2 py-0.5 rounded-lg border border-violet-700 shadow-2xs">
+                    🔩 {inspectedBatchItem.componentTypeLabel || 'Component Batch'}
+                  </span>
+                )}
               </div>
               <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-slate-400">
                 <span>
@@ -134,47 +152,119 @@ export function BatchInspectionModal({
           </div>
         </div>
 
-        {/* Reconciled 4-Metric Unit Strip */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
-          <div className="p-3 rounded-xl border border-slate-200 bg-white shadow-2xs">
-            <p className="text-[10px] font-bold text-slate-500 uppercase">Received</p>
-            <p className="text-lg font-black text-slate-900 mt-0.5">{formatNumber(inspectedBatchItem.batch.qty_received)}</p>
-            <p className="text-[10px] text-slate-400">total intake units</p>
+        {/* 5-Pillar Lifecycle Reconciliation Bar */}
+        <div className="p-4 rounded-2xl border border-slate-200 bg-white shadow-2xs space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+            <div className="flex items-center gap-2">
+              <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-indigo-50 text-indigo-700">
+                <Layers className="h-3.5 w-3.5" />
+              </span>
+              <h3 className="text-xs font-black uppercase tracking-wider text-slate-900">
+                Batch Lifecycle Reconciliation Equation
+              </h3>
+            </div>
+            <span className="text-[11px] font-semibold text-slate-500">
+              Intake ({formatNumber(inspectedBatchItem.batch.qty_received)}) - Allocations Out ({formatNumber(inspectedBatchItem.allocatedOutQty)}) = Net ({formatNumber(inspectedBatchItem.netReceivedQty)})
+            </span>
           </div>
 
-          <div className="p-3 rounded-xl border border-amber-200 bg-amber-50/50 shadow-2xs">
-            <p className="text-[10px] font-bold text-amber-800 uppercase">In Production</p>
-            <p className="text-lg font-black text-amber-900 mt-0.5">
-              {formatNumber(
-                Math.max(
-                  0,
-                  inspectedBatchItem.inFactoryQty -
-                    (inspectedBatchItem.stageQuantities[stages.find((s) => s.name === 'Ready')?.id ?? ''] ?? 0) -
-                    (inspectedBatchItem.stageQuantities[stages.find((s) => s.name === 'Raw Stock')?.id ?? ''] ?? 0)
-                )
+          <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
+            {/* 1. Intake */}
+            <div className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 text-center">
+              <p className="text-[10px] font-bold text-slate-500 uppercase">1. Intake</p>
+              <p className="text-lg font-black text-slate-900 mt-0.5">{formatNumber(inspectedBatchItem.batch.qty_received)}</p>
+              <p className="text-[10px] text-slate-400">gross inward units</p>
+            </div>
+
+            {/* 2. Allocations */}
+            <div className={`p-2.5 rounded-xl border text-center ${
+              (inspectedBatchItem.allocatedOutQty > 0 || inspectedBatchItem.allocatedInQty > 0)
+                ? 'border-amber-300 bg-amber-50/70 text-amber-950'
+                : 'border-slate-200 bg-slate-50 text-slate-400'
+            }`}>
+              <p className="text-[10px] font-bold uppercase text-amber-800">2. Allocations</p>
+              <p className="text-lg font-black mt-0.5">
+                {inspectedBatchItem.allocatedOutQty > 0
+                  ? `-${formatNumber(inspectedBatchItem.allocatedOutQty)}`
+                  : inspectedBatchItem.allocatedInQty > 0
+                  ? `+${formatNumber(inspectedBatchItem.allocatedInQty)}`
+                  : '0'}
+              </p>
+              <p className="text-[10px] text-amber-700">
+                {inspectedBatchItem.allocatedOutQty > 0 ? 'transferred out' : inspectedBatchItem.allocatedInQty > 0 ? 'transferred in' : 'no transfers'}
+              </p>
+            </div>
+
+            {/* 3. Raw Stock */}
+            <div className="p-2.5 rounded-xl border border-emerald-300 bg-emerald-50/70 text-center">
+              <p className="text-[10px] font-bold uppercase text-emerald-800">3. Virgin Raw</p>
+              <p className="text-lg font-black text-emerald-950 mt-0.5">{formatNumber(inspectedBatchItem.rawStockQty)}</p>
+              <p className="text-[10px] text-emerald-700">on rack {inspectedBatchItem.batch.location}</p>
+            </div>
+
+            {/* 4. In Production */}
+            <div className="p-2.5 rounded-xl border border-amber-200 bg-amber-50/50 text-center">
+              <p className="text-[10px] font-bold uppercase text-amber-800">4. In WIP</p>
+              <p className="text-lg font-black text-amber-900 mt-0.5">{formatNumber(inspectedBatchItem.wipQty)}</p>
+              <p className="text-[10px] text-amber-700">in conversion</p>
+            </div>
+
+            {/* 5. Ready */}
+            <div className="p-2.5 rounded-xl border border-sky-200 bg-sky-50/50 text-center">
+              <p className="text-[10px] font-bold uppercase text-sky-800">5. Ready Stock</p>
+              <p className="text-lg font-black text-sky-900 mt-0.5">{formatNumber(inspectedBatchItem.readyQty)}</p>
+              <p className="text-[10px] text-sky-700">ready to ship</p>
+            </div>
+
+            {/* 6. Dispatched */}
+            <div className="p-2.5 rounded-xl border border-violet-200 bg-violet-50/50 text-center">
+              <p className="text-[10px] font-bold uppercase text-violet-800">6. Dispatched</p>
+              <p className="text-lg font-black text-violet-900 mt-0.5">{formatNumber(inspectedBatchItem.dispatchedQty)}</p>
+              <p className="text-[10px] text-violet-700">{inspectedBatchItem.dispatches.length} orders shipped</p>
+            </div>
+          </div>
+
+          {/* Live Inventory Status Explanation */}
+          <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-700 space-y-1">
+            <p className="font-bold text-slate-900 flex items-center gap-1 text-[11px]">
+              <CheckCircle className="h-3.5 w-3.5 text-emerald-600" />
+              Live Stock Status Explanation:
+            </p>
+            <ul className="list-disc list-inside space-y-0.5 text-[11px] text-slate-600 pl-1">
+              <li>
+                <strong>{formatNumber(inspectedBatchItem.rawStockQty)} units</strong> virgin raw material stored on Rack <strong>{inspectedBatchItem.batch.location}</strong> {inspectedBatchItem.rawStockQty > 0 ? '(Untouched buffer ready for conversion)' : '(Fully converted/allocated)'}.
+              </li>
+              {inspectedBatchItem.allocatedOutQty > 0 && (
+                <li>
+                  <strong>{formatNumber(inspectedBatchItem.allocatedOutQty)} units</strong> transferred out to other batches via Batch Allocation ({inspectedBatchItem.allocationsOut.map(a => a.destination_batch?.batch_no || 'Dest').join(', ')}).
+                </li>
               )}
-            </p>
-            <p className="text-[10px] text-amber-700">units in conversion</p>
-          </div>
-
-          <div className="p-3 rounded-xl border border-sky-200 bg-sky-50/50 shadow-2xs">
-            <p className="text-[10px] font-bold text-sky-800 uppercase">Ready to Ship</p>
-            <p className="text-lg font-black text-sky-900 mt-0.5">
-              {formatNumber(inspectedBatchItem.stageQuantities[stages.find((s) => s.name === 'Ready')?.id ?? ''] ?? 0)}
-            </p>
-            <p className="text-[10px] text-sky-700">inspected ready stock</p>
-          </div>
-
-          <div className="p-3 rounded-xl border border-violet-200 bg-violet-50/50 shadow-2xs">
-            <p className="text-[10px] font-bold text-violet-800 uppercase">Dispatched Orders</p>
-            <p className="text-lg font-black text-violet-900 mt-0.5">{formatNumber(inspectedBatchItem.dispatchedQty)}</p>
-            <p className="text-[10px] text-violet-700">{inspectedBatchItem.dispatches.length} customer invoices</p>
-          </div>
-
-          <div className="p-3 rounded-xl border border-emerald-200 bg-emerald-50/50 shadow-2xs col-span-2 sm:col-span-1">
-            <p className="text-[10px] font-bold text-emerald-800 uppercase">Factory Balance</p>
-            <p className="text-lg font-black text-emerald-900 mt-0.5">{formatNumber(inspectedBatchItem.inFactoryQty)}</p>
-            <p className="text-[10px] text-emerald-700">on-floor remaining</p>
+              {inspectedBatchItem.allocatedInQty > 0 && (
+                <li>
+                  <strong>{formatNumber(inspectedBatchItem.allocatedInQty)} units</strong> received from other batches via Batch Allocation ({inspectedBatchItem.allocationsIn.map(a => a.source_batch?.batch_no || 'Source').join(', ')}).
+                </li>
+              )}
+              {inspectedBatchItem.isComponentBatch && inspectedBatchItem.componentFittedQty ? (
+                <li>
+                  <strong>{formatNumber(inspectedBatchItem.componentFittedQty)} units</strong> fitted and dispatched on customer bottle orders.
+                </li>
+              ) : null}
+              {inspectedBatchItem.wipQty > 0 && (
+                <li>
+                  <strong>{formatNumber(inspectedBatchItem.wipQty)} units</strong> in active manufacturing stages.
+                </li>
+              )}
+              {inspectedBatchItem.readyQty > 0 && (
+                <li>
+                  <strong>{formatNumber(inspectedBatchItem.readyQty)} units</strong> in Ready stage awaiting dispatch.
+                </li>
+              )}
+              {inspectedBatchItem.dispatchedQty > 0 && (
+                <li>
+                  <strong>{formatNumber(inspectedBatchItem.dispatchedQty)} units</strong> dispatched across {inspectedBatchItem.dispatches.length} client invoices.
+                </li>
+              )}
+            </ul>
           </div>
         </div>
 
@@ -251,14 +341,14 @@ export function BatchInspectionModal({
           </div>
         </div>
 
-        {/* Two Column Section: Transitions Ledger & Customer Dispatches */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* Transition History */}
+        {/* Three Column Section: Transitions Ledger, Stock Allocations & Customer Dispatches */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* Column 1: Transition History */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-black uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
                 <History className="h-4 w-4 text-indigo-600" />
-                Stage Movement History ({inspectedBatchItem.movements.length})
+                Stage Movements ({inspectedBatchItem.movements.length})
               </span>
               <Button
                 variant="outline"
@@ -329,12 +419,89 @@ export function BatchInspectionModal({
             )}
           </div>
 
-          {/* Customer Dispatches */}
+          {/* Column 2: Stock Allocations */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-black uppercase tracking-wider text-teal-800 flex items-center gap-1.5">
+                <ArrowRightLeft className="h-4 w-4 text-teal-600" />
+                Allocations & Transfers ({inspectedBatchItem.allocationsOut.length + inspectedBatchItem.allocationsIn.length})
+              </span>
+              {onOpenAllocateModal && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const b = inspectedBatchItem.batch;
+                    onClose();
+                    onOpenAllocateModal(b);
+                  }}
+                  className="text-[11px] py-0.5 px-2 font-bold text-teal-800 bg-teal-50 border-teal-200 cursor-pointer"
+                >
+                  + Allocate
+                </Button>
+              )}
+            </div>
+
+            {inspectedBatchItem.allocationsOut.length === 0 && inspectedBatchItem.allocationsIn.length === 0 ? (
+              <div className="p-5 text-center text-xs text-slate-400 border border-dashed rounded-xl">
+                No stock allocations recorded yet. Batch sits entirely in its own ledger.
+              </div>
+            ) : (
+              <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
+                {inspectedBatchItem.allocationsOut.map((a) => (
+                  <div key={a.id} className="p-2.5 rounded-xl bg-amber-50/60 border border-amber-200 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-amber-900 flex items-center gap-1">
+                        <ArrowRight className="h-3 w-3 text-amber-600" />
+                        Allocated Out ➔ Batch {a.destination_batch?.batch_no || 'Dest'}
+                      </span>
+                      <span className="font-black text-amber-950 text-sm">
+                        -{formatNumber(a.qty)} pcs
+                      </span>
+                    </div>
+                    {a.destination_batch?.brand_name && (
+                      <p className="text-[10px] font-semibold text-indigo-700 mt-0.5">
+                        Brand: {a.destination_batch.brand_name}
+                      </p>
+                    )}
+                    <div className="mt-1 text-[10px] text-slate-500 flex flex-wrap justify-between">
+                      <span>{formatDate(a.allocated_on)} {a.allocated_by ? `• by ${a.allocated_by}` : ''}</span>
+                      {a.remarks && <span className="italic">"{a.remarks}"</span>}
+                    </div>
+                  </div>
+                ))}
+                {inspectedBatchItem.allocationsIn.map((a) => (
+                  <div key={a.id} className="p-2.5 rounded-xl bg-emerald-50/60 border border-emerald-200 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-emerald-900 flex items-center gap-1">
+                        <ArrowRight className="h-3 w-3 text-emerald-600 rotate-180" />
+                        Received In ➔ from Batch {a.source_batch?.batch_no || 'Source'}
+                      </span>
+                      <span className="font-black text-emerald-950 text-sm">
+                        +{formatNumber(a.qty)} pcs
+                      </span>
+                    </div>
+                    {a.source_batch?.brand_name && (
+                      <p className="text-[10px] font-semibold text-indigo-700 mt-0.5">
+                        Brand: {a.source_batch.brand_name}
+                      </p>
+                    )}
+                    <div className="mt-1 text-[10px] text-slate-500 flex flex-wrap justify-between">
+                      <span>{formatDate(a.allocated_on)} {a.allocated_by ? `• by ${a.allocated_by}` : ''}</span>
+                      {a.remarks && <span className="italic">"{a.remarks}"</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Column 3: Customer Dispatches */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-black uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
                 <Truck className="h-4 w-4 text-violet-600" />
-                Customer Shipments & Invoices ({inspectedBatchItem.dispatches.length})
+                Customer Shipments ({inspectedBatchItem.dispatches.length})
               </span>
               <Button
                 variant="outline"
@@ -423,6 +590,21 @@ export function BatchInspectionModal({
         {/* Modal Actions */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 pt-3 border-t border-slate-200">
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            {onOpenAllocateModal && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const b = inspectedBatchItem.batch;
+                  onClose();
+                  onOpenAllocateModal(b);
+                }}
+                className="font-bold text-xs text-teal-800 bg-teal-50 border-teal-200 cursor-pointer min-h-[38px] justify-center inline-flex items-center"
+              >
+                <ArrowRightLeft className="h-3.5 w-3.5 text-teal-600 mr-1" />
+                Allocate Stock
+              </Button>
+            )}
             <Button
               variant="primary"
               size="sm"
