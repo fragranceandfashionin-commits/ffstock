@@ -44,7 +44,14 @@ const TABLES = [
   'item_stock_receipts',
   'inward_batches',
   'stage_movements',
-  'dispatches'
+  'dispatches',
+  'batch_allocations'
+];
+
+const VIEWS = [
+  'v_batch_stock',
+  'v_location_stock',
+  'v_component_stock'
 ];
 
 async function fetchAllRows(tableName) {
@@ -128,12 +135,26 @@ async function runBackup() {
   let sqlDump = `-- Supabase Database Backup\n-- Date: ${now.toISOString()}\n-- Source: ${supabaseUrl}\n\n`;
 
   for (const table of TABLES) {
-    process.stdout.write(`Fetching ${table}... `);
+    process.stdout.write(`Fetching table: ${table}... `);
     const result = await fetchAllRows(table);
     if (result.success) {
       backupData.tables[table] = result.rows;
       backupData.metadata.tableCounts[table] = result.rows.length;
       sqlDump += generateSqlInserts(table, result.rows) + '\n';
+      console.log(`✓ (${result.rows.length} rows)`);
+    } else {
+      console.log(`✗ skipped (${result.error})`);
+    }
+  }
+
+  backupData.views = {};
+  backupData.metadata.viewCounts = {};
+  for (const view of VIEWS) {
+    process.stdout.write(`Fetching view: ${view}... `);
+    const result = await fetchAllRows(view);
+    if (result.success) {
+      backupData.views[view] = result.rows;
+      backupData.metadata.viewCounts[view] = result.rows.length;
       console.log(`✓ (${result.rows.length} rows)`);
     } else {
       console.log(`✗ skipped (${result.error})`);
@@ -149,13 +170,17 @@ async function runBackup() {
   fs.writeFileSync(sqlPath, sqlDump, 'utf8');
 
   console.log('\n========================================');
-  console.log('✅ Backup completed successfully!');
+  console.log('✅ Supabase Database Backup Completed!');
   console.log(`📄 JSON Backup: ${jsonPath}`);
   console.log(`📄 SQL Backup:  ${sqlPath}`);
   console.log('========================================');
-  console.log('Table Summary:');
+  console.log('Database Table Summary:');
   for (const [tbl, count] of Object.entries(backupData.metadata.tableCounts)) {
     console.log(`  - ${tbl}: ${count} rows`);
+  }
+  console.log('Database View Summary:');
+  for (const [vw, count] of Object.entries(backupData.metadata.viewCounts)) {
+    console.log(`  - ${vw}: ${count} rows`);
   }
 }
 
