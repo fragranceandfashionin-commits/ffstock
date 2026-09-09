@@ -259,6 +259,11 @@ export function BatchInspectionModal({
                   <strong>{formatNumber(inspectedBatchItem.readyQty)} units</strong> in Ready stage awaiting dispatch.
                 </li>
               )}
+              {inspectedBatchItem.scrappedQty > 0 && (
+                <li>
+                  <strong className="text-amber-800">{formatNumber(inspectedBatchItem.scrappedQty)} units</strong> logged as scrapped defect / quality loss.
+                </li>
+              )}
               {inspectedBatchItem.dispatchedQty > 0 && (
                 <li>
                   <strong>{formatNumber(inspectedBatchItem.dispatchedQty)} units</strong> dispatched across {inspectedBatchItem.dispatches.length} client invoices.

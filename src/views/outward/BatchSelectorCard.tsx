@@ -15,6 +15,10 @@ export type BatchSelectorCardProps = {
   dispatchedTotal: number;
   unitLabel: string;
   onStartDispatch?: () => void;
+  allocatedInQty?: number;
+  allocatedOutQty?: number;
+  netReceivedQty?: number;
+  scrappedTotal?: number;
 };
 
 export function BatchSelectorCard({
@@ -27,6 +31,10 @@ export function BatchSelectorCard({
   dispatchedTotal,
   unitLabel,
   onStartDispatch,
+  allocatedInQty = 0,
+  allocatedOutQty = 0,
+  netReceivedQty,
+  scrappedTotal = 0,
 }: BatchSelectorCardProps) {
   const [copiedBatchNo, setCopiedBatchNo] = useState<string | null>(null);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -53,9 +61,10 @@ export function BatchSelectorCard({
   };
 
   const totalReceived = selectedBatch?.qty_received || 0;
-  const inFactoryPercent = totalReceived > 0 ? Math.round((inFactory / totalReceived) * 100) : 0;
-  const readyPercent = totalReceived > 0 ? Math.round((readyQty / totalReceived) * 100) : 0;
-  const dispatchedPercent = totalReceived > 0 ? Math.round((dispatchedTotal / totalReceived) * 100) : 0;
+  const effectiveTotal = netReceivedQty !== undefined ? netReceivedQty : totalReceived;
+  const inFactoryPercent = effectiveTotal > 0 ? Math.round((inFactory / effectiveTotal) * 100) : 0;
+  const readyPercent = effectiveTotal > 0 ? Math.round((readyQty / effectiveTotal) * 100) : 0;
+  const dispatchedPercent = effectiveTotal > 0 ? Math.round((dispatchedTotal / effectiveTotal) * 100) : 0;
 
   // If no batch is selected, show the selection picker card
   if (!selectedBatch) {
@@ -176,6 +185,16 @@ export function BatchSelectorCard({
                   <Package className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
                   <span>
                     Received: <strong className="text-white font-bold">{formatNumber(selectedBatch.qty_received)} {unitLabel}</strong>
+                    {allocatedInQty > 0 ? (
+                      <span className="ml-1 text-emerald-300 text-[11px] font-bold">
+                        (+{formatNumber(allocatedInQty)} alloc)
+                      </span>
+                    ) : null}
+                    {allocatedOutQty > 0 ? (
+                      <span className="ml-1 text-amber-300 text-[11px] font-bold">
+                        (-{formatNumber(allocatedOutQty)} alloc)
+                      </span>
+                    ) : null}
                   </span>
                 </span>
                 <span className="inline-flex items-center gap-1.5">
@@ -226,15 +245,29 @@ export function BatchSelectorCard({
               <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500">
                 Total Received
               </span>
-              <span className="text-[10px] font-bold text-slate-400">Baseline</span>
+              {allocatedInQty > 0 ? (
+                <span className="text-[10px] font-black text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.2 rounded">
+                  +{formatNumber(allocatedInQty)} Alloc
+                </span>
+              ) : allocatedOutQty > 0 ? (
+                <span className="text-[10px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.2 rounded">
+                  -{formatNumber(allocatedOutQty)} Alloc
+                </span>
+              ) : (
+                <span className="text-[10px] font-bold text-slate-400">Baseline</span>
+              )}
             </div>
             <div className="mt-1 flex items-baseline gap-2">
               <span className="text-xl sm:text-2xl font-black text-slate-900">
-                {formatNumber(totalReceived)}
+                {formatNumber(effectiveTotal)}
               </span>
               <span className="text-xs font-semibold text-slate-500">{unitLabel}</span>
             </div>
-            <p className="text-[11px] text-slate-400 mt-0.5">Inward invoice total</p>
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              {allocatedInQty > 0 || allocatedOutQty > 0
+                ? `Net available (${formatNumber(totalReceived)} initial)`
+                : 'Inward invoice total'}
+            </p>
           </div>
 
           {/* In Factory */}
@@ -311,6 +344,18 @@ export function BatchSelectorCard({
             <p className="text-[11px] text-violet-600/90 mt-0.5">Shipped to clients</p>
           </div>
         </div>
+
+        {scrappedTotal > 0 && (
+          <div className="px-4 py-2.5 bg-amber-50/70 border-t border-amber-200/60 flex items-center justify-between text-xs text-amber-950">
+            <span className="font-bold flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-amber-800">
+              <span className="h-2 w-2 rounded-full bg-amber-500" />
+              Logged Scrap & Defect Loss
+            </span>
+            <span className="font-mono font-black text-xs text-amber-900 bg-amber-100/80 px-2 py-0.5 rounded border border-amber-200">
+              {formatNumber(scrappedTotal)} {unitLabel} ({Math.round((scrappedTotal / effectiveTotal) * 100)}% of net intake)
+            </span>
+          </div>
+        )}
       </Card>
     </div>
   );

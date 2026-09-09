@@ -28,9 +28,10 @@ import {
   insertMultiVariantStageMovements,
   insertMultiVariantDispatches,
   fetchComponentStockSummary,
+  fetchBatchAllocations,
 } from '@/lib/queries';
 import { supabase, SCRAP_REASONS, COMMON_COLORS, COMMON_PRINTING_DESIGNS } from '@/lib/supabase';
-import type { BatchWithRelations, Stage, MovementWithRelations, Dispatch, Item, ComponentStockSummary } from '@/lib/supabase';
+import type { BatchWithRelations, Stage, MovementWithRelations, Dispatch, Item, ComponentStockSummary, BatchAllocationWithRelations } from '@/lib/supabase';
 import type { BatchStock } from '@/lib/types';
 import { getErrorMessage, getTodayDateString, formatNumber, downloadCSV } from '@/lib/utils';
 
@@ -62,6 +63,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
   const [atomizers, setAtomizers] = useState<Item[]>([]);
   const [boxes, setBoxes] = useState<Item[]>([]);
   const [stockSummaryMap, setStockSummaryMap] = useState<Map<string, ComponentStockSummary>>(new Map());
+  const [allocations, setAllocations] = useState<BatchAllocationWithRelations[]>([]);
 
   const lastHandledBatchIdRef = useRef<string | null>(null);
   const actionPanelRef = useRef<HTMLDivElement>(null);
@@ -186,18 +188,21 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
       setStock([]);
       setMovements([]);
       setDispatches([]);
+      setAllocations([]);
       return;
     }
     try {
-      const [stk, mov, disp, summary] = await Promise.all([
+      const [stk, mov, disp, summary, allocs] = await Promise.all([
         fetchBatchStock(batchId),
         fetchMovements(batchId),
         fetchDispatches(batchId),
         fetchComponentStockSummary().catch(() => [] as ComponentStockSummary[]),
+        fetchBatchAllocations(batchId).catch(() => [] as BatchAllocationWithRelations[]),
       ]);
       setStock(stk);
       setMovements(mov);
       setDispatches(disp);
+      setAllocations(allocs);
       const sMap = new Map<string, ComponentStockSummary>();
       for (const sm of summary) sMap.set(sm.item.id, sm);
       setStockSummaryMap(sMap);
@@ -270,6 +275,21 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     [dispatches]
   );
 
+  const allocatedOutQty = useMemo(
+    () => allocations.filter((a) => a.source_batch_id === batchId).reduce((acc, a) => acc + a.qty, 0),
+    [allocations, batchId]
+  );
+
+  const allocatedInQty = useMemo(
+    () => allocations.filter((a) => a.destination_batch_id === batchId).reduce((acc, a) => acc + a.qty, 0),
+    [allocations, batchId]
+  );
+
+  const netReceivedQty = useMemo(() => {
+    if (!selectedBatch) return 0;
+    return Math.max(0, selectedBatch.qty_received - allocatedOutQty + allocatedInQty);
+  }, [selectedBatch, allocatedOutQty, allocatedInQty]);
+
   const readyQty = useMemo(() => {
     const readyStage = stages?.find((s) => s.name === 'Ready');
     return readyStage ? qtyAt(readyStage.id) : 0;
@@ -277,8 +297,13 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
 
   const inFactory = useMemo(() => {
     if (!selectedBatch) return 0;
-    return Math.max(0, selectedBatch.qty_received - dispatchedTotal);
-  }, [selectedBatch, dispatchedTotal]);
+    return processStages.reduce((sum, s) => sum + qtyAt(s.id), 0);
+  }, [selectedBatch, processStages, qtyAt]);
+
+  const scrappedTotal = useMemo(() => {
+    const scrapStage = stages?.find((s) => s.name === 'Scrap / Defect' || s.name.toLowerCase().includes('scrap'));
+    return scrapStage ? qtyAt(scrapStage.id) : 0;
+  }, [stages, qtyAt]);
 
   const unitLabel = selectedBatch?.item?.unit || 'units';
 
@@ -1342,6 +1367,10 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
             dispatchedTotal={dispatchedTotal}
             unitLabel={unitLabel}
             onStartDispatch={startDispatch}
+            allocatedInQty={allocatedInQty}
+            allocatedOutQty={allocatedOutQty}
+            netReceivedQty={netReceivedQty}
+            scrappedTotal={scrappedTotal}
           />
 
           {!batchId ? (

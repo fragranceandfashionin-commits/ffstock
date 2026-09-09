@@ -362,7 +362,9 @@ export function calculateDashboardMetrics({
       stockByStage.set(readyStage.id, (stockByStage.get(readyStage.id) ?? 0) - dispatchedQty);
     }
 
-    const inFactoryQty = Math.max(0, batchNetReceived - dispatchedQty);
+    const scrapStage = stages.find((s) => s.name === 'Scrap / Defect' || s.name.toLowerCase().includes('scrap'));
+    const scrappedQty = scrapStage ? Math.max(0, stockByStage.get(scrapStage.id) ?? 0) : 0;
+    const inFactoryQty = Math.max(0, batchNetReceived - dispatchedQty - scrappedQty);
 
     // Stage-specific amounts
     const stageQuantities: Record<string, number> = {};
@@ -406,9 +408,7 @@ export function calculateDashboardMetrics({
 
     const rawStockQty = stageQuantities[rawStage?.id ?? ''] ?? 0;
     const readyQty = stageQuantities[readyStage?.id ?? ''] ?? 0;
-    const scrapStage = stages.find((s) => s.name === 'Scrap / Defect' || s.name.toLowerCase().includes('scrap'));
-    const scrappedQty = scrapStage ? (stageQuantities[scrapStage.id] ?? 0) : 0;
-    const wipQty = Math.max(0, inFactoryQty - rawStockQty - readyQty - scrappedQty);
+    const wipQty = Math.max(0, inFactoryQty - rawStockQty - readyQty);
 
     return {
       batch: b,
