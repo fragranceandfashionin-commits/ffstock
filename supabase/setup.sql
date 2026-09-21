@@ -1149,7 +1149,7 @@ $$;
 
 CREATE TABLE IF NOT EXISTS item_stock_receipts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  item_id uuid NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  item_id uuid NOT NULL REFERENCES items(id) ON DELETE RESTRICT,
   supplier_id uuid REFERENCES suppliers(id) ON DELETE SET NULL,
   qty integer NOT NULL CHECK (qty > 0),
   received_on date NOT NULL DEFAULT current_date,
@@ -1309,6 +1309,30 @@ WITH
     WHERE sm.box_item_id IS NOT NULL
     GROUP BY sm.box_item_id
   ),
+  bottle_moves_agg AS (
+    SELECT
+      ib.item_id,
+      COALESCE(SUM(
+        CASE
+          WHEN s_from.name = 'Raw Stock' AND s_to.name <> 'Raw Stock' THEN sm.qty_moved
+          WHEN s_to.name = 'Raw Stock' AND s_from.name <> 'Raw Stock' THEN -sm.qty_moved
+          ELSE 0
+        END
+      ), 0) AS qty_moved_from_raw,
+      COALESCE(SUM(
+        CASE
+          WHEN s_to.name = 'Scrap / Defect' THEN sm.qty_moved
+          WHEN s_from.name = 'Scrap / Defect' THEN -sm.qty_moved
+          ELSE 0
+        END
+      ), 0) AS qty_scrapped,
+      COUNT(DISTINCT sm.batch_id) FILTER (WHERE s_from.name = 'Raw Stock') AS batches_in_prod
+    FROM stage_movements sm
+    JOIN inward_batches ib ON ib.id = sm.batch_id
+    LEFT JOIN stages s_to ON s_to.id = sm.to_stage_id
+    LEFT JOIN stages s_from ON s_from.id = sm.from_stage_id
+    GROUP BY ib.item_id
+  ),
   dispatches_box_agg AS (
     SELECT box_item_id AS item_id, COALESCE(SUM(qty), 0) AS qty
     FROM dispatches
@@ -1322,13 +1346,27 @@ SELECT
   i.unit,
   (COALESCE(r.qty, 0) + COALESCE(db.qty, 0) + COALESCE(ac.qty, 0) + COALESCE(aa.qty, 0) + COALESCE(ab.qty, 0)) AS total_inwarded,
   (COALESCE(r.receipt_count, 0) + COALESCE(db.batch_count, 0) + COALESCE(ac.batch_count, 0) + COALESCE(aa.batch_count, 0) + COALESCE(ab.batch_count, 0)) AS inward_batch_count,
-  GREATEST(0, (COALESCE(cm.qty_used, 0) + COALESCE(am.qty_used, 0) + COALESCE(bm.qty_used, 0) + (CASE WHEN lower(i.category) = 'bottle' THEN COALESCE(db.qty, 0) ELSE 0 END))) AS total_used,
-  (COALESCE(cm.movement_count, 0) + COALESCE(am.movement_count, 0) + COALESCE(bm.movement_count, 0) + (CASE WHEN lower(i.category) = 'bottle' THEN COALESCE(db.batch_count, 0) ELSE 0 END)) AS used_in_batch_count,
-  GREATEST(0, (COALESCE(cm.qty_scrapped, 0) + COALESCE(am.qty_scrapped, 0) + COALESCE(bm.qty_scrapped, 0))) AS total_scrapped,
+  CASE 
+    WHEN lower(i.category) = 'bottle' THEN GREATEST(0, COALESCE(btm.qty_moved_from_raw, 0))
+    ELSE GREATEST(0, (COALESCE(cm.qty_used, 0) + COALESCE(am.qty_used, 0) + COALESCE(bm.qty_used, 0)))
+  END AS total_used,
+  CASE
+    WHEN lower(i.category) = 'bottle' THEN COALESCE(btm.batches_in_prod, 0)
+    ELSE (COALESCE(cm.movement_count, 0) + COALESCE(am.movement_count, 0) + COALESCE(bm.movement_count, 0))
+  END AS used_in_batch_count,
+  CASE
+    WHEN lower(i.category) = 'bottle' THEN GREATEST(0, COALESCE(btm.qty_scrapped, 0))
+    ELSE GREATEST(0, (COALESCE(cm.qty_scrapped, 0) + COALESCE(am.qty_scrapped, 0) + COALESCE(bm.qty_scrapped, 0)))
+  END AS total_scrapped,
   COALESCE(dbx.qty, 0) AS total_dispatched,
-  GREATEST(0, (COALESCE(r.qty, 0) + COALESCE(db.qty, 0) + COALESCE(ac.qty, 0) + COALESCE(aa.qty, 0) + COALESCE(ab.qty, 0)) 
-    - GREATEST(0, (COALESCE(cm.qty_used, 0) + COALESCE(am.qty_used, 0) + COALESCE(bm.qty_used, 0) + (CASE WHEN lower(i.category) = 'bottle' THEN COALESCE(db.qty, 0) ELSE 0 END)))
-    - GREATEST(0, (COALESCE(cm.qty_scrapped, 0) + COALESCE(am.qty_scrapped, 0) + COALESCE(bm.qty_scrapped, 0)))) AS available_stock
+  CASE
+    WHEN lower(i.category) = 'bottle' THEN
+      GREATEST(0, (COALESCE(r.qty, 0) + COALESCE(db.qty, 0)) - GREATEST(0, COALESCE(btm.qty_moved_from_raw, 0)) - GREATEST(0, COALESCE(btm.qty_scrapped, 0)))
+    ELSE
+      GREATEST(0, (COALESCE(r.qty, 0) + COALESCE(db.qty, 0) + COALESCE(ac.qty, 0) + COALESCE(aa.qty, 0) + COALESCE(ab.qty, 0)) 
+        - GREATEST(0, (COALESCE(cm.qty_used, 0) + COALESCE(am.qty_used, 0) + COALESCE(bm.qty_used, 0)))
+        - GREATEST(0, (COALESCE(cm.qty_scrapped, 0) + COALESCE(am.qty_scrapped, 0) + COALESCE(bm.qty_scrapped, 0))))
+  END AS available_stock
 FROM items i
 LEFT JOIN receipts_agg r ON r.item_id = i.id
 LEFT JOIN direct_batches_agg db ON db.item_id = i.id
@@ -1338,6 +1376,7 @@ LEFT JOIN attached_boxes_agg ab ON ab.item_id = i.id
 LEFT JOIN cap_moves_agg cm ON cm.item_id = i.id
 LEFT JOIN atomizer_moves_agg am ON am.item_id = i.id
 LEFT JOIN box_moves_agg bm ON bm.item_id = i.id
+LEFT JOIN bottle_moves_agg btm ON btm.item_id = i.id
 LEFT JOIN dispatches_box_agg dbx ON dbx.item_id = i.id;
 
 
@@ -1476,6 +1515,7 @@ DECLARE
   v_dest_batch_no text;
   v_source_batch_no text;
   v_source_item_id uuid;
+  v_dest_item_id uuid;
   v_allocation_id uuid;
   v_source_new_raw integer;
   v_dest_new_raw integer;
@@ -1502,10 +1542,15 @@ BEGIN
     RAISE EXCEPTION 'Source batch does not exist.';
   END IF;
 
-  SELECT batch_no INTO v_dest_batch_no
+  SELECT batch_no, item_id INTO v_dest_batch_no, v_dest_item_id
   FROM inward_batches WHERE id = p_destination_batch_id;
   IF v_dest_batch_no IS NULL THEN
     RAISE EXCEPTION 'Destination batch does not exist.';
+  END IF;
+
+  IF v_source_item_id <> v_dest_item_id THEN
+    RAISE EXCEPTION 'Cannot allocate stock between batches of different items (Source Item: %, Dest Item: %)',
+      v_source_item_id, v_dest_item_id;
   END IF;
 
   SELECT id INTO v_raw_stage_id FROM stages WHERE sequence_no = 1 OR name = 'Raw Stock' LIMIT 1;
@@ -1635,4 +1680,404 @@ BEGIN
   RETURN OLD;
 END;
 $$;
+
+-- ============================================================
+-- PERFORMANCE INDEXES
+-- ============================================================
+
+CREATE INDEX IF NOT EXISTS inward_batches_item_id_idx ON inward_batches(item_id);
+CREATE INDEX IF NOT EXISTS inward_batches_supplier_id_idx ON inward_batches(supplier_id);
+CREATE INDEX IF NOT EXISTS stage_movements_from_stage_idx ON stage_movements(from_stage_id);
+CREATE INDEX IF NOT EXISTS stage_movements_to_stage_idx ON stage_movements(to_stage_id);
+CREATE INDEX IF NOT EXISTS stage_movements_moved_on_idx ON stage_movements(moved_on DESC);
+CREATE INDEX IF NOT EXISTS dispatches_dispatched_on_idx ON dispatches(dispatched_on DESC);
+CREATE INDEX IF NOT EXISTS items_category_idx ON items(category);
+CREATE INDEX IF NOT EXISTS items_name_idx ON items(name);
+CREATE INDEX IF NOT EXISTS suppliers_name_idx ON suppliers(name);
+
+-- ============================================================
+-- VENDOR PORTAL & PRODUCTION ORDER MANAGEMENT SCHEMA
+-- ============================================================
+
+-- TABLE: clients (Customer CRM profiles and packaging preferences)
+CREATE TABLE IF NOT EXISTS clients (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL CHECK (char_length(trim(name)) > 0),
+  company_name text,
+  email text,
+  phone text,
+  preferences text,
+  status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- TABLE: production_orders (Batch production orders with auto-generated order numbers)
+CREATE TABLE IF NOT EXISTS production_orders (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_no text NOT NULL UNIQUE,
+  client_id uuid NOT NULL REFERENCES clients(id) ON DELETE RESTRICT,
+  product_name text NOT NULL CHECK (char_length(trim(product_name)) > 0),
+  variants jsonb DEFAULT '[]'::jsonb,
+  total_qty integer NOT NULL DEFAULT 0 CHECK (total_qty >= 0),
+  due_date date,
+  status text NOT NULL DEFAULT 'planning' CHECK (status IN ('planning', 'in_progress', 'completed', 'cancelled')),
+  notes text,
+  completed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- TABLE: bom_categories (10 standard factory BOM component categories)
+CREATE TABLE IF NOT EXISTS bom_categories (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL UNIQUE CHECK (char_length(trim(name)) > 0),
+  sort_order integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Seed the 10 default factory BOM categories
+INSERT INTO bom_categories (name, sort_order) VALUES
+  ('Bottles', 1), ('Raw Material', 2), ('Sticker', 3), ('Box', 4),
+  ('Atomizer', 5), ('Cap', 6), ('Coating', 7), ('Printing', 8),
+  ('Inner Outer', 9), ('Cellophane', 10)
+ON CONFLICT (name) DO NOTHING;
+
+-- TABLE: material_allocations (Component-level tracking with source toggle vendor vs stock)
+CREATE TABLE IF NOT EXISTS material_allocations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id uuid NOT NULL REFERENCES production_orders(id) ON DELETE CASCADE,
+  component_name text NOT NULL,
+  sort_order integer NOT NULL DEFAULT 0,
+  source text NOT NULL DEFAULT 'vendor' CHECK (source IN ('vendor', 'stock')),
+  description text,
+  vendor_id uuid REFERENCES suppliers(id) ON DELETE SET NULL,
+  stock_item_id uuid REFERENCES items(id) ON DELETE SET NULL,
+  timeline date,
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'received')),
+  received_at timestamptz,
+  remarks text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- EXTEND: suppliers table with vendor profile and catalog attributes
+ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS phone text;
+ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS email text;
+ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS contact_person text;
+ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS categories_supplied text[];
+ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS specific_materials text;
+
+-- Indexes for Vendor Portal
+CREATE INDEX IF NOT EXISTS idx_production_orders_client ON production_orders(client_id);
+CREATE INDEX IF NOT EXISTS idx_production_orders_status ON production_orders(status);
+CREATE INDEX IF NOT EXISTS idx_production_orders_created ON production_orders(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_material_allocations_order ON material_allocations(order_id);
+CREATE INDEX IF NOT EXISTS idx_material_allocations_vendor ON material_allocations(vendor_id);
+CREATE INDEX IF NOT EXISTS idx_material_allocations_status ON material_allocations(status);
+CREATE INDEX IF NOT EXISTS idx_clients_status ON clients(status);
+CREATE INDEX IF NOT EXISTS idx_clients_name ON clients(name);
+CREATE INDEX IF NOT EXISTS idx_clients_company ON clients(company_name);
+
+-- RLS: Enable on new tables and set shared workspace policies
+ALTER TABLE clients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE production_orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE material_allocations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bom_categories ENABLE ROW LEVEL SECURITY;
+
+DO $$ DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['clients','production_orders','material_allocations','bom_categories'] LOOP
+    EXECUTE format('DROP POLICY IF EXISTS "shared_select_%s" ON %I', t, t);
+    EXECUTE format('DROP POLICY IF EXISTS "shared_insert_%s" ON %I', t, t);
+    EXECUTE format('DROP POLICY IF EXISTS "shared_update_%s" ON %I', t, t);
+    EXECUTE format('DROP POLICY IF EXISTS "shared_delete_%s" ON %I', t, t);
+    EXECUTE format('CREATE POLICY "shared_select_%s" ON %I FOR SELECT TO anon, authenticated USING (true)', t, t);
+    EXECUTE format('CREATE POLICY "shared_insert_%s" ON %I FOR INSERT TO anon, authenticated WITH CHECK (true)', t, t);
+    EXECUTE format('CREATE POLICY "shared_update_%s" ON %I FOR UPDATE TO anon, authenticated USING (true) WITH CHECK (true)', t, t);
+    EXECUTE format('CREATE POLICY "shared_delete_%s" ON %I FOR DELETE TO anon, authenticated USING (true)', t, t);
+  END LOOP;
+END $$;
+
+-- Fix UPDATE policy on suppliers table
+DROP POLICY IF EXISTS "shared_update_suppliers" ON suppliers;
+CREATE POLICY "shared_update_suppliers" ON suppliers FOR UPDATE TO anon, authenticated USING (true) WITH CHECK (true);
+
+-- Auto-generate robust, year-scoped order number sequence (PO-YYYY-XXX) with advisory locking
+CREATE OR REPLACE FUNCTION generate_order_no() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  current_year text;
+  next_no integer;
+BEGIN
+  current_year := TO_CHAR(NOW(), 'YYYY');
+
+  -- Transaction-scoped advisory lock serializes concurrent order creation without blocking reads
+  PERFORM pg_advisory_xact_lock(hashtext('production_orders_seq_' || current_year));
+
+  SELECT COALESCE(MAX(
+    NULLIF(regexp_replace(order_no, '^PO-[0-9]{4}-([0-9]+)$', '\1'), order_no)::integer
+  ), 0) + 1
+  INTO next_no
+  FROM production_orders
+  WHERE order_no LIKE 'PO-' || current_year || '-%';
+
+  NEW.order_no := 'PO-' || current_year || '-' || LPAD(next_no::text, 3, '0');
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS set_order_no ON production_orders;
+CREATE TRIGGER set_order_no
+  BEFORE INSERT ON production_orders
+  FOR EACH ROW
+  WHEN (NEW.order_no IS NULL OR NEW.order_no = '')
+  EXECUTE FUNCTION generate_order_no();
+
+-- ATOMIC RPC: Create production order + seed all 10 default BOM allocations in 1 transaction
+CREATE OR REPLACE FUNCTION create_production_order_with_allocations(
+  p_client_id uuid,
+  p_product_name text,
+  p_variants jsonb DEFAULT '[]'::jsonb,
+  p_total_qty integer DEFAULT 0,
+  p_due_date date DEFAULT NULL,
+  p_notes text DEFAULT NULL
+) RETURNS production_orders LANGUAGE plpgsql SECURITY INVOKER SET search_path = public AS $$
+DECLARE
+  v_order production_orders;
+  v_cat RECORD;
+BEGIN
+  INSERT INTO production_orders (client_id, product_name, variants, total_qty, due_date, notes)
+  VALUES (p_client_id, p_product_name, p_variants, p_total_qty, p_due_date, p_notes)
+  RETURNING * INTO v_order;
+
+  FOR v_cat IN SELECT name, sort_order FROM bom_categories ORDER BY sort_order ASC LOOP
+    INSERT INTO material_allocations (order_id, component_name, sort_order, source, status)
+    VALUES (v_order.id, v_cat.name, v_cat.sort_order, 'vendor', 'pending');
+  END LOOP;
+
+  RETURN v_order;
+END;
+$$;
+
+-- ATOMIC RPC: Repeat Order (clone order + all allocations with status reset to pending)
+CREATE OR REPLACE FUNCTION repeat_production_order(
+  p_source_order_id uuid
+) RETURNS production_orders LANGUAGE plpgsql SECURITY INVOKER SET search_path = public AS $$
+DECLARE
+  v_source production_orders;
+  v_new_order production_orders;
+  v_alloc RECORD;
+BEGIN
+  SELECT * INTO v_source FROM production_orders WHERE id = p_source_order_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Source production order not found';
+  END IF;
+
+  INSERT INTO production_orders (client_id, product_name, variants, total_qty, due_date, notes)
+  VALUES (v_source.client_id, v_source.product_name, v_source.variants, v_source.total_qty, NULL, 'Cloned from ' || v_source.order_no)
+  RETURNING * INTO v_new_order;
+
+  FOR v_alloc IN SELECT * FROM material_allocations WHERE order_id = p_source_order_id ORDER BY sort_order ASC LOOP
+    INSERT INTO material_allocations (
+      order_id, component_name, sort_order, source, description, vendor_id, stock_item_id, timeline, status, remarks
+    ) VALUES (
+      v_new_order.id, v_alloc.component_name, v_alloc.sort_order, v_alloc.source, v_alloc.description, v_alloc.vendor_id, v_alloc.stock_item_id, NULL, 'pending', v_alloc.remarks
+    );
+  END LOOP;
+
+  RETURN v_new_order;
+END;
+$$;
+
+-- Explicit RPC execution grants for anon and authenticated roles
+GRANT EXECUTE ON FUNCTION create_production_order_with_allocations TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION repeat_production_order TO anon, authenticated;
+
+
+-- ============================================================
+-- PART 23: Ledger Protection Triggers for Allocations & Receipts
+-- ============================================================
+
+DROP TRIGGER IF EXISTS prevent_ledger_mutation_batch_allocations ON batch_allocations;
+CREATE TRIGGER prevent_ledger_mutation_batch_allocations
+  BEFORE UPDATE OR DELETE ON batch_allocations
+  FOR EACH ROW EXECUTE FUNCTION prevent_ledger_mutation();
+
+DROP TRIGGER IF EXISTS prevent_ledger_mutation_item_stock_receipts ON item_stock_receipts;
+CREATE TRIGGER prevent_ledger_mutation_item_stock_receipts
+  BEFORE UPDATE OR DELETE ON item_stock_receipts
+  FOR EACH ROW EXECUTE FUNCTION prevent_ledger_mutation();
+
+
+-- ============================================================
+-- PART 24: Atomic Batch Allocation Reversal RPC
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION reverse_batch_allocation(
+  p_allocation_id uuid,
+  p_reversed_by text DEFAULT NULL,
+  p_reason text DEFAULT NULL
+)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_orig record;
+  v_raw_stage_id uuid;
+  v_dest_available integer;
+  v_new_allocation_id uuid;
+  v_reason_text text;
+BEGIN
+  -- 1. Fetch original allocation
+  SELECT * INTO v_orig FROM batch_allocations WHERE id = p_allocation_id FOR UPDATE;
+  IF v_orig.id IS NULL THEN
+    RAISE EXCEPTION 'Allocation record % does not exist.', p_allocation_id;
+  END IF;
+
+  IF v_orig.allocation_type = 'reversal' THEN
+    RAISE EXCEPTION 'Cannot reverse an allocation that is already a reversal entry.';
+  END IF;
+
+  -- Check if already reversed
+  IF EXISTS (
+    SELECT 1 FROM batch_allocations
+    WHERE allocation_type = 'reversal'
+      AND source_batch_id = v_orig.destination_batch_id
+      AND destination_batch_id = v_orig.source_batch_id
+      AND remarks LIKE '%' || p_allocation_id::text || '%'
+  ) THEN
+    RAISE EXCEPTION 'Allocation % has already been reversed.', p_allocation_id;
+  END IF;
+
+  -- 2. Lock batches in deterministic order to prevent deadlocks
+  IF v_orig.source_batch_id < v_orig.destination_batch_id THEN
+    PERFORM 1 FROM inward_batches WHERE id = v_orig.source_batch_id FOR UPDATE;
+    PERFORM 1 FROM inward_batches WHERE id = v_orig.destination_batch_id FOR UPDATE;
+  ELSE
+    PERFORM 1 FROM inward_batches WHERE id = v_orig.destination_batch_id FOR UPDATE;
+    PERFORM 1 FROM inward_batches WHERE id = v_orig.source_batch_id FOR UPDATE;
+  END IF;
+
+  -- 3. Verify Raw Stock stage exists
+  SELECT id INTO v_raw_stage_id FROM stages WHERE sequence_no = 1 OR name = 'Raw Stock' LIMIT 1;
+  IF v_raw_stage_id IS NULL THEN
+    RAISE EXCEPTION 'Raw Stock stage not found in stages catalog.';
+  END IF;
+
+  -- 4. Calculate available stock in destination batch's Raw Stock
+  SELECT
+    ib.qty_received
+    - COALESCE((SELECT SUM(ba.qty) FROM batch_allocations ba WHERE ba.source_batch_id = v_orig.destination_batch_id), 0)
+    + COALESCE((SELECT SUM(ba.qty) FROM batch_allocations ba WHERE ba.destination_batch_id = v_orig.destination_batch_id), 0)
+    - COALESCE((SELECT SUM(sm.qty_moved) FROM stage_movements sm WHERE sm.batch_id = v_orig.destination_batch_id AND sm.from_stage_id = v_raw_stage_id), 0)
+    + COALESCE((SELECT SUM(sm.qty_moved) FROM stage_movements sm WHERE sm.batch_id = v_orig.destination_batch_id AND sm.to_stage_id = v_raw_stage_id), 0)
+  INTO v_dest_available
+  FROM inward_batches ib
+  WHERE ib.id = v_orig.destination_batch_id;
+
+  IF v_dest_available < v_orig.qty THEN
+    RAISE EXCEPTION 'Destination batch has insufficient available raw stock (% units) to reverse % units.',
+      v_dest_available, v_orig.qty;
+  END IF;
+
+  -- 5. Insert inverse allocation record
+  v_reason_text := COALESCE(p_reason, 'Manual allocation reversal');
+  INSERT INTO batch_allocations (
+    source_batch_id,
+    destination_batch_id,
+    qty,
+    allocation_type,
+    item_id,
+    allocated_on,
+    allocated_by,
+    remarks
+  ) VALUES (
+    v_orig.destination_batch_id,
+    v_orig.source_batch_id,
+    v_orig.qty,
+    'reversal',
+    v_orig.item_id,
+    CURRENT_DATE,
+    COALESCE(p_reversed_by, 'Supervisor'),
+    'REVERSAL [' || p_allocation_id::text || ']: ' || v_reason_text
+  ) RETURNING id INTO v_new_allocation_id;
+
+  RETURN v_new_allocation_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION reverse_batch_allocation TO anon, authenticated;
+
+
+-- ============================================================
+-- PART 25: Factory RBAC Architecture
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS user_profiles (
+  id uuid PRIMARY KEY,
+  email text,
+  display_name text NOT NULL,
+  role text NOT NULL CHECK (role IN (
+    'admin',
+    'inward_manager',
+    'coloring_operator',
+    'printing_operator',
+    'filling_operator',
+    'packaging_operator',
+    'stock_manager',
+    'dispatch_manager',
+    'vendor_manager',
+    'viewer'
+  )),
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_profiles_role ON user_profiles(role);
+
+ALTER TABLE user_profiles ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "shared_select_user_profiles" ON user_profiles;
+CREATE POLICY "shared_select_user_profiles" ON user_profiles
+  FOR SELECT TO anon, authenticated USING (true);
+
+DROP POLICY IF EXISTS "admin_manage_user_profiles" ON user_profiles;
+CREATE POLICY "admin_manage_user_profiles" ON user_profiles
+  FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Explicit Operator Transition Verification
+CREATE OR REPLACE FUNCTION is_operator_transition_allowed(
+  p_role text,
+  p_from_seq integer,
+  p_to_seq integer
+) RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS $$
+BEGIN
+  IF p_role = 'admin' THEN
+    RETURN true;
+  END IF;
+
+  CASE p_role
+    WHEN 'coloring_operator' THEN
+      -- Raw(1)->Coloring(2), Coloring(2)->Printing(3), Coloring(2)->Scrap(8), Coloring(2)->Raw(1) [Reversal]
+      RETURN (p_from_seq = 1 AND p_to_seq = 2)
+          OR (p_from_seq = 2 AND p_to_seq IN (1, 3, 8));
+
+    WHEN 'printing_operator' THEN
+      -- Printing(3)->Filling(4), Printing(3)->Scrap(8), Printing(3)->Coloring(2) [Reversal]
+      RETURN (p_from_seq = 3 AND p_to_seq IN (2, 4, 8));
+
+    WHEN 'filling_operator' THEN
+      -- Filling(4)->Packaging(5), Filling(4)->Scrap(8), Filling(4)->Printing(3) [Reversal]
+      RETURN (p_from_seq = 4 AND p_to_seq IN (3, 5, 8));
+
+    WHEN 'packaging_operator' THEN
+      -- Packaging(5)->Ready(6), Packaging(5)->Scrap(8), Packaging(5)->Filling(4) [Reversal]
+      RETURN (p_from_seq = 5 AND p_to_seq IN (4, 6, 8));
+
+    ELSE
+      RETURN false;
+  END CASE;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION is_operator_transition_allowed TO anon, authenticated;
+
 

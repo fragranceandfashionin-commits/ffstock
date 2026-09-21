@@ -48,7 +48,11 @@ const TABLES = [
   { name: 'inward_batches', sortKey: 'id' },
   { name: 'stage_movements', sortKey: 'id' },
   { name: 'dispatches', sortKey: 'id' },
-  { name: 'batch_allocations', sortKey: 'id' }
+  { name: 'batch_allocations', sortKey: 'id' },
+  { name: 'clients', sortKey: 'id', optional: true },
+  { name: 'bom_categories', sortKey: 'sort_order', optional: true },
+  { name: 'production_orders', sortKey: 'created_at', optional: true },
+  { name: 'material_allocations', sortKey: 'created_at', optional: true }
 ];
 
 // All database views
@@ -172,6 +176,54 @@ CREATE TABLE IF NOT EXISTS batch_allocations (
   allocated_on date NOT NULL DEFAULT CURRENT_DATE,
   remarks text,
   allocated_by text,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS clients (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  company_name text,
+  email text,
+  phone text,
+  preferences text,
+  status text NOT NULL DEFAULT 'active',
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS bom_categories (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text UNIQUE NOT NULL,
+  sort_order integer NOT NULL DEFAULT 0,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS production_orders (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_no text UNIQUE NOT NULL,
+  client_id uuid NOT NULL REFERENCES clients(id),
+  product_name text NOT NULL,
+  variants jsonb DEFAULT '[]'::jsonb,
+  total_qty integer NOT NULL DEFAULT 0,
+  due_date date,
+  status text NOT NULL DEFAULT 'planning',
+  notes text,
+  completed_at timestamptz,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS material_allocations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id uuid NOT NULL REFERENCES production_orders(id) ON DELETE CASCADE,
+  component_name text NOT NULL,
+  sort_order integer NOT NULL DEFAULT 0,
+  source text NOT NULL DEFAULT 'vendor',
+  description text,
+  vendor_id uuid REFERENCES suppliers(id) ON DELETE SET NULL,
+  stock_item_id uuid REFERENCES items(id) ON DELETE SET NULL,
+  timeline date,
+  status text NOT NULL DEFAULT 'pending',
+  received_at timestamptz,
+  remarks text,
   created_at timestamptz DEFAULT now()
 );
 
@@ -370,7 +422,7 @@ END $$;
 `;
 
   console.log('\n[Phase 1/4] Extracting Relational Database Tables:');
-  for (const { name, sortKey } of TABLES) {
+  for (const { name, sortKey, optional } of TABLES) {
     process.stdout.write(`  Fetching table "${name}"... `);
     const result = await fetchAllRows(name, sortKey);
     if (result.success) {
@@ -379,8 +431,12 @@ END $$;
       sqlDump += generateSqlInserts(name, result.rows) + '\n';
       console.log(`✓ (${result.rows.length} rows)`);
     } else {
-      console.log(`✗ Error: ${result.error}`);
-      throw new Error(`Failed to backup critical table ${name}: ${result.error}`);
+      if (optional && (result.error.includes('Could not find') || result.error.includes('PGRST205') || result.error.includes('42P01'))) {
+        console.log(`- (table not deployed in schema, safely skipped)`);
+      } else {
+        console.log(`✗ Error: ${result.error}`);
+        throw new Error(`Failed to backup critical table ${name}: ${result.error}`);
+      }
     }
   }
 

@@ -4,6 +4,7 @@ import { Card } from '@/components/ui';
 import type { Stage } from '@/lib/supabase';
 import type { ActiveAction } from './types';
 import { formatNumber } from '@/lib/utils';
+import { useAuth } from '@/lib/auth';
 
 export type PipelineVisualizerProps = {
   processStages: Stage[];
@@ -24,6 +25,7 @@ export function PipelineVisualizer({
   onStartScrap,
   unitLabel,
 }: PipelineVisualizerProps) {
+  const { role, roleDefinition, canPerform, canTransitionStage } = useAuth();
   const totalStockInPipeline = processStages.reduce((sum, s) => sum + qtyAt(s.id), 0);
   const activeStagesCount = processStages.filter((s) => qtyAt(s.id) > 0).length;
 
@@ -169,71 +171,104 @@ export function PipelineVisualizer({
                 </div>
 
                 {/* Actions for this stage */}
-                <div className="space-y-1.5 pt-2.5 border-t border-slate-100">
-                  {hasStock ? (
-                    <>
-                      {/* 1-Click Advance */}
-                      {nextStage && (
-                        <button
-                          type="button"
-                          onClick={() => onStartStageMove(stage.id, nextStage.id)}
-                          className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-extrabold text-white shadow-xs hover:bg-indigo-950 active:scale-[0.98] transition cursor-pointer min-w-0"
-                        >
-                          <Zap className="h-3.5 w-3.5 text-amber-400 shrink-0" />
-                          <span className="truncate">Advance → {nextStage.name}</span>
-                        </button>
-                      )}
+                {(() => {
+                  const canAdvance = !!nextStage && canPerform('stage_move') && canTransitionStage(stage.sequence_no, nextStage.sequence_no);
+                  const canDispatch = isLastStage && canPerform('dispatch');
+                  const allowedJumpStages = otherStages.filter((target) =>
+                    canPerform('stage_move') && canTransitionStage(stage.sequence_no, target.sequence_no)
+                  );
+                  const canScrap = role === 'admin' || (canPerform('stage_move') && canTransitionStage(stage.sequence_no, 8));
 
-                      {/* Ready -> Dispatch */}
-                      {isLastStage && (
-                        <button
-                          type="button"
-                          onClick={onStartDispatch}
-                          className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-extrabold text-white shadow-xs hover:bg-emerald-700 active:scale-[0.98] transition cursor-pointer min-w-0"
-                        >
-                          <Truck className="h-3.5 w-3.5 shrink-0" />
-                          <span className="truncate">Dispatch to Customer</span>
-                        </button>
-                      )}
-
-                      {/* Jump menu */}
-                      {otherStages.length > 0 && (
-                        <div className="relative">
-                          <select
-                            className="w-full appearance-none rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:bg-slate-50 cursor-pointer text-center"
-                            value=""
-                            onChange={(e) => {
-                              if (e.target.value) {
-                                onStartStageMove(stage.id, e.target.value);
+                  return (
+                    <div className="space-y-1.5 pt-2.5 border-t border-slate-100">
+                      {hasStock ? (
+                        <>
+                          {/* 1-Click Advance */}
+                          {nextStage && (
+                            <button
+                              type="button"
+                              onClick={() => canAdvance && onStartStageMove(stage.id, nextStage.id)}
+                              disabled={!canAdvance}
+                              title={
+                                canAdvance
+                                  ? `Advance ${stage.name} to ${nextStage.name}`
+                                  : `Role (${roleDefinition.name}) not authorized to advance from ${stage.name} to ${nextStage.name}`
                               }
-                            }}
+                              className={`w-full flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-extrabold transition min-w-0 ${
+                                canAdvance
+                                  ? 'bg-slate-900 text-white shadow-xs hover:bg-indigo-950 active:scale-[0.98] cursor-pointer'
+                                  : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
+                              }`}
+                            >
+                              <Zap className={`h-3.5 w-3.5 shrink-0 ${canAdvance ? 'text-amber-400' : 'text-slate-400'}`} />
+                              <span className="truncate">Advance → {nextStage.name}</span>
+                            </button>
+                          )}
+
+                          {/* Ready -> Dispatch */}
+                          {isLastStage && (
+                            <button
+                              type="button"
+                              onClick={() => canDispatch && onStartDispatch()}
+                              disabled={!canDispatch}
+                              title={canDispatch ? 'Dispatch to Customer' : `Role (${roleDefinition.name}) requires Dispatch Manager or Admin`}
+                              className={`w-full flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-extrabold transition min-w-0 ${
+                                canDispatch
+                                  ? 'bg-emerald-600 text-white shadow-xs hover:bg-emerald-700 active:scale-[0.98] cursor-pointer'
+                                  : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
+                              }`}
+                            >
+                              <Truck className="h-3.5 w-3.5 shrink-0" />
+                              <span className="truncate">Dispatch to Customer</span>
+                            </button>
+                          )}
+
+                          {/* Jump menu */}
+                          {allowedJumpStages.length > 0 && (
+                            <div className="relative">
+                              <select
+                                className="w-full appearance-none rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:bg-slate-50 cursor-pointer text-center"
+                                value=""
+                                onChange={(e) => {
+                                  if (e.target.value) {
+                                    onStartStageMove(stage.id, e.target.value);
+                                  }
+                                }}
+                              >
+                                <option value="">Jump / Transfer to ▾</option>
+                                {allowedJumpStages.map((target) => (
+                                  <option key={target.id} value={target.id}>
+                                    → {target.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+
+                          {/* Record Scrap */}
+                          <button
+                            type="button"
+                            onClick={() => canScrap && onStartScrap(stage.id)}
+                            disabled={!canScrap}
+                            title={canScrap ? 'Record Scrap Loss' : `Role (${roleDefinition.name}) not authorized for scrap recording at this stage`}
+                            className={`w-full flex items-center justify-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] font-bold transition ${
+                              canScrap
+                                ? 'border-rose-200 bg-rose-50/50 text-rose-700 hover:bg-rose-100 active:scale-[0.98] cursor-pointer'
+                                : 'border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed opacity-50'
+                            }`}
                           >
-                            <option value="">Jump / Transfer to ▾</option>
-                            {otherStages.map((target) => (
-                              <option key={target.id} value={target.id}>
-                                → {target.name}
-                              </option>
-                            ))}
-                          </select>
+                            <Flame className={`h-3 w-3 ${canScrap ? 'text-rose-600' : 'text-slate-400'}`} />
+                            <span>Record Scrap Loss</span>
+                          </button>
+                        </>
+                      ) : (
+                        <div className="py-2 text-center text-[11px] font-medium text-slate-400 italic">
+                          Stage is idle
                         </div>
                       )}
-
-                      {/* Record Scrap */}
-                      <button
-                        type="button"
-                        onClick={() => onStartScrap(stage.id)}
-                        className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50/50 px-2 py-1 text-[11px] font-bold text-rose-700 hover:bg-rose-100 active:scale-[0.98] transition cursor-pointer"
-                      >
-                        <Flame className="h-3 w-3 text-rose-600" />
-                        <span>Record Scrap Loss</span>
-                      </button>
-                    </>
-                  ) : (
-                    <div className="py-2 text-center text-[11px] font-medium text-slate-400 italic">
-                      Stage is idle
                     </div>
-                  )}
-                </div>
+                  );
+                })()}
               </div>
             );
           })}

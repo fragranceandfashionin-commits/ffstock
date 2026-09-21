@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Boxes, Save, Trash2, Plus, Phone, Download, FileText, Copy } from 'lucide-react';
+import { Boxes, Save, Trash2, Plus, Phone, Download, FileText, Copy, Edit2, Mail, X } from 'lucide-react';
 import {
   Card,
   PageHeader,
@@ -14,9 +14,9 @@ import {
   TableScrollContainer,
 } from '@/components/ui';
 import { useToast } from '@/components/Toast';
-import { fetchSuppliers, insertSuppliers } from '@/lib/queries';
+import { fetchSuppliers, insertSuppliers, updateSupplierExtended } from '@/lib/queries';
 import { supabase } from '@/lib/supabase';
-import type { Supplier } from '@/lib/supabase';
+import type { Supplier, ExtendedSupplier } from '@/lib/supabase';
 import { getErrorMessage, formatDate, downloadCSV, getTodayDateString } from '@/lib/utils';
 
 export type SuppliersViewProps = {
@@ -62,6 +62,16 @@ export function SuppliersView({ initialSupplierId }: SuppliersViewProps = {}) {
   // Delete modal state
   const [deleteModalSupplier, setDeleteModalSupplier] = useState<Supplier | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Edit Supplier Modal State
+  const [editModalSupplier, setEditModalSupplier] = useState<ExtendedSupplier | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editContactPerson, setEditContactPerson] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editCategories, setEditCategories] = useState<string[]>([]);
+  const [editMaterials, setEditMaterials] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const lastHandledSupplierIdRef = useRef<string | null>(null);
   const toast = useToast();
@@ -278,6 +288,40 @@ export function SuppliersView({ initialSupplierId }: SuppliersViewProps = {}) {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault();
       handleAddSingle();
+    }
+  };
+
+  const openEditModal = (s: ExtendedSupplier) => {
+    setEditModalSupplier(s);
+    setEditName(s.name);
+    setEditContactPerson(s.contact_person || '');
+    setEditPhone(s.phone || s.contact || '');
+    setEditEmail(s.email || '');
+    setEditCategories(s.categories_supplied || []);
+    setEditMaterials(s.specific_materials || '');
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editModalSupplier || !editName.trim()) return;
+    setSavingEdit(true);
+    try {
+      await updateSupplierExtended(editModalSupplier.id, {
+        name: editName.trim(),
+        contact: editPhone.trim() || null,
+        phone: editPhone.trim() || null,
+        email: editEmail.trim() || null,
+        contact_person: editContactPerson.trim() || null,
+        categories_supplied: editCategories,
+        specific_materials: editMaterials.trim() || null,
+      });
+      toast.success(`Supplier "${editName}" updated successfully!`, 'Supplier Updated');
+      setEditModalSupplier(null);
+      await load(true);
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Failed to update supplier'), 'Update Failed');
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -554,27 +598,58 @@ export function SuppliersView({ initialSupplierId }: SuppliersViewProps = {}) {
                         </span>
                         <div>
                           <p className="font-bold text-slate-900 text-sm">{s.name}</p>
-                          <p className="text-[11px] text-slate-500">{formatDate(s.created_at)}</p>
+                          {(s as ExtendedSupplier).contact_person && (
+                            <p className="text-[11px] text-slate-600 font-medium">
+                              Person: {(s as ExtendedSupplier).contact_person}
+                            </p>
+                          )}
+                          <p className="text-[10px] text-slate-400">{formatDate(s.created_at)}</p>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => setDeleteModalSupplier(s)}
-                        className="rounded-xl min-w-[38px] min-h-[38px] flex items-center justify-center text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition cursor-pointer"
-                        title="Delete supplier"
-                        aria-label={`Delete ${s.name}`}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => openEditModal(s as ExtendedSupplier)}
+                          className="rounded-xl min-w-[36px] min-h-[36px] flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition cursor-pointer"
+                          title="Edit supplier"
+                        >
+                          <Edit2 className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeleteModalSupplier(s)}
+                          className="rounded-xl min-w-[36px] min-h-[36px] flex items-center justify-center text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition cursor-pointer"
+                          title="Delete supplier"
+                          aria-label={`Delete ${s.name}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
                     </div>
 
-                    {s.contact ? (
-                      <div className="flex items-center gap-2 text-xs font-medium text-slate-700 bg-slate-50 p-2 rounded-xl border border-slate-100">
-                        <Phone className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-                        <span className="break-all">{s.contact}</span>
+                    <div className="space-y-1">
+                      {((s as ExtendedSupplier).phone || s.contact) && (
+                        <div className="flex items-center gap-2 text-xs font-medium text-slate-700 bg-slate-50 p-1.5 rounded-xl border border-slate-100">
+                          <Phone className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                          <span className="break-all">{(s as ExtendedSupplier).phone || s.contact}</span>
+                        </div>
+                      )}
+                      {(s as ExtendedSupplier).email && (
+                        <div className="flex items-center gap-2 text-xs font-medium text-slate-700 bg-slate-50 p-1.5 rounded-xl border border-slate-100">
+                          <Mail className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                          <span className="break-all">{(s as ExtendedSupplier).email}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {Array.isArray((s as ExtendedSupplier).categories_supplied) && (s as ExtendedSupplier).categories_supplied!.length > 0 && (
+                      <div className="flex flex-wrap gap-1 pt-1">
+                        {(s as ExtendedSupplier).categories_supplied!.map((cat, idx) => (
+                          <span key={idx} className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-medium border border-slate-200">
+                            {cat}
+                          </span>
+                        ))}
                       </div>
-                    ) : (
-                      <p className="text-[11px] text-slate-400 italic">No contact details registered</p>
                     )}
                   </Card>
                 ))}
@@ -600,20 +675,53 @@ export function SuppliersView({ initialSupplierId }: SuppliersViewProps = {}) {
                               <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-700 text-xs font-bold shrink-0">
                                 {s.name.charAt(0).toUpperCase()}
                               </span>
-                              <span>{s.name}</span>
+                              <div>
+                                <span>{s.name}</span>
+                                {(s as ExtendedSupplier).contact_person && (
+                                  <div className="text-[11px] font-normal text-slate-500">
+                                    Attn: {(s as ExtendedSupplier).contact_person}
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </td>
                           <td className="px-4 py-3.5 text-slate-600 text-xs">
-                            {s.contact ? (
-                              <span className="font-medium text-slate-700">{s.contact}</span>
-                            ) : (
-                              <span className="text-slate-400 italic">No contact info</span>
-                            )}
+                            <div className="space-y-0.5">
+                              {((s as ExtendedSupplier).phone || s.contact) && (
+                                <div className="font-medium text-slate-700 flex items-center gap-1">
+                                  <Phone className="h-3 w-3 text-slate-400" />
+                                  {(s as ExtendedSupplier).phone || s.contact}
+                                </div>
+                              )}
+                              {(s as ExtendedSupplier).email && (
+                                <div className="text-slate-500 flex items-center gap-1">
+                                  <Mail className="h-3 w-3 text-slate-400" />
+                                  {(s as ExtendedSupplier).email}
+                                </div>
+                              )}
+                              {Array.isArray((s as ExtendedSupplier).categories_supplied) && (s as ExtendedSupplier).categories_supplied!.length > 0 && (
+                                <div className="flex flex-wrap gap-1 pt-1">
+                                  {(s as ExtendedSupplier).categories_supplied!.map((cat, i) => (
+                                    <span key={i} className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded font-medium border border-slate-200">
+                                      {cat}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
                           </td>
                           <td className="px-4 py-3.5 text-xs text-slate-500 whitespace-nowrap">
                             {formatDate(s.created_at)}
                           </td>
-                          <td className="px-4 py-3.5 text-right">
+                          <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => openEditModal(s as ExtendedSupplier)}
+                              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition cursor-pointer mr-1"
+                              title="Edit supplier"
+                            >
+                              <Edit2 className="h-4 w-4" />
+                            </button>
                             <button
                               type="button"
                               onClick={() => setDeleteModalSupplier(s)}
@@ -647,6 +755,132 @@ export function SuppliersView({ initialSupplierId }: SuppliersViewProps = {}) {
         variant="danger"
         loading={deleting}
       />
+
+      {/* Edit Supplier Modal */}
+      {editModalSupplier && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full border border-slate-200 p-5 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Edit Supplier Profile</h3>
+                <p className="text-xs text-slate-500">Update supplier contact and materials info</p>
+              </div>
+              <button
+                type="button"
+                className="text-slate-400 hover:text-slate-700 p-1"
+                onClick={() => setEditModalSupplier(null)}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEdit} className="space-y-3.5">
+              <Field label="Supplier Name" required>
+                <input
+                  type="text"
+                  className={inputClass}
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  required
+                />
+              </Field>
+
+              <Field label="Contact Person">
+                <input
+                  type="text"
+                  className={inputClass}
+                  placeholder="e.g. Rajesh Sharma"
+                  value={editContactPerson}
+                  onChange={(e) => setEditContactPerson(e.target.value)}
+                />
+              </Field>
+
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Phone / Mobile">
+                  <input
+                    type="tel"
+                    className={inputClass}
+                    placeholder="+91 98765 43210"
+                    value={editPhone}
+                    onChange={(e) => setEditPhone(e.target.value)}
+                  />
+                </Field>
+                <Field label="Email">
+                  <input
+                    type="email"
+                    className={inputClass}
+                    placeholder="sales@supplier.com"
+                    value={editEmail}
+                    onChange={(e) => setEditEmail(e.target.value)}
+                  />
+                </Field>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+                  Categories Supplied
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    'Bottles', 'Cap', 'Atomizer', 'Packaging', 'Box', 'Sticker', 'Coating', 'Printing', 'Cellophane', 'Raw Material'
+                  ].map((cat) => {
+                    const isSelected = editCategories.includes(cat);
+                    return (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => {
+                          if (isSelected) {
+                            setEditCategories(editCategories.filter((c) => c !== cat));
+                          } else {
+                            setEditCategories([...editCategories, cat]);
+                          }
+                        }}
+                        className={`text-xs px-2.5 py-1 rounded-lg border font-semibold transition ${
+                          isSelected
+                            ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
+                            : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        {cat}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <Field label="Specific Materials / Notes">
+                <textarea
+                  className={inputClass}
+                  rows={2}
+                  placeholder="e.g. Amber glass bottles, 24/410 crimpless collars, matte lamination..."
+                  value={editMaterials}
+                  onChange={(e) => setEditMaterials(e.target.value)}
+                />
+              </Field>
+
+              <div className="pt-3 border-t border-slate-100 flex justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setEditModalSupplier(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  loading={savingEdit}
+                >
+                  Save Supplier Details
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

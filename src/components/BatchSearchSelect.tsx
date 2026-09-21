@@ -239,7 +239,7 @@ export function BatchSearchSelect({
     };
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [isOpen]);
+  }, [isOpen, handleSetIsOpen]);
 
   // Click outside listener
   useEffect(() => {
@@ -255,7 +255,7 @@ export function BatchSearchSelect({
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [isOpen]);
+  }, [isOpen, handleSetIsOpen]);
 
   // Focus search input when opening
   useEffect(() => {

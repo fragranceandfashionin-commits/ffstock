@@ -41,3 +41,7 @@ apply_fix_and_restart.bat
 patch_antigravity_main.py
 rebuild_all_conversations.py
 rebuild_conversations.bat
+
+# CLI and Migration temp
+supabase/.temp/
+.migration_audit.json

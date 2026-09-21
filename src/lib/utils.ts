@@ -43,6 +43,9 @@ export function getErrorMessage(err: unknown, fallback = 'Something went wrong')
     return "Database schema update required: Please run migration 'supabase/migrations/20260817100000_add_cap_and_atomizer_to_stage_movements.sql' in your Supabase SQL Editor to enable Cap & Atomizer tracking.";
   }
   if (code === 'PGRST205') {
+    if (message.includes('production_orders') || message.includes('clients') || message.includes('material_allocations') || message.includes('bom_categories')) {
+      return "Vendor Portal database schema update required: Please run 'supabase/migrations/20260920000000_add_vendor_portal_schema.sql' (or 'supabase/setup.sql') in your Supabase SQL Editor.";
+    }
     return 'The database tables are not set up yet. Run the SQL files in supabase/migrations/ in the Supabase SQL Editor — see README.md.';
   }
   if (code === 401 || code === 'PGRST301' || code === 'PGRST302') {

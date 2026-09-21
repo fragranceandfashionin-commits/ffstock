@@ -1,4 +1,4 @@
-import { useRef, useState, type ButtonHTMLAttributes, type ReactNode, type ElementType } from 'react';
+import { useRef, useState, useEffect, type ButtonHTMLAttributes, type ReactNode, type ElementType } from 'react';
 import { AlertTriangle, Loader2, Search, X, Camera, Maximize2, Sparkles, AlertCircle, HelpCircle } from 'lucide-react';
 import { COMMON_COLORS, COMMON_PRINTING_DESIGNS } from '@/lib/supabase';
 
@@ -236,26 +236,45 @@ export function SearchInput({
   value,
   onChange,
   placeholder = 'Search…',
+  debounceMs = 150,
 }: {
   value: string;
   onChange: (val: string) => void;
   placeholder?: string;
+  debounceMs?: number;
 }) {
+  const [localValue, setLocalValue] = useState(value);
+
+  useEffect(() => {
+    setLocalValue(value);
+  }, [value]);
+
+  useEffect(() => {
+    if (localValue === value) return;
+    const timer = setTimeout(() => {
+      onChange(localValue);
+    }, debounceMs);
+    return () => clearTimeout(timer);
+  }, [localValue, value, onChange, debounceMs]);
+
   return (
     <div className="relative flex-1 max-w-sm">
       <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400 pointer-events-none" />
       <input
         type="text"
         className="w-full rounded-xl border border-slate-300 bg-white pl-9 pr-8 py-2 text-sm text-slate-900 placeholder:text-slate-400 transition focus:border-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
+        value={localValue}
+        onChange={(e) => setLocalValue(e.target.value)}
         placeholder={placeholder}
       />
-      {value && (
+      {localValue && (
         <button
           type="button"
-          onClick={() => onChange('')}
-          className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+          onClick={() => {
+            setLocalValue('');
+            onChange('');
+          }}
+          className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 cursor-pointer"
           title="Clear search"
         >
           <X className="h-3.5 w-3.5" />

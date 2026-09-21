@@ -1,5 +1,6 @@
+import { useState, useMemo, useEffect } from 'react';
 import {
-  AlertCircle, ChevronDown, ChevronRight, Maximize2, MapPin, Clock, Zap, Truck, History, ArrowRight,
+  AlertCircle, ChevronDown, ChevronRight, ChevronLeft, Maximize2, MapPin, Clock, Zap, Truck, History, ArrowRight,
   ArrowRightLeft, Layers
 } from 'lucide-react';
 import { Card, Button, Badge, ItemCategoryBadge, ColorBadge } from '@/components/ui';
@@ -38,6 +39,84 @@ export function BatchMatrixTab({
   onOpenQuickModal,
   onOpenAllocateModal,
 }: BatchMatrixTabProps) {
+  const [pageSize, setPageSize] = useState<number>(25);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filteredBatchMatrix.length, selectedStageId]);
+
+  const totalBatches = filteredBatchMatrix.length;
+  const effectivePageSize = pageSize === -1 ? totalBatches : pageSize;
+  const totalPages = Math.max(1, Math.ceil(totalBatches / (effectivePageSize || 1)));
+  const safePage = Math.min(Math.max(1, currentPage), totalPages);
+
+  const startIndex = (safePage - 1) * effectivePageSize;
+  const paginatedBatchMatrix = useMemo(() => {
+    if (pageSize === -1) return filteredBatchMatrix;
+    return filteredBatchMatrix.slice(startIndex, startIndex + effectivePageSize);
+  }, [filteredBatchMatrix, startIndex, effectivePageSize, pageSize]);
+
+  const renderPagination = (isTop: boolean = false) => {
+    if (totalBatches === 0) return null;
+
+    return (
+      <div className={`flex flex-wrap items-center justify-between gap-3 px-5 py-2.5 bg-slate-50 ${isTop ? 'border-b' : 'border-t'} border-slate-200 text-xs font-semibold text-slate-700`}>
+        <div className="flex items-center gap-2">
+          <span>Show:</span>
+          {[25, 50, 100, -1].map((size) => (
+            <button
+              key={size}
+              type="button"
+              onClick={() => {
+                setPageSize(size);
+                setCurrentPage(1);
+              }}
+              className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer ${
+                pageSize === size
+                  ? 'bg-slate-900 text-white shadow-xs'
+                  : 'bg-white text-slate-700 hover:bg-slate-200 border border-slate-200'
+              }`}
+            >
+              {size === -1 ? 'All' : size}
+            </button>
+          ))}
+          <span className="text-slate-400 ml-1">
+            ({totalBatches === 0 ? 0 : startIndex + 1}–{Math.min(startIndex + effectivePageSize, totalBatches)} of {totalBatches})
+          </span>
+        </div>
+
+        {pageSize !== -1 && totalPages > 1 && (
+          <div className="flex items-center gap-1.5">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={safePage <= 1}
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              className="h-8 px-2 text-xs font-bold"
+            >
+              <ChevronLeft className="h-3.5 w-3.5 mr-0.5" />
+              Prev
+            </Button>
+            <span className="px-2 font-bold text-slate-800">
+              Page {safePage} of {totalPages}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={safePage >= totalPages}
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              className="h-8 px-2 text-xs font-bold"
+            >
+              Next
+              <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
+            </Button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <Card className="p-0 overflow-hidden border-slate-200 shadow-2xs">
       <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 px-5 py-4 border-b border-slate-200">
@@ -65,6 +144,8 @@ export function BatchMatrixTab({
         </div>
       </div>
 
+      {renderPagination(true)}
+
       {filteredBatchMatrix.length === 0 ? (
         <div className="p-12 text-center text-sm text-slate-500">
           <AlertCircle className="h-8 w-8 text-slate-400 mx-auto mb-2" />
@@ -80,7 +161,7 @@ export function BatchMatrixTab({
         <div>
           {/* ─── Mobile View: Card-Based Batch Matrix (< sm) ─── */}
           <div className="p-3.5 space-y-3 sm:hidden">
-            {filteredBatchMatrix.map((item) => {
+            {paginatedBatchMatrix.map((item) => {
               const isExpanded = expandedBatchIds.has(item.batch.id);
               const activeStagesList = processStages
                 .map((s) => ({ stage: s, qty: item.stageQuantities[s.id] ?? 0 }))
@@ -504,7 +585,7 @@ export function BatchMatrixTab({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
-                {filteredBatchMatrix.map((item) => {
+                {paginatedBatchMatrix.map((item) => {
                   const isExpanded = expandedBatchIds.has(item.batch.id);
 
                   return (
@@ -1016,6 +1097,7 @@ export function BatchMatrixTab({
           </div>
         </div>
       )}
+      {renderPagination(false)}
     </Card>
   );
 }

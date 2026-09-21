@@ -1,4 +1,4 @@
-export type View = 'dashboard' | 'items' | 'suppliers' | 'outward';
+export type View = 'dashboard' | 'orders' | 'vendor-pending' | 'clients' | 'items' | 'suppliers' | 'outward' | 'order-history';
 
 export type StageStock = {
   stage_id: string;

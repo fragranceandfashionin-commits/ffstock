@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { Tag, Plus, Download, Edit2, Trash2, Eye, X } from 'lucide-react';
+import { useMemo, useState, useEffect } from 'react';
+import { Tag, Plus, Download, Edit2, Trash2, Eye, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import {
   Card,
   Button,
@@ -46,6 +46,9 @@ export function ItemCatalogueTab({
 }: ItemCatalogueTabProps) {
   const toast = useToast();
 
+  const [pageSize, setPageSize] = useState<number>(25);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+
   const filteredItems = useMemo(() => {
     return items.filter((i) => {
       const matchesCategory =
@@ -64,6 +67,20 @@ export function ItemCatalogueTab({
       );
     });
   }, [items, selectedCategoryFilter, searchQuery]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filteredItems.length, selectedCategoryFilter]);
+
+  const totalItems = filteredItems.length;
+  const effectivePageSize = pageSize === -1 ? totalItems : pageSize;
+  const totalPages = Math.max(1, Math.ceil(totalItems / (effectivePageSize || 1)));
+  const safePage = Math.min(Math.max(1, currentPage), totalPages);
+  const startIndex = (safePage - 1) * effectivePageSize;
+  const paginatedItems = useMemo(() => {
+    if (pageSize === -1) return filteredItems;
+    return filteredItems.slice(startIndex, startIndex + effectivePageSize);
+  }, [filteredItems, startIndex, effectivePageSize, pageSize]);
 
   const currentViewInwarded = filteredItems.reduce((s, i) => s + (stockSummaryMap.get(i.id)?.totalInwarded ?? 0), 0);
   const currentViewAvailable = filteredItems.reduce((s, i) => s + (stockSummaryMap.get(i.id)?.availableStock ?? 0), 0);
@@ -109,6 +126,66 @@ export function ItemCatalogueTab({
     } catch {
       toast.error('Failed to export CSV', 'Export Failed');
     }
+  };
+
+  const renderPagination = (isTop: boolean = false) => {
+    if (totalItems === 0) return null;
+
+    return (
+      <div className={`flex flex-wrap items-center justify-between gap-3 px-5 py-2.5 bg-slate-50 ${isTop ? 'border-b' : 'border-t'} border-slate-200 text-xs font-semibold text-slate-700`}>
+        <div className="flex items-center gap-2">
+          <span>Show:</span>
+          {[25, 50, 100, -1].map((size) => (
+            <button
+              key={size}
+              type="button"
+              onClick={() => {
+                setPageSize(size);
+                setCurrentPage(1);
+              }}
+              className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer ${
+                pageSize === size
+                  ? 'bg-slate-900 text-white shadow-xs'
+                  : 'bg-white text-slate-700 hover:bg-slate-200 border border-slate-200'
+              }`}
+            >
+              {size === -1 ? 'All' : size}
+            </button>
+          ))}
+          <span className="text-slate-400 ml-1">
+            ({totalItems === 0 ? 0 : startIndex + 1}–{Math.min(startIndex + effectivePageSize, totalItems)} of {totalItems})
+          </span>
+        </div>
+
+        {pageSize !== -1 && totalPages > 1 && (
+          <div className="flex items-center gap-1.5">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={safePage <= 1}
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              className="h-8 px-2 text-xs font-bold"
+            >
+              <ChevronLeft className="h-3.5 w-3.5 mr-0.5" />
+              Prev
+            </Button>
+            <span className="px-2 font-bold text-slate-800">
+              Page {safePage} of {totalPages}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={safePage >= totalPages}
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              className="h-8 px-2 text-xs font-bold"
+            >
+              Next
+              <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
+            </Button>
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -242,6 +319,8 @@ export function ItemCatalogueTab({
           </div>
         </div>
 
+        {renderPagination(true)}
+
         {loading ? (
           <TableSkeleton rows={6} cols={6} />
         ) : filteredItems.length === 0 ? (
@@ -260,7 +339,7 @@ export function ItemCatalogueTab({
           <div>
             {/* ─── Mobile View: Item Cards (< sm) ─── */}
             <div className="p-3.5 space-y-3 sm:hidden">
-              {filteredItems.map((i) => {
+              {paginatedItems.map((i) => {
                 const sum = stockSummaryMap.get(i.id);
                 const inwarded = sum?.totalInwarded ?? 0;
                 const available = sum?.availableStock ?? 0;
@@ -268,6 +347,14 @@ export function ItemCatalogueTab({
                 const shipped = sum?.totalDispatchedInOrders ?? 0;
                 const scrapped = sum?.totalScrapped ?? 0;
                 const isNotYetInwarded = inwarded === 0;
+                const isItemUsed = Boolean(
+                  sum && (
+                    (sum.inwardBatchCount || 0) > 0 ||
+                    (sum.usedInBatchCount || 0) > 0 ||
+                    (sum.totalInwarded || 0) > 0 ||
+                    (sum.totalUsedInBatches || 0) > 0
+                  )
+                );
 
                 return (
                   <Card key={`mobile-item-${i.id}`} className="p-4 border-slate-200 shadow-2xs space-y-3">
@@ -373,8 +460,13 @@ export function ItemCatalogueTab({
                         <button
                           type="button"
                           onClick={() => onOpenDeleteModal({ id: i.id, name: i.name })}
-                          className="rounded-xl min-w-[36px] min-h-[36px] flex items-center justify-center text-rose-600 hover:bg-rose-50 border border-rose-200 cursor-pointer"
-                          title="Delete item"
+                          disabled={isItemUsed}
+                          className={`rounded-xl min-w-[36px] min-h-[36px] flex items-center justify-center border transition ${
+                            isItemUsed
+                              ? 'opacity-40 cursor-not-allowed text-slate-400 border-slate-200 bg-slate-50'
+                              : 'text-rose-600 hover:bg-rose-50 border-rose-200 cursor-pointer'
+                          }`}
+                          title={isItemUsed ? 'Cannot delete item with receipt, batch, or assembly history' : 'Delete item'}
                           aria-label={`Delete ${i.name}`}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -407,7 +499,7 @@ export function ItemCatalogueTab({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-xs font-medium bg-white">
-                    {filteredItems.map((i, index) => {
+                    {paginatedItems.map((i, index) => {
                       const sum = stockSummaryMap.get(i.id);
                       const inwarded = sum?.totalInwarded ?? 0;
                       const available = sum?.availableStock ?? 0;
@@ -415,11 +507,19 @@ export function ItemCatalogueTab({
                       const shipped = sum?.totalDispatchedInOrders ?? 0;
                       const scrapped = sum?.totalScrapped ?? 0;
                       const isNotYetInwarded = inwarded === 0;
+                      const isItemUsed = Boolean(
+                        sum && (
+                          (sum.inwardBatchCount || 0) > 0 ||
+                          (sum.usedInBatchCount || 0) > 0 ||
+                          (sum.totalInwarded || 0) > 0 ||
+                          (sum.totalUsedInBatches || 0) > 0
+                        )
+                      );
 
                       return (
                         <tr key={i.id} className="hover:bg-slate-50/90 transition-colors group">
                           <td className="px-3.5 py-3 text-center font-bold text-slate-400 text-[11px]">
-                            {index + 1}
+                            {startIndex + index + 1}
                           </td>
 
                           <td className="px-4 py-3">
@@ -545,8 +645,13 @@ export function ItemCatalogueTab({
                               variant="outline"
                               size="sm"
                               onClick={() => onOpenDeleteModal({ id: i.id, name: i.name })}
-                              className="text-[11px] py-1 px-2 font-bold text-rose-700 border-rose-300 bg-rose-50/50 hover:bg-rose-100 shadow-2xs cursor-pointer"
-                              title="Delete item SKU"
+                              disabled={isItemUsed}
+                              className={`text-[11px] py-1 px-2 font-bold shadow-2xs transition ${
+                                isItemUsed
+                                  ? 'opacity-40 cursor-not-allowed text-slate-400 border-slate-200 bg-slate-50'
+                                  : 'text-rose-700 border-rose-300 bg-rose-50/50 hover:bg-rose-100 cursor-pointer'
+                              }`}
+                              title={isItemUsed ? 'Cannot delete item with receipt, batch, or assembly history' : 'Delete item SKU'}
                             >
                               <Trash2 className="h-3 w-3" />
                             </Button>
@@ -560,6 +665,8 @@ export function ItemCatalogueTab({
             </div>
           </div>
         )}
+
+        {renderPagination(false)}
       </Card>
     </div>
   );

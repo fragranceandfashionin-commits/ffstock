@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   ArrowRightLeft,
   History,
@@ -6,11 +6,13 @@ import {
   Search,
   Calendar,
   User,
+  RotateCcw,
+  AlertTriangle,
 } from 'lucide-react';
-import { Modal, Button, EmptyState } from '@/components/ui';
-import { fetchBatchAllocations } from '@/lib/queries';
+import { Modal, Button, EmptyState, Field, inputClass } from '@/components/ui';
+import { fetchBatchAllocations, reverseBatchAllocation } from '@/lib/queries';
 import type { BatchAllocationWithRelations } from '@/lib/supabase';
-import { formatNumber, formatDate, downloadCSV, getTodayDateString } from '@/lib/utils';
+import { formatNumber, formatDate, downloadCSV, getTodayDateString, getErrorMessage } from '@/lib/utils';
 import { useToast } from '@/components/Toast';
 
 export type AllocationsLedgerModalProps = {
@@ -22,29 +24,28 @@ export function AllocationsLedgerModal({ isOpen, onClose }: AllocationsLedgerMod
   const [allocations, setAllocations] = useState<BatchAllocationWithRelations[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [reversingAlloc, setReversingAlloc] = useState<BatchAllocationWithRelations | null>(null);
+  const [reversalReason, setReversalReason] = useState('');
+  const [reversalDoneBy, setReversalDoneBy] = useState('');
+  const [submittingReversal, setSubmittingReversal] = useState(false);
   const toast = useToast();
+
+  const loadAllocations = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await fetchBatchAllocations();
+      setAllocations(data);
+    } catch (err) {
+      console.warn('Failed to load allocations:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (!isOpen) return;
-
-    let isMounted = true;
-    setLoading(true);
-
-    fetchBatchAllocations()
-      .then((data) => {
-        if (isMounted) setAllocations(data);
-      })
-      .catch((err) => {
-        console.warn('Failed to load allocations:', err);
-      })
-      .finally(() => {
-        if (isMounted) setLoading(false);
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [isOpen]);
+    loadAllocations();
+  }, [isOpen, loadAllocations]);
 
   const filteredAllocations = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
@@ -113,6 +114,31 @@ export function AllocationsLedgerModal({ isOpen, onClose }: AllocationsLedgerMod
     }
   };
 
+  const handleConfirmReversal = async () => {
+    if (!reversingAlloc) return;
+    setSubmittingReversal(true);
+    try {
+      await reverseBatchAllocation({
+        allocationId: reversingAlloc.id,
+        reversedBy: reversalDoneBy.trim() || undefined,
+        reason: reversalReason.trim() || undefined,
+      });
+      toast.success(
+        `Allocation of ${formatNumber(reversingAlloc.qty)} units reversed successfully.`,
+        'Reversal Logged'
+      );
+      setReversingAlloc(null);
+      setReversalReason('');
+      setReversalDoneBy('');
+      await loadAllocations();
+    } catch (err) {
+      const msg = getErrorMessage(err, 'Failed to reverse allocation');
+      toast.error(msg, 'Reversal Failed');
+    } finally {
+      setSubmittingReversal(false);
+    }
+  };
+
   return (
     <Modal
       isOpen={isOpen}
@@ -121,52 +147,40 @@ export function AllocationsLedgerModal({ isOpen, onClose }: AllocationsLedgerMod
       maxWidthClass="max-w-3xl"
     >
       <div className="space-y-4">
-        {/* Header Summary & Search */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-3 bg-slate-50 rounded-2xl border border-slate-200">
-          <div className="flex items-center gap-2.5">
-            <div className="h-10 w-10 rounded-xl bg-teal-100 border border-teal-200 flex items-center justify-center text-teal-800">
-              <ArrowRightLeft className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-xs font-black text-slate-900">
-                {filteredAllocations.length} Allocation Transfers Logged
-              </p>
-              <p className="text-[11px] text-slate-500">
-                Total Stock Reallocated: <strong>{formatNumber(totalAllocatedQty)} units</strong>
-              </p>
-            </div>
+        {/* Top Filter & Export Bar */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search by batch #, brand, item, operator, or remarks..."
+              className="w-full rounded-xl border border-slate-300 bg-white pl-9 pr-3.5 py-2 text-xs font-medium text-slate-900 focus:border-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-500/20 shadow-2xs"
+            />
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="relative flex-1 sm:w-56">
-              <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search batch, brand, operator…"
-                className="w-full rounded-xl border border-slate-300 bg-white pl-9 pr-3 py-2 text-xs font-medium text-slate-900 focus:border-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-500/20 shadow-2xs"
-              />
-            </div>
-
+            <span className="text-xs font-bold text-slate-500 whitespace-nowrap">
+              {filteredAllocations.length} {filteredAllocations.length === 1 ? 'record' : 'records'} ({formatNumber(totalAllocatedQty)} {allocations[0]?.source_batch?.item?.unit || 'units'})
+            </span>
             <Button
               variant="outline"
               size="sm"
               onClick={exportAllocationsCSV}
               disabled={allocations.length === 0}
-              className="text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 shrink-0 cursor-pointer shadow-2xs"
-              title="Download allocations ledger CSV"
+              className="text-xs font-bold shrink-0 cursor-pointer"
             >
-              <Download className="h-3.5 w-3.5 mr-1 text-slate-500" />
+              <Download className="h-3.5 w-3.5 mr-1" />
               Export CSV
             </Button>
           </div>
         </div>
 
-        {/* Allocations Feed */}
+        {/* Ledger Rows */}
         {loading ? (
-          <div className="p-12 text-center text-xs text-slate-500 font-medium">
-            Loading allocation ledger records...
+          <div className="p-8 text-center text-xs font-semibold text-slate-400 animate-pulse">
+            Loading allocations ledger...
           </div>
         ) : filteredAllocations.length === 0 ? (
           <div className="p-8 text-center bg-slate-50 rounded-2xl border border-slate-200">
@@ -185,10 +199,15 @@ export function AllocationsLedgerModal({ isOpen, onClose }: AllocationsLedgerMod
             {filteredAllocations.map((alloc) => {
               const src = alloc.source_batch;
               const dest = alloc.destination_batch;
+              const isReversal = alloc.allocation_type === 'reversal';
               return (
                 <div
                   key={`alloc-item-${alloc.id}`}
-                  className="p-3.5 rounded-2xl border border-slate-200 bg-white hover:border-teal-200 hover:bg-teal-50/20 transition shadow-2xs space-y-2.5"
+                  className={`p-3.5 rounded-2xl border bg-white transition shadow-2xs space-y-2.5 ${
+                    isReversal
+                      ? 'border-rose-200 bg-rose-50/20 hover:border-rose-300'
+                      : 'border-slate-200 hover:border-teal-200 hover:bg-teal-50/20'
+                  }`}
                 >
                   {/* Top Bar: Date, Operator, Qty Badge */}
                   <div className="flex items-center justify-between">
@@ -203,10 +222,19 @@ export function AllocationsLedgerModal({ isOpen, onClose }: AllocationsLedgerMod
                           {alloc.allocated_by}
                         </span>
                       )}
+                      {isReversal && (
+                        <span className="text-[10px] font-black uppercase tracking-wider text-rose-700 bg-rose-100 border border-rose-300 px-2 py-0.5 rounded-md">
+                          Reversal
+                        </span>
+                      )}
                     </div>
 
-                    <span className="font-black text-teal-950 bg-teal-100 border border-teal-300 px-2.5 py-1 rounded-lg text-xs shadow-2xs flex items-center gap-1">
-                      <ArrowRightLeft className="h-3 w-3 text-teal-700" />
+                    <span className={`font-black px-2.5 py-1 rounded-lg text-xs shadow-2xs flex items-center gap-1 ${
+                      isReversal
+                        ? 'text-rose-950 bg-rose-100 border border-rose-300'
+                        : 'text-teal-950 bg-teal-100 border border-teal-300'
+                    }`}>
+                      <ArrowRightLeft className="h-3 w-3" />
                       {formatNumber(alloc.qty)} {src?.item?.unit || 'pcs'}
                     </span>
                   </div>
@@ -256,18 +284,106 @@ export function AllocationsLedgerModal({ isOpen, onClose }: AllocationsLedgerMod
                     </div>
                   </div>
 
-                  {/* Remarks */}
-                  {alloc.remarks && (
-                    <p className="text-[11px] text-slate-600 italic bg-white p-2 rounded-lg border border-slate-100">
-                      "{alloc.remarks}"
-                    </p>
-                  )}
+                  {/* Footer: Remarks & Reversal Action */}
+                  <div className="flex items-center justify-between gap-3 pt-1 border-t border-slate-100 flex-wrap">
+                    {alloc.remarks ? (
+                      <p className="text-[11px] text-slate-600 italic bg-white px-2 py-1 rounded-lg border border-slate-100 truncate max-w-md">
+                        &quot;{alloc.remarks}&quot;
+                      </p>
+                    ) : (
+                      <span className="text-[10px] text-slate-400">No remarks</span>
+                    )}
+
+                    {!isReversal && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setReversingAlloc(alloc);
+                          setReversalReason('');
+                          setReversalDoneBy('');
+                        }}
+                        className="text-xs font-bold text-rose-700 border-rose-200 bg-rose-50/60 hover:bg-rose-100 cursor-pointer shadow-2xs"
+                        title="Reverse this allocation and return stock to source batch"
+                      >
+                        <RotateCcw className="h-3 w-3 mr-1" />
+                        Reverse Transfer
+                      </Button>
+                    )}
+                  </div>
                 </div>
               );
             })}
           </div>
         )}
       </div>
+
+      {/* Reversal Confirmation Modal */}
+      {reversingAlloc && (
+        <Modal
+          isOpen={Boolean(reversingAlloc)}
+          onClose={() => {
+            if (!submittingReversal) setReversingAlloc(null);
+          }}
+          title="Reverse Stock Allocation"
+          maxWidthClass="max-w-md"
+        >
+          <div className="space-y-4">
+            <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2.5">
+              <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold">Ledger-Safe Append-Only Reversal</p>
+                <p className="mt-0.5 text-amber-800">
+                  This will log an inverse transfer returning <strong>{formatNumber(reversingAlloc.qty)} units</strong> from{' '}
+                  <strong>Batch {reversingAlloc.destination_batch?.batch_no}</strong> back to{' '}
+                  <strong>Batch {reversingAlloc.source_batch?.batch_no}</strong> in Raw Stock.
+                </p>
+              </div>
+            </div>
+
+            <Field label="Operator / Supervisor Name" htmlFor="reversal-by">
+              <input
+                id="reversal-by"
+                type="text"
+                value={reversalDoneBy}
+                onChange={(e) => setReversalDoneBy(e.target.value)}
+                placeholder="e.g. Warehouse Supervisor"
+                className={inputClass}
+              />
+            </Field>
+
+            <Field label="Reason for Reversal" htmlFor="reversal-reason" required>
+              <textarea
+                id="reversal-reason"
+                rows={3}
+                value={reversalReason}
+                onChange={(e) => setReversalReason(e.target.value)}
+                placeholder="e.g. Incorrect destination batch selected during morning intake."
+                className={inputClass}
+                required
+              />
+            </Field>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <Button
+                variant="outline"
+                onClick={() => setReversingAlloc(null)}
+                disabled={submittingReversal}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                onClick={handleConfirmReversal}
+                disabled={submittingReversal || !reversalReason.trim()}
+                className="bg-rose-600 hover:bg-rose-700 text-white"
+              >
+                {submittingReversal ? 'Processing Reversal...' : 'Confirm Reversal'}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </Modal>
   );
 }

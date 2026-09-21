@@ -1,5 +1,5 @@
-import { useState, useMemo } from 'react';
-import { Boxes, PackagePlus, Download, Maximize2, Send, Trash2, Pencil, ArrowRightLeft } from 'lucide-react';
+import { useState, useMemo, useEffect } from 'react';
+import { Boxes, PackagePlus, Download, Maximize2, Send, Trash2, Pencil, ArrowRightLeft, ChevronLeft, ChevronRight } from 'lucide-react';
 import {
   Card,
   Button,
@@ -109,6 +109,83 @@ export function InwardBatchesTab({
     });
   }, [batches, searchQuery]);
 
+  const [pageSize, setPageSize] = useState<number>(25);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filteredBatches.length, searchQuery]);
+
+  const totalBatches = filteredBatches.length;
+  const effectivePageSize = pageSize === -1 ? totalBatches : pageSize;
+  const totalPages = Math.max(1, Math.ceil(totalBatches / (effectivePageSize || 1)));
+  const safePage = Math.min(Math.max(1, currentPage), totalPages);
+  const startIndex = (safePage - 1) * effectivePageSize;
+  const paginatedBatches = useMemo(() => {
+    if (pageSize === -1) return filteredBatches;
+    return filteredBatches.slice(startIndex, startIndex + effectivePageSize);
+  }, [filteredBatches, startIndex, effectivePageSize, pageSize]);
+
+  const renderPagination = (isTop: boolean = false) => {
+    if (totalBatches === 0) return null;
+
+    return (
+      <div className={`flex flex-wrap items-center justify-between gap-3 px-5 py-2.5 bg-slate-50 ${isTop ? 'border-b' : 'border-t'} border-slate-200 text-xs font-semibold text-slate-700`}>
+        <div className="flex items-center gap-2">
+          <span>Show:</span>
+          {[25, 50, 100, -1].map((size) => (
+            <button
+              key={size}
+              type="button"
+              onClick={() => {
+                setPageSize(size);
+                setCurrentPage(1);
+              }}
+              className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer ${
+                pageSize === size
+                  ? 'bg-slate-900 text-white shadow-xs'
+                  : 'bg-white text-slate-700 hover:bg-slate-200 border border-slate-200'
+              }`}
+            >
+              {size === -1 ? 'All' : size}
+            </button>
+          ))}
+          <span className="text-slate-400 ml-1">
+            ({totalBatches === 0 ? 0 : startIndex + 1}–{Math.min(startIndex + effectivePageSize, totalBatches)} of {totalBatches})
+          </span>
+        </div>
+
+        {pageSize !== -1 && totalPages > 1 && (
+          <div className="flex items-center gap-1.5">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={safePage <= 1}
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              className="h-8 px-2 text-xs font-bold"
+            >
+              <ChevronLeft className="h-3.5 w-3.5 mr-0.5" />
+              Prev
+            </Button>
+            <span className="px-2 font-bold text-slate-800">
+              Page {safePage} of {totalPages}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={safePage >= totalPages}
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              className="h-8 px-2 text-xs font-bold"
+            >
+              Next
+              <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
+            </Button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const exportInwardBatchesCSV = () => {
     if (batches.length === 0) return;
     try {
@@ -211,6 +288,8 @@ export function InwardBatchesTab({
           </div>
         </div>
 
+        {renderPagination(true)}
+
         {loading ? (
           <TableSkeleton rows={6} cols={6} />
         ) : filteredBatches.length === 0 ? (
@@ -229,7 +308,7 @@ export function InwardBatchesTab({
           <div>
             {/* ─── Mobile View: Batches Cards (< sm) ─── */}
             <div className="p-3.5 space-y-3 sm:hidden">
-              {filteredBatches.map((b) => {
+              {paginatedBatches.map((b) => {
                 const isUsed = usedBatchIds.has(b.id);
                 return (
                   <Card key={`mobile-batch-${b.id}`} className="p-4 border-slate-200 shadow-2xs space-y-3">
@@ -349,7 +428,12 @@ export function InwardBatchesTab({
                         <button
                           type="button"
                           onClick={() => onOpenDeleteBatchModal(b)}
-                          className="rounded-xl min-w-[34px] min-h-[34px] flex items-center justify-center text-rose-600 hover:bg-rose-50 border border-rose-200 cursor-pointer"
+                          disabled={isUsed}
+                          className={`rounded-xl min-w-[34px] min-h-[34px] flex items-center justify-center border transition ${
+                            isUsed
+                              ? 'opacity-40 cursor-not-allowed text-slate-400 border-slate-200 bg-slate-50'
+                              : 'text-rose-600 hover:bg-rose-50 border-rose-200 cursor-pointer'
+                          }`}
                           title={isUsed ? 'Cannot delete batch with movement or allocation history' : 'Delete batch'}
                           aria-label={`Delete batch ${b.batch_no}`}
                         >
@@ -382,12 +466,12 @@ export function InwardBatchesTab({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-xs font-medium bg-white">
-                    {filteredBatches.map((b, index) => {
+                    {paginatedBatches.map((b, index) => {
                       const isUsed = usedBatchIds.has(b.id);
                       return (
                         <tr key={b.id} className="hover:bg-slate-50/90 transition-colors group">
                           <td className="px-3.5 py-3 text-center font-bold text-slate-400 text-[11px]">
-                            {index + 1}
+                            {startIndex + index + 1}
                           </td>
 
                           <td className="px-3.5 py-3">
@@ -536,7 +620,12 @@ export function InwardBatchesTab({
                               variant="outline"
                               size="sm"
                               onClick={() => onOpenDeleteBatchModal(b)}
-                              className="text-[11px] py-1 px-2 font-bold text-rose-700 border-rose-300 bg-rose-50/50 hover:bg-rose-100 shadow-2xs cursor-pointer"
+                              disabled={isUsed}
+                              className={`text-[11px] py-1 px-2 font-bold shadow-2xs transition ${
+                                isUsed
+                                  ? 'opacity-40 cursor-not-allowed text-slate-400 border-slate-200 bg-slate-50'
+                                  : 'text-rose-700 border-rose-300 bg-rose-50/50 hover:bg-rose-100 cursor-pointer'
+                              }`}
                               title={isUsed ? 'Cannot delete batch with movement or allocation history' : 'Delete inward batch'}
                             >
                               <Trash2 className="h-3 w-3" />
@@ -551,6 +640,8 @@ export function InwardBatchesTab({
             </div>
           </div>
         )}
+
+        {renderPagination(false)}
       </Card>
 
       {/* Image Zoom Modal */}

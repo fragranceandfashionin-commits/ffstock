@@ -30,6 +30,7 @@ import {
   fetchComponentStockSummary,
   fetchBatchAllocations,
 } from '@/lib/queries';
+import { invalidateCache } from '@/lib/cache';
 import { supabase, SCRAP_REASONS, COMMON_COLORS, COMMON_PRINTING_DESIGNS } from '@/lib/supabase';
 import type { BatchWithRelations, Stage, MovementWithRelations, Dispatch, Item, ComponentStockSummary, BatchAllocationWithRelations } from '@/lib/supabase';
 import type { BatchStock } from '@/lib/types';
@@ -46,6 +47,7 @@ import { ScrapForm } from './outward/ScrapForm';
 import { DispatchForm } from './outward/DispatchForm';
 import { MovementAuditTrail } from './outward/MovementAuditTrail';
 import { ReversalModal } from './outward/ReversalModal';
+import { useAuth } from '@/lib/auth';
 
 export type OutwardViewProps = {
   initialBatchId?: string;
@@ -103,10 +105,17 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
   const [moveAtomizerItemId, setMoveAtomizerItemId] = useState('');
   const [moveBoxName, setMoveBoxName] = useState('');
   const [moveBoxItemId, setMoveBoxItemId] = useState('');
+  const { profile, role, roleDefinition, canPerform, canTransitionStage } = useAuth();
   const [moveRemarks, setMoveRemarks] = useState('');
   const [moveDoneBy, setMoveDoneBy] = useState('');
   const [splitScrapEnabled, setSplitScrapEnabled] = useState(false);
   const [splitScrapReason, setSplitScrapReason] = useState<string>(SCRAP_REASONS[0]);
+
+  useEffect(() => {
+    if (!moveDoneBy && (profile?.display_name || profile?.email || roleDefinition.name)) {
+      setMoveDoneBy(profile?.display_name || profile?.email || roleDefinition.name);
+    }
+  }, [profile, roleDefinition, moveDoneBy]);
 
   // Multi-variant split allocation
   const [moveMode, setMoveMode] = useState<'single' | 'multi-split'>('single');
@@ -153,14 +162,15 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     setLoading(true);
     setError(null);
     try {
-      const [stg, b, c, a, bx, summary] = await Promise.all([
+      const [stg, b, c, a, bx] = await Promise.all([
         fetchStages(),
         fetchBatches(),
         fetchCaps(),
         fetchAtomizers(),
         fetchBoxes(),
-        fetchComponentStockSummary().catch(() => [] as ComponentStockSummary[]),
       ]);
+      const summary = await fetchComponentStockSummary(null, { stages: stg, batches: b }).catch(() => [] as ComponentStockSummary[]);
+
       setStages(stg);
       setBatches(b);
       setCaps(c);
@@ -192,20 +202,16 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
       return;
     }
     try {
-      const [stk, mov, disp, summary, allocs] = await Promise.all([
+      const [stk, mov, disp, allocs] = await Promise.all([
         fetchBatchStock(batchId),
         fetchMovements(batchId),
         fetchDispatches(batchId),
-        fetchComponentStockSummary().catch(() => [] as ComponentStockSummary[]),
         fetchBatchAllocations(batchId).catch(() => [] as BatchAllocationWithRelations[]),
       ]);
       setStock(stk);
       setMovements(mov);
       setDispatches(disp);
       setAllocations(allocs);
-      const sMap = new Map<string, ComponentStockSummary>();
-      for (const sm of summary) sMap.set(sm.item.id, sm);
-      setStockSummaryMap(sMap);
     } catch (err) {
       console.error('Error refreshing batch stock data:', err);
     }
@@ -221,6 +227,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     const debouncedRefresh = () => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
+        invalidateCache();
         refreshBatchData();
       }, 300);
     };
@@ -228,6 +235,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     const debouncedBatchesRefresh = () => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(async () => {
+        invalidateCache();
         const b = await fetchBatches().catch(() => []);
         setBatches(b);
         refreshBatchData();
@@ -646,8 +654,15 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     if (!fId || !tId) return;
 
     const available = qtyAt(fId);
-    const fromName = stages?.find((s) => s.id === fId)?.name ?? '';
-    const toName = stages?.find((s) => s.id === tId)?.name ?? '';
+    const fromStage = stages?.find((s) => s.id === fId);
+    const toStage = stages?.find((s) => s.id === tId);
+    const fromName = fromStage?.name ?? '';
+    const toName = toStage?.name ?? '';
+
+    if (fromStage && toStage && !canTransitionStage(fromStage.sequence_no, toStage.sequence_no)) {
+      setFormError(`Your role (${roleDefinition.name}) is not authorized to transition units from ${fromName} to ${toName}.`);
+      return;
+    }
 
     // Multi-split mode
     if (moveMode === 'multi-split') {
@@ -964,7 +979,13 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     }
 
     const available = qtyAt(fId);
-    const fromName = stages?.find((s) => s.id === fId)?.name ?? '';
+    const scrapStage = stages?.find((s) => s.id === fId);
+    const fromName = scrapStage?.name ?? '';
+
+    if (scrapStage && role !== 'admin' && !canTransitionStage(scrapStage.sequence_no, 8)) {
+      setFormError(`Your role (${roleDefinition.name}) is not authorized to record scrap defects at ${fromName}.`);
+      return;
+    }
 
     if (qtyNum > available) {
       setFormError(`Only ${formatNumber(available)} ${unitLabel} available in ${fromName}. Cannot scrap ${formatNumber(qtyNum)}.`);
@@ -1007,6 +1028,10 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
   // Submit Dispatch
   const handleDispatchSubmit = async () => {
     setFormError(null);
+    if (!canPerform('dispatch')) {
+      setFormError(`Your role (${roleDefinition.name}) is not authorized to dispatch stock.`);
+      return;
+    }
     if (!customerName.trim() || !invoiceNo.trim()) {
       setFormError('Please fill all required fields (Customer Name and Invoice / Challan Number).');
       return;
@@ -1136,7 +1161,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
   const openReversalModal = (m: MovementWithRelations) => {
     setReversalTarget(m);
     setReversalReason(`Correction of movement in ${selectedBatch?.batch_no || ''}`.trim());
-    setReversalDoneBy('');
+    setReversalDoneBy(profile?.display_name || profile?.email || roleDefinition.name);
     setReversalError(null);
 
     const availableInStage = stock.find((s) => s.stage_id === m.to_stage_id)?.qty ?? 0;
@@ -1150,6 +1175,12 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     e.preventDefault();
     if (!reversalTarget) return;
     setReversalError(null);
+
+    if (!canPerform('reverse_allocation') && role !== 'admin') {
+      setReversalError(`Your role (${roleDefinition.name}) is not authorized to reverse stage movements.`);
+      return;
+    }
+
     if (!reversalReason.trim()) {
       setReversalError('Please provide a reason for reversing this transaction.');
       return;

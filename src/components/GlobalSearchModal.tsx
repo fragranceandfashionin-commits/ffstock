@@ -8,6 +8,8 @@ import {
   X,
   CornerDownLeft,
   Activity,
+  ClipboardList,
+  Users,
 } from 'lucide-react';
 import {
   fetchBatches,
@@ -15,6 +17,8 @@ import {
   fetchSuppliers,
   fetchDispatches,
   fetchMovements,
+  fetchProductionOrders,
+  fetchClients,
 } from '@/lib/queries';
 import type {
   BatchWithRelations,
@@ -22,6 +26,8 @@ import type {
   Supplier,
   Dispatch,
   MovementWithRelations,
+  ProductionOrderWithRelations,
+  Client,
 } from '@/lib/supabase';
 import { formatDate, formatNumber, classNames } from '@/lib/utils';
 import type { View } from '@/lib/types';
@@ -45,6 +51,24 @@ export type GlobalSearchResult =
       tag?: string;
       meta?: string;
       item: Item;
+    }
+  | {
+      type: 'order';
+      id: string;
+      title: string;
+      subtitle: string;
+      tag?: string;
+      meta?: string;
+      order: ProductionOrderWithRelations;
+    }
+  | {
+      type: 'client';
+      id: string;
+      title: string;
+      subtitle: string;
+      tag?: string;
+      meta?: string;
+      client: Client;
     }
   | {
       type: 'dispatch';
@@ -80,7 +104,7 @@ export type GlobalSearchModalProps = {
   onNavigate: (view: View, context?: NavigationContext) => void;
 };
 
-type FilterCategory = 'ALL' | 'batch' | 'item' | 'dispatch' | 'supplier' | 'movement';
+type FilterCategory = 'ALL' | 'batch' | 'order' | 'item' | 'client' | 'dispatch' | 'supplier' | 'movement';
 
 export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchModalProps) {
   const [query, setQuery] = useState('');
@@ -93,6 +117,8 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [dispatches, setDispatches] = useState<Dispatch[]>([]);
   const [movements, setMovements] = useState<MovementWithRelations[]>([]);
+  const [orders, setOrders] = useState<ProductionOrderWithRelations[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -115,14 +141,18 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
       fetchSuppliers().catch(() => []),
       fetchDispatches().catch(() => []),
       fetchMovements().catch(() => []),
+      fetchProductionOrders().catch(() => []),
+      fetchClients().catch(() => []),
     ])
-      .then(([b, i, s, d, m]) => {
+      .then(([b, i, s, d, m, ord, cli]) => {
         if (!isSubscribed) return;
         setBatches(b);
         setItems(i);
         setSuppliers(s);
         setDispatches(d);
         setMovements(m);
+        setOrders(ord);
+        setClients(cli);
       })
       .finally(() => {
         if (!isSubscribed) return;
@@ -142,7 +172,53 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
 
     const res: GlobalSearchResult[] = [];
 
-    // 1. Search Batches
+    // 1. Search Production Orders
+    if (activeCategory === 'ALL' || activeCategory === 'order') {
+      for (const ord of orders) {
+        const matchOrderNo = ord.order_no.toLowerCase().includes(q);
+        const matchProd = ord.product_name.toLowerCase().includes(q);
+        const matchClient = (ord.client?.name || '').toLowerCase().includes(q);
+        const matchCompany = (ord.client?.company_name || '').toLowerCase().includes(q);
+        const matchNotes = (ord.notes || '').toLowerCase().includes(q);
+
+        if (matchOrderNo || matchProd || matchClient || matchCompany || matchNotes) {
+          res.push({
+            type: 'order',
+            id: `order-${ord.id}`,
+            title: `${ord.order_no} • ${ord.product_name}`,
+            subtitle: `Client: ${ord.client?.name || '—'} • Qty: ${formatNumber(ord.total_qty)} pcs • Status: ${ord.status}`,
+            tag: `📋 ${ord.status === 'completed' ? 'Completed Order' : 'Order'}`,
+            meta: ord.due_date ? `Due ${formatDate(ord.due_date)}` : undefined,
+            order: ord,
+          });
+        }
+      }
+    }
+
+    // 2. Search Clients
+    if (activeCategory === 'ALL' || activeCategory === 'client') {
+      for (const c of clients) {
+        const matchName = c.name.toLowerCase().includes(q);
+        const matchComp = (c.company_name || '').toLowerCase().includes(q);
+        const matchEmail = (c.email || '').toLowerCase().includes(q);
+        const matchPhone = (c.phone || '').toLowerCase().includes(q);
+        const matchPref = (c.preferences || '').toLowerCase().includes(q);
+
+        if (matchName || matchComp || matchEmail || matchPhone || matchPref) {
+          res.push({
+            type: 'client',
+            id: `client-${c.id}`,
+            title: `${c.name}${c.company_name ? ` (${c.company_name})` : ''}`,
+            subtitle: `${c.phone ? `Ph: ${c.phone} • ` : ''}${c.email || 'Client Profile'}${c.preferences ? ` • ${c.preferences}` : ''}`,
+            tag: `👥 ${c.status === 'active' ? 'Active Client' : 'Inactive Client'}`,
+            meta: `Registered ${formatDate(c.created_at)}`,
+            client: c,
+          });
+        }
+      }
+    }
+
+    // 3. Search Batches
     if (activeCategory === 'ALL' || activeCategory === 'batch') {
       for (const b of batches) {
         const matchBatchNo = b.batch_no.toLowerCase().includes(q);
@@ -166,7 +242,7 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
       }
     }
 
-    // 2. Search Items & BOM Components
+    // 4. Search Items & BOM Components
     if (activeCategory === 'ALL' || activeCategory === 'item') {
       for (const itm of items) {
         const matchName = itm.name.toLowerCase().includes(q);
@@ -188,7 +264,7 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
       }
     }
 
-    // 3. Search Customer Invoices & Dispatches
+    // 5. Search Customer Invoices & Dispatches
     if (activeCategory === 'ALL' || activeCategory === 'dispatch') {
       for (const d of dispatches) {
         const matchInvoice = (d.invoice_no || '').toLowerCase().includes(q);
@@ -211,7 +287,7 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
       }
     }
 
-    // 4. Search Suppliers
+    // 6. Search Suppliers
     if (activeCategory === 'ALL' || activeCategory === 'supplier') {
       for (const s of suppliers) {
         const matchName = s.name.toLowerCase().includes(q);
@@ -231,7 +307,7 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
       }
     }
 
-    // 5. Search Movements & Operations
+    // 7. Search Movements & Operations
     if (activeCategory === 'ALL' || activeCategory === 'movement') {
       for (const m of movements) {
         const matchVariant = (m.variant_name || '').toLowerCase().includes(q);
@@ -256,7 +332,7 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
     }
 
     return res.slice(0, 50); // Cap for clean fast rendering
-  }, [query, activeCategory, batches, items, suppliers, dispatches, movements]);
+  }, [query, activeCategory, orders, clients, batches, items, suppliers, dispatches, movements]);
 
   // Keep selection within bounds
   useEffect(() => {
@@ -265,7 +341,15 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
 
   // Action Dispatcher
   const handleSelectResult = (item: GlobalSearchResult) => {
-    if (item.type === 'batch') {
+    if (item.type === 'order') {
+      if (item.order.status === 'completed') {
+        onNavigate('order-history', { orderId: item.order.id });
+      } else {
+        onNavigate('orders', { orderId: item.order.id });
+      }
+    } else if (item.type === 'client') {
+      onNavigate('clients', { clientId: item.client.id });
+    } else if (item.type === 'batch') {
       onNavigate('dashboard', { inspectBatch: item.batch, batchId: item.batch.id });
     } else if (item.type === 'item') {
       onNavigate('items', { itemId: item.item.id });
@@ -330,7 +414,7 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search batches, catalog items, invoice #, suppliers, movements... (e.g. B-101, Apex, 50ml, Gold)"
+            placeholder="Search orders (PO-), clients, batches, items, suppliers... (e.g. PO-2026, Oud, Amber)"
             className="w-full bg-transparent text-base font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none"
           />
           {query && (
@@ -353,6 +437,8 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
           {(
             [
               { id: 'ALL', label: 'All Results' },
+              { id: 'order', label: '📋 Orders' },
+              { id: 'client', label: '👥 Clients' },
               { id: 'batch', label: '📦 Batches' },
               { id: 'item', label: '🏷️ Catalog Items' },
               { id: 'dispatch', label: '📄 Invoices / Dispatches' },
@@ -385,16 +471,26 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
             </div>
           ) : query.trim() === '' ? (
             <div className="p-8 text-center">
-              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-50 border border-amber-200 text-amber-600 mb-3">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-50 border border-indigo-200 text-indigo-600 mb-3">
                 <Search className="h-6 w-6" />
               </div>
-              <p className="text-sm font-bold text-slate-800">Omni-Search Factory Ledger</p>
+              <p className="text-sm font-bold text-slate-800">Omni-Search Factory &amp; Production Portal</p>
               <p className="text-xs text-slate-500 max-w-md mx-auto mt-1">
-                Type any batch code, customer invoice, raw component, supplier name, or warehouse bay to retrieve its instant 360° audit trail.
+                Type any order number (PO-), client name, batch code, component, supplier, or invoice to retrieve records instantly.
               </p>
               <div className="mt-4 flex flex-wrap items-center justify-center gap-2 text-xs text-slate-500">
                 <span className="font-medium">Quick suggestions:</span>
-                {batches.slice(0, 3).map((b) => (
+                {orders.slice(0, 2).map((o) => (
+                  <button
+                    key={o.id}
+                    type="button"
+                    onClick={() => setQuery(o.order_no)}
+                    className="rounded-md bg-slate-100 px-2 py-0.5 font-mono font-bold text-slate-700 hover:bg-slate-200 cursor-pointer border border-slate-200"
+                  >
+                    {o.order_no}
+                  </button>
+                ))}
+                {batches.slice(0, 2).map((b) => (
                   <button
                     key={b.id}
                     type="button"
@@ -404,14 +500,14 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
                     {b.batch_no}
                   </button>
                 ))}
-                {items.slice(0, 2).map((i) => (
+                {clients.slice(0, 2).map((c) => (
                   <button
-                    key={i.id}
+                    key={c.id}
                     type="button"
-                    onClick={() => setQuery(i.name)}
+                    onClick={() => setQuery(c.name)}
                     className="rounded-md bg-slate-100 px-2 py-0.5 font-semibold text-slate-700 hover:bg-slate-200 cursor-pointer border border-slate-200"
                   >
-                    {i.name}
+                    {c.name}
                   </button>
                 ))}
               </div>
@@ -420,7 +516,7 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
             <div className="p-10 text-center">
               <p className="text-sm font-bold text-slate-700">No records found for "{query}"</p>
               <p className="text-xs text-slate-400 mt-1">
-                Try searching with partial terms, SKU names, or changing your filter category.
+                Try searching with partial terms, order numbers, SKU names, or changing your filter category.
               </p>
             </div>
           ) : (
@@ -435,7 +531,7 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
                   className={classNames(
                     'flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all gap-3',
                     isSelected
-                      ? 'bg-amber-50/80 border border-amber-300/80 shadow-xs'
+                      ? 'bg-indigo-50/80 border border-indigo-300/80 shadow-xs'
                       : 'hover:bg-slate-50 border border-transparent',
                   )}
                 >
@@ -444,13 +540,17 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
                     <div
                       className={classNames(
                         'flex h-10 w-10 shrink-0 items-center justify-center rounded-xl font-bold border',
+                        item.type === 'order' && 'bg-indigo-100/80 border-indigo-300 text-indigo-800',
+                        item.type === 'client' && 'bg-teal-100/80 border-teal-300 text-teal-800',
                         item.type === 'batch' && 'bg-amber-100/70 border-amber-300 text-amber-800',
                         item.type === 'item' && 'bg-blue-100/70 border-blue-300 text-blue-800',
                         item.type === 'dispatch' && 'bg-emerald-100/70 border-emerald-300 text-emerald-800',
                         item.type === 'supplier' && 'bg-purple-100/70 border-purple-300 text-purple-800',
-                        item.type === 'movement' && 'bg-indigo-100/70 border-indigo-300 text-indigo-800',
+                        item.type === 'movement' && 'bg-violet-100/70 border-violet-300 text-violet-800',
                       )}
                     >
+                      {item.type === 'order' && <ClipboardList className="h-5 w-5" />}
+                      {item.type === 'client' && <Users className="h-5 w-5" />}
                       {item.type === 'batch' && <Box className="h-5 w-5" />}
                       {item.type === 'item' && <Tag className="h-5 w-5" />}
                       {item.type === 'dispatch' && <Truck className="h-5 w-5" />}
@@ -485,7 +585,7 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
                       className={classNames(
                         'flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold transition',
                         isSelected
-                          ? 'bg-amber-600 text-white shadow-2xs'
+                          ? 'bg-indigo-600 text-white shadow-2xs'
                           : 'bg-slate-100 text-slate-500 opacity-80 sm:opacity-100',
                       )}
                     >

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { PackagePlus, Sparkles, PlusCircle, Plus, Check, RotateCcw, Box, Search, History, ArrowRight, X } from 'lucide-react';
+import { PackagePlus, Sparkles, PlusCircle, Plus, Check, RotateCcw, Box, Search, History, ArrowRight, X, Layers } from 'lucide-react';
 import {
   Modal,
   Field,
@@ -12,7 +12,7 @@ import {
   SupplierSearchSelect,
 } from '@/components/ui';
 import { insertInwardBatch } from '@/lib/queries';
-import { supabase, type Item, type Supplier, type ComponentStockSummary, type BatchWithRelations } from '@/lib/supabase';
+import { supabase, COMMON_COLORS, type Item, type Supplier, type ComponentStockSummary, type BatchWithRelations } from '@/lib/supabase';
 import { getErrorMessage, formatNumber, getTodayDateString } from '@/lib/utils';
 import { useToast } from '@/components/Toast';
 import { QuickSupplierModal } from './QuickSupplierModal';
@@ -41,6 +41,10 @@ export function InwardStockModal({
   items: initialItems,
   suppliers: initialSuppliers,
   batches = [],
+  caps = [],
+  atomizers = [],
+  boxes = [],
+  stockSummaryMap = new Map(),
   preselectedItemId,
   onBatchCreated,
   onSupplierCreated,
@@ -74,6 +78,16 @@ export function InwardStockModal({
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState('');
   const [imageUrl, setImageUrl] = useState('');
+
+  // Optional BOM Component & Packaging Specs
+  const [color, setColor] = useState('');
+  const [capItemId, setCapItemId] = useState('');
+  const [atomizerItemId, setAtomizerItemId] = useState('');
+  const [boxItemId, setBoxItemId] = useState('');
+  const [capQty, setCapQty] = useState('');
+  const [atomizerQty, setAtomizerQty] = useState('');
+  const [boxQty, setBoxQty] = useState('');
+  const [showBomSection, setShowBomSection] = useState(false);
 
   // Existing Batch Quick-Fill Search State
   const [showBatchAutofill, setShowBatchAutofill] = useState(false);
@@ -153,6 +167,19 @@ export function InwardStockModal({
     setShowBatchAutofill(false);
     setBatchSearchQuery('');
     setError(null);
+
+    // Sync BOM component specs from past batch
+    if (b.color) setColor(b.color);
+    if (b.cap_item_id) setCapItemId(b.cap_item_id);
+    if (b.atomizer_item_id) setAtomizerItemId(b.atomizer_item_id);
+    if (b.box_item_id) setBoxItemId(b.box_item_id);
+    if (b.cap_qty) setCapQty(String(b.cap_qty));
+    if (b.atomizer_qty) setAtomizerQty(String(b.atomizer_qty));
+    if (b.box_qty) setBoxQty(String(b.box_qty));
+    if (b.cap_item_id || b.atomizer_item_id || b.box_item_id || b.color) {
+      setShowBomSection(true);
+    }
+
     toast.success(`Loaded details from Batch ${b.batch_no} (${b.item?.name || 'Stock Item'})`, 'Batch Loaded');
     setTimeout(() => {
       qtyInputRef.current?.focus();
@@ -183,6 +210,14 @@ export function InwardStockModal({
     } else {
       clearPhoto();
       setError(null);
+      setColor('');
+      setCapItemId('');
+      setAtomizerItemId('');
+      setBoxItemId('');
+      setCapQty('');
+      setAtomizerQty('');
+      setBoxQty('');
+      setShowBomSection(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, preselectedItemId]);
@@ -213,6 +248,14 @@ export function InwardStockModal({
     clearPhoto();
     setError(null);
     setAutofilledBatch(null);
+    setColor('');
+    setCapItemId('');
+    setAtomizerItemId('');
+    setBoxItemId('');
+    setCapQty('');
+    setAtomizerQty('');
+    setBoxQty('');
+    setShowBomSection(false);
   };
 
   // Save Inward Batch (Handles both continuous "Add Another" and "Save & Close")
@@ -272,6 +315,10 @@ export function InwardStockModal({
         finalImageUrl = publicUrlData.publicUrl;
       }
 
+      const capQtyNum = capQty ? Number(capQty) : null;
+      const atomizerQtyNum = atomizerQty ? Number(atomizerQty) : null;
+      const boxQtyNum = boxQty ? Number(boxQty) : null;
+
       await insertInwardBatch({
         batch_no: batchNo.trim(),
         brand_name: brandName.trim() || null,
@@ -281,6 +328,13 @@ export function InwardStockModal({
         qty_received: qtyNum,
         location: location.trim(),
         image_url: finalImageUrl || null,
+        color: color.trim() || null,
+        cap_item_id: capItemId || null,
+        atomizer_item_id: atomizerItemId || null,
+        box_item_id: boxItemId || null,
+        cap_qty: capQtyNum && !isNaN(capQtyNum) ? capQtyNum : null,
+        atomizer_qty: atomizerQtyNum && !isNaN(atomizerQtyNum) ? atomizerQtyNum : null,
+        box_qty: boxQtyNum && !isNaN(boxQtyNum) ? boxQtyNum : null,
       });
 
       const selectedItem = localItems.find((i) => i.id === inwardItemId);
@@ -312,6 +366,14 @@ export function InwardStockModal({
         setLocation('');
         setAutofilledBatch(null);
         clearPhoto();
+        setColor('');
+        setCapItemId('');
+        setAtomizerItemId('');
+        setBoxItemId('');
+        setCapQty('');
+        setAtomizerQty('');
+        setBoxQty('');
+        setShowBomSection(false);
         onClose();
       } else {
         // Continuous Entry Mode:
@@ -734,6 +796,164 @@ export function InwardStockModal({
                   required
                 />
               </Field>
+            </div>
+
+            {/* OPTIONAL COMPONENT BOM & PACKAGING ASSIGNMENT */}
+            <div className="rounded-2xl border border-slate-200/80 bg-slate-50/70 p-3.5 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Layers className="h-4 w-4 text-indigo-600" />
+                  <div>
+                    <h4 className="text-xs font-black uppercase tracking-wider text-slate-900">
+                      Component BOM & Packaging Intake (Optional)
+                    </h4>
+                    <p className="text-[11px] text-slate-500">
+                      Attach matching caps, atomizers, boxes, and color received alongside this batch.
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowBomSection(!showBomSection)}
+                  className="text-xs font-bold text-indigo-700 hover:text-indigo-900 cursor-pointer"
+                >
+                  {showBomSection ? 'Hide BOM ▲' : 'Configure BOM ▼'}
+                </Button>
+              </div>
+
+              {showBomSection && (
+                <div className="pt-2 border-t border-slate-200/60 space-y-3 animate-in fade-in duration-150">
+                  {/* Bottle Color / Finish */}
+                  <Field label="Bottle Color / Finish" htmlFor="inward-color" hint="e.g. Amber, Clear, Frosted, Matte Black">
+                    <input
+                      id="inward-color"
+                      list="inward-color-suggestions"
+                      className={`${inputClass} text-xs font-bold text-slate-900`}
+                      value={color}
+                      onChange={(e) => setColor(e.target.value)}
+                      placeholder="e.g. Clear, Amber, Matte Black"
+                    />
+                    <datalist id="inward-color-suggestions">
+                      {COMMON_COLORS.map((c) => (
+                        <option key={c} value={c} />
+                      ))}
+                    </datalist>
+                  </Field>
+
+                  {/* Caps Intake */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
+                    <div className="sm:col-span-2">
+                      <Field label="Cap / Closure SKU" htmlFor="inward-cap-sku" hint="Select warehouse cap matching this batch">
+                        <select
+                          id="inward-cap-sku"
+                          className={`${inputClass} text-xs font-bold text-slate-900`}
+                          value={capItemId}
+                          onChange={(e) => setCapItemId(e.target.value)}
+                        >
+                          <option value="">-- No Cap Assigned / Separate Inward --</option>
+                          {caps.map((c) => {
+                            const stock = stockSummaryMap.get(c.id)?.availableStock ?? 0;
+                            return (
+                              <option key={c.id} value={c.id}>
+                                {c.name} {c.color ? `(${c.color})` : ''} — {formatNumber(stock)} {c.unit || 'units'} in wh
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </Field>
+                    </div>
+                    <div>
+                      <Field label="Cap Intake Qty" htmlFor="inward-cap-qty" hint="Units received">
+                        <input
+                          id="inward-cap-qty"
+                          type="number"
+                          min={0}
+                          className={`${inputClass} text-xs font-bold text-slate-900`}
+                          value={capQty}
+                          onChange={(e) => setCapQty(e.target.value)}
+                          placeholder="Matches batch"
+                        />
+                      </Field>
+                    </div>
+                  </div>
+
+                  {/* Atomizers Intake */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
+                    <div className="sm:col-span-2">
+                      <Field label="Atomizer / Pump SKU" htmlFor="inward-atom-sku" hint="Select warehouse pump matching this batch">
+                        <select
+                          id="inward-atom-sku"
+                          className={`${inputClass} text-xs font-bold text-slate-900`}
+                          value={atomizerItemId}
+                          onChange={(e) => setAtomizerItemId(e.target.value)}
+                        >
+                          <option value="">-- No Atomizer Assigned / Separate Inward --</option>
+                          {atomizers.map((a) => {
+                            const stock = stockSummaryMap.get(a.id)?.availableStock ?? 0;
+                            return (
+                              <option key={a.id} value={a.id}>
+                                {a.name} {a.color ? `(${a.color})` : ''} — {formatNumber(stock)} {a.unit || 'units'} in wh
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </Field>
+                    </div>
+                    <div>
+                      <Field label="Atomizer Intake Qty" htmlFor="inward-atom-qty" hint="Units received">
+                        <input
+                          id="inward-atom-qty"
+                          type="number"
+                          min={0}
+                          className={`${inputClass} text-xs font-bold text-slate-900`}
+                          value={atomizerQty}
+                          onChange={(e) => setAtomizerQty(e.target.value)}
+                          placeholder="Matches batch"
+                        />
+                      </Field>
+                    </div>
+                  </div>
+
+                  {/* Boxes Intake */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
+                    <div className="sm:col-span-2">
+                      <Field label="Box / Mono Carton SKU" htmlFor="inward-box-sku" hint="Select warehouse outer packaging">
+                        <select
+                          id="inward-box-sku"
+                          className={`${inputClass} text-xs font-bold text-slate-900`}
+                          value={boxItemId}
+                          onChange={(e) => setBoxItemId(e.target.value)}
+                        >
+                          <option value="">-- No Box Assigned / Separate Inward --</option>
+                          {boxes.map((b) => {
+                            const stock = stockSummaryMap.get(b.id)?.availableStock ?? 0;
+                            return (
+                              <option key={b.id} value={b.id}>
+                                {b.name} — {formatNumber(stock)} {b.unit || 'units'} in wh
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </Field>
+                    </div>
+                    <div>
+                      <Field label="Box Intake Qty" htmlFor="inward-box-qty" hint="Units received">
+                        <input
+                          id="inward-box-qty"
+                          type="number"
+                          min={0}
+                          className={`${inputClass} text-xs font-bold text-slate-900`}
+                          value={boxQty}
+                          onChange={(e) => setBoxQty(e.target.value)}
+                          placeholder="Matches batch"
+                        />
+                      </Field>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Shipment Photo Upload Dropzone */}

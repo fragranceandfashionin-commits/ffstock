@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { fetchWithCache, invalidateCache, CACHE_TTL } from './cache';
 import type { BatchStock, LocationStock, StageStock } from './types';
 import type {
   Stage,
@@ -13,6 +14,13 @@ import type {
   ItemStockReceipt,
   BatchAllocation,
   BatchAllocationWithRelations,
+  Client,
+  ProductionOrder,
+  ProductionOrderWithRelations,
+  MaterialAllocation,
+  MaterialAllocationWithVendorRelations,
+  BomCategory,
+  ExtendedSupplier,
 } from './supabase';
 import { getTodayDateString } from './utils';
 
@@ -90,15 +98,19 @@ async function viewQuery<T>(run: () => PromiseLike<ViewQueryResult<T>>): Promise
 }
 
 export async function fetchStages(): Promise<Stage[]> {
-  const { data, error } = await supabase.from('stages').select('*').order('sequence_no');
-  if (error) throw error;
-  return data ?? [];
+  return fetchWithCache('stages', async () => {
+    const { data, error } = await supabase.from('stages').select('*').order('sequence_no');
+    if (error) throw error;
+    return data ?? [];
+  }, CACHE_TTL.STAGES);
 }
 
 export async function fetchSuppliers(): Promise<Supplier[]> {
-  const { data, error } = await supabase.from('suppliers').select('*').order('name');
-  if (error) throw error;
-  return data ?? [];
+  return fetchWithCache('suppliers', async () => {
+    const { data, error } = await supabase.from('suppliers').select('*').order('name');
+    if (error) throw error;
+    return data ?? [];
+  }, CACHE_TTL.SUPPLIERS);
 }
 
 export async function insertSupplier(payload: {
@@ -115,6 +127,7 @@ export async function insertSupplier(payload: {
     .single();
 
   if (error) throw error;
+  invalidateCache('suppliers');
   return data as Supplier;
 }
 
@@ -136,77 +149,47 @@ export async function insertSuppliers(
 
   const { data, error } = await supabase.from('suppliers').insert(cleaned).select('*');
   if (error) throw error;
+  invalidateCache('suppliers');
   return (data ?? []) as Supplier[];
 }
 
-export async function fetchItems() {
-  const { data, error } = await supabase.from('items').select('*').order('name');
-  if (error) throw error;
-  return data ?? [];
+export async function fetchItems(): Promise<Item[]> {
+  return fetchWithCache('items', async () => {
+    const { data, error } = await supabase.from('items').select('*').order('name');
+    if (error) throw error;
+    return (data ?? []) as Item[];
+  }, CACHE_TTL.ITEMS);
 }
 
-/** Items with category = 'Cap' for component selection dropdowns. */
+/** Items with category = 'Cap' for component selection dropdowns (in-memory fast filter). */
 export async function fetchCaps(): Promise<Item[]> {
-  try {
-    const { data, error } = await supabase
-      .from('items')
-      .select('*')
-      .ilike('category', '%Cap%')
-      .order('name');
-    if (!error && data) return data as Item[];
-
-    const fallback = await supabase.from('items').select('*').order('name');
-    return (fallback.data ?? []).filter((i: Item) =>
-      (i.category ?? '').toLowerCase().includes('cap') || i.name.toLowerCase().includes('cap')
-    ) as Item[];
-  } catch {
-    return [];
-  }
+  const all = await fetchItems().catch(() => []);
+  return all.filter((i) =>
+    (i.category ?? '').toLowerCase().includes('cap') || i.name.toLowerCase().includes('cap')
+  );
 }
 
-/** Items with category = 'Atomizer' for component selection dropdowns. */
+/** Items with category = 'Atomizer' for component selection dropdowns (in-memory fast filter). */
 export async function fetchAtomizers(): Promise<Item[]> {
-  try {
-    const { data, error } = await supabase
-      .from('items')
-      .select('*')
-      .ilike('category', '%Atomizer%')
-      .order('name');
-    if (!error && data) return data as Item[];
-
-    const fallback = await supabase.from('items').select('*').order('name');
-    return (fallback.data ?? []).filter((i: Item) =>
-      (i.category ?? '').toLowerCase().includes('atomizer') ||
-      i.name.toLowerCase().includes('atomizer') ||
-      i.name.toLowerCase().includes('pump') ||
-      i.name.toLowerCase().includes('spray')
-    ) as Item[];
-  } catch {
-    return [];
-  }
+  const all = await fetchItems().catch(() => []);
+  return all.filter((i) =>
+    (i.category ?? '').toLowerCase().includes('atomizer') ||
+    i.name.toLowerCase().includes('atomizer') ||
+    i.name.toLowerCase().includes('pump') ||
+    i.name.toLowerCase().includes('spray')
+  );
 }
 
-/** Items with category = 'Packaging' or box/carton for packaging selection dropdowns. */
+/** Items with category = 'Packaging' or box/carton for packaging selection dropdowns (in-memory fast filter). */
 export async function fetchBoxes(): Promise<Item[]> {
-  try {
-    const { data, error } = await supabase
-      .from('items')
-      .select('*')
-      .ilike('category', '%Packaging%')
-      .order('name');
-    if (!error && data && data.length > 0) return data as Item[];
-
-    const fallback = await supabase.from('items').select('*').order('name');
-    return (fallback.data ?? []).filter((i: Item) =>
-      (i.category ?? '').toLowerCase().includes('pack') ||
-      (i.category ?? '').toLowerCase().includes('box') ||
-      i.name.toLowerCase().includes('box') ||
-      i.name.toLowerCase().includes('carton') ||
-      i.name.toLowerCase().includes('mono')
-    ) as Item[];
-  } catch {
-    return [];
-  }
+  const all = await fetchItems().catch(() => []);
+  return all.filter((i) =>
+    (i.category ?? '').toLowerCase().includes('pack') ||
+    (i.category ?? '').toLowerCase().includes('box') ||
+    i.name.toLowerCase().includes('box') ||
+    i.name.toLowerCase().includes('carton') ||
+    i.name.toLowerCase().includes('mono')
+  );
 }
 
 
@@ -250,6 +233,7 @@ export async function insertItem(payload: {
       .select('*')
       .single();
     if (fallbackRes.error) throw fallbackRes.error;
+    invalidateCache('items');
     return fallbackRes.data as Item;
   }
 
@@ -280,6 +264,7 @@ export async function insertItems(
 
   const { data, error } = await supabase.from('items').insert(cleaned).select('*');
   if (!error && data) {
+    invalidateCache('items');
     return data as Item[];
   }
 
@@ -296,6 +281,7 @@ export async function insertItems(
       .insert(cleaned.map((p) => ({ name: p.name })))
       .select('*');
     if (fallbackRes.error) throw fallbackRes.error;
+    invalidateCache('items');
     return (fallbackRes.data ?? []) as Item[];
   }
 
@@ -322,7 +308,10 @@ export async function updateItem(
 
   const { error } = await supabase.from('items').update(fullPayload).eq('id', id);
 
-  if (!error) return;
+  if (!error) {
+    invalidateCache('items');
+    return;
+  }
 
   if (
     error.code === 'PGRST204' ||
@@ -332,6 +321,7 @@ export async function updateItem(
   ) {
     const fallbackRes = await supabase.from('items').update({ name: payload.name.trim() }).eq('id', id);
     if (fallbackRes.error) throw fallbackRes.error;
+    invalidateCache('items');
     return;
   }
 
@@ -339,38 +329,67 @@ export async function updateItem(
 }
 
 export async function fetchItemStockReceipts(): Promise<ItemStockReceipt[]> {
-  try {
-    const { data, error } = await supabase
-      .from('item_stock_receipts')
-      .select('*, item:items(*), supplier:suppliers(*)')
-      .order('received_on', { ascending: false })
-      .order('created_at', { ascending: false })
-      .limit(QUERY_SAFETY_LIMIT);
-    if (!error && data) {
-      checkRowLimitGuard(data.length, 'item_stock_receipts');
-      return data as ItemStockReceipt[];
+  return fetchWithCache('item_stock_receipts', async () => {
+    try {
+      const { data, error } = await supabase
+        .from('item_stock_receipts')
+        .select('*, item:items(*), supplier:suppliers(*)')
+        .order('received_on', { ascending: false })
+        .order('created_at', { ascending: false })
+        .limit(QUERY_SAFETY_LIMIT);
+      if (!error && data) {
+        checkRowLimitGuard(data.length, 'item_stock_receipts');
+        return data as ItemStockReceipt[];
+      }
+    } catch {
+      // Graceful fallback if table does not exist yet
     }
-  } catch {
-    // Graceful fallback if table does not exist yet
-  }
-  return [];
+    return [];
+  }, CACHE_TTL.SHORT);
 }
 
 export async function fetchBatches(): Promise<BatchWithRelations[]> {
-  // 1. Try relational query
-  const res = await supabase
-    .from('inward_batches')
-    .select('*, supplier:suppliers(*), item:items!item_id(*)')
-    .order('received_on', { ascending: false })
-    .limit(QUERY_SAFETY_LIMIT);
+  return fetchWithCache('batches', async () => {
+    // 1. Try relational query
+    const res = await supabase
+      .from('inward_batches')
+      .select('*, supplier:suppliers(*), item:items!item_id(*)')
+      .order('received_on', { ascending: false })
+      .limit(QUERY_SAFETY_LIMIT);
 
-  if (!res.error && res.data) {
-    checkRowLimitGuard(res.data.length, 'inward_batches');
-    const rawBatches = res.data as (InwardBatch & { supplier: Supplier | null; item: Item | null; [key: string]: unknown })[];
+    if (!res.error && res.data) {
+      checkRowLimitGuard(res.data.length, 'inward_batches');
+      const rawBatches = res.data as (InwardBatch & { supplier: Supplier | null; item: Item | null; [key: string]: unknown })[];
 
-    // Check if any batch has cap_item_id, atomizer_item_id, or box_item_id to enrich in-memory
-    const hasComponents = rawBatches.some((b) => b.cap_item_id || b.atomizer_item_id || b.box_item_id);
-    if (hasComponents) {
+      // Check if any batch has cap_item_id, atomizer_item_id, or box_item_id to enrich in-memory
+      const hasComponents = rawBatches.some((b) => b.cap_item_id || b.atomizer_item_id || b.box_item_id);
+      if (hasComponents) {
+        try {
+          const items = await fetchItems();
+          const itemMap = new Map(items.map((i) => [i.id, i]));
+          return rawBatches.map((b) => ({
+            ...b,
+            cap_item: b.cap_item_id ? itemMap.get(b.cap_item_id as string) ?? null : null,
+            atomizer_item: b.atomizer_item_id ? itemMap.get(b.atomizer_item_id as string) ?? null : null,
+            box_item: b.box_item_id ? itemMap.get(b.box_item_id as string) ?? null : null,
+          })) as BatchWithRelations[];
+        } catch {
+          return rawBatches as BatchWithRelations[];
+        }
+      }
+      return rawBatches as BatchWithRelations[];
+    }
+
+    // 2. Fallback: If `items!item_id` hint fails or schema cache issue, try standard join
+    const fallbackJoinRes = await supabase
+      .from('inward_batches')
+      .select('*, supplier:suppliers(*), item:items(*)')
+      .order('received_on', { ascending: false })
+      .limit(QUERY_SAFETY_LIMIT);
+
+    if (!fallbackJoinRes.error && fallbackJoinRes.data) {
+      checkRowLimitGuard(fallbackJoinRes.data.length, 'inward_batches');
+      const rawBatches = fallbackJoinRes.data as (InwardBatch & { supplier: Supplier | null; item: Item | null; [key: string]: unknown })[];
       try {
         const items = await fetchItems();
         const itemMap = new Map(items.map((i) => [i.id, i]));
@@ -384,54 +403,29 @@ export async function fetchBatches(): Promise<BatchWithRelations[]> {
         return rawBatches as BatchWithRelations[];
       }
     }
-    return rawBatches as BatchWithRelations[];
-  }
 
-  // 2. Fallback: If `items!item_id` hint fails or schema cache issue, try standard join
-  const fallbackJoinRes = await supabase
-    .from('inward_batches')
-    .select('*, supplier:suppliers(*), item:items(*)')
-    .order('received_on', { ascending: false })
-    .limit(QUERY_SAFETY_LIMIT);
+    // 3. Fallback: Manual in-memory join
+    const [rawRes, suppliers, items] = await Promise.all([
+      supabase.from('inward_batches').select('*').order('received_on', { ascending: false }).limit(QUERY_SAFETY_LIMIT),
+      fetchSuppliers().catch(() => []),
+      fetchItems().catch(() => []),
+    ]);
 
-  if (!fallbackJoinRes.error && fallbackJoinRes.data) {
-    checkRowLimitGuard(fallbackJoinRes.data.length, 'inward_batches');
-    const rawBatches = fallbackJoinRes.data as (InwardBatch & { supplier: Supplier | null; item: Item | null; [key: string]: unknown })[];
-    try {
-      const items = await fetchItems();
-      const itemMap = new Map(items.map((i) => [i.id, i]));
-      return rawBatches.map((b) => ({
-        ...b,
-        cap_item: b.cap_item_id ? itemMap.get(b.cap_item_id as string) ?? null : null,
-        atomizer_item: b.atomizer_item_id ? itemMap.get(b.atomizer_item_id as string) ?? null : null,
-        box_item: b.box_item_id ? itemMap.get(b.box_item_id as string) ?? null : null,
-      })) as BatchWithRelations[];
-    } catch {
-      return rawBatches as BatchWithRelations[];
-    }
-  }
+    if (rawRes.error) throw rawRes.error;
+    checkRowLimitGuard(rawRes.data?.length, 'inward_batches');
 
-  // 3. Fallback: Manual in-memory join
-  const [rawRes, suppliers, items] = await Promise.all([
-    supabase.from('inward_batches').select('*').order('received_on', { ascending: false }).limit(QUERY_SAFETY_LIMIT),
-    fetchSuppliers().catch(() => []),
-    fetchItems().catch(() => []),
-  ]);
+    const suppMap = new Map(suppliers.map((s) => [s.id, s]));
+    const itemMap = new Map(items.map((i) => [i.id, i]));
 
-  if (rawRes.error) throw rawRes.error;
-  checkRowLimitGuard(rawRes.data?.length, 'inward_batches');
-
-  const suppMap = new Map(suppliers.map((s) => [s.id, s]));
-  const itemMap = new Map(items.map((i) => [i.id, i]));
-
-  return (rawRes.data ?? []).map((b: Record<string, unknown>) => ({
-    ...b,
-    supplier: suppMap.get(b.supplier_id as string) ?? null,
-    item: itemMap.get(b.item_id as string) ?? null,
-    cap_item: b.cap_item_id ? itemMap.get(b.cap_item_id as string) ?? null : null,
-    atomizer_item: b.atomizer_item_id ? itemMap.get(b.atomizer_item_id as string) ?? null : null,
-    box_item: b.box_item_id ? itemMap.get(b.box_item_id as string) ?? null : null,
-  })) as BatchWithRelations[];
+    return (rawRes.data ?? []).map((b: Record<string, unknown>) => ({
+      ...b,
+      supplier: suppMap.get(b.supplier_id as string) ?? null,
+      item: itemMap.get(b.item_id as string) ?? null,
+      cap_item: b.cap_item_id ? itemMap.get(b.cap_item_id as string) ?? null : null,
+      atomizer_item: b.atomizer_item_id ? itemMap.get(b.atomizer_item_id as string) ?? null : null,
+      box_item: b.box_item_id ? itemMap.get(b.box_item_id as string) ?? null : null,
+    })) as BatchWithRelations[];
+  }, CACHE_TTL.SHORT);
 }
 
 /**
@@ -653,6 +647,7 @@ export async function insertInwardBatch(payload: {
   if (res.error) {
     throw res.error;
   }
+  invalidateCache();
   return res.data;
 }
 
@@ -703,6 +698,7 @@ export async function insertInwardBatches(
   if (res.error) {
     throw res.error;
   }
+  invalidateCache();
   return res.data;
 }
 
@@ -712,6 +708,7 @@ export async function updateInwardBatchBrand(batchId: string, brandName: string 
     .update({ brand_name: brandName?.trim() || null })
     .eq('id', batchId);
   if (error) throw error;
+  invalidateCache();
 }
 
 
@@ -767,6 +764,7 @@ export async function insertStageMovement(payload: {
   if (res.error) {
     throw res.error;
   }
+  invalidateCache();
   return res.data;
 }
 
@@ -810,6 +808,7 @@ export async function insertDispatch(payload: {
   if (res.error) {
     throw res.error;
   }
+  invalidateCache();
   return res.data;
 }
 
@@ -864,6 +863,7 @@ export async function insertMultiVariantDispatches(payload: {
   if (res.error) {
     throw res.error;
   }
+  invalidateCache();
   return res.data;
 }
 
@@ -1246,55 +1246,61 @@ function normalizeRawDispatchRecord(d: Record<string, unknown>): Record<string, 
 }
 
 export async function fetchMovements(batchId?: string): Promise<MovementWithRelations[]> {
-  try {
-    let query = supabase
-      .from('stage_movements')
-      .select('*, from_stage:stages!from_stage_id(*), to_stage:stages!to_stage_id(*)')
-      .order('moved_on', { ascending: true })
-      .order('created_at', { ascending: true })
-      .limit(QUERY_SAFETY_LIMIT);
-    if (batchId) query = query.eq('batch_id', batchId);
-    const { data, error } = await query;
-    if (!error && data) {
-      checkRowLimitGuard(data.length, 'stage_movements');
-      return (data as Record<string, unknown>[]).map(normalizeRawMovementRecord) as MovementWithRelations[];
+  const cacheKey = batchId ? `movements_${batchId}` : 'movements';
+  return fetchWithCache(cacheKey, async () => {
+    try {
+      let query = supabase
+        .from('stage_movements')
+        .select('*, from_stage:stages!from_stage_id(*), to_stage:stages!to_stage_id(*)')
+        .order('moved_on', { ascending: true })
+        .order('created_at', { ascending: true })
+        .limit(QUERY_SAFETY_LIMIT);
+      if (batchId) query = query.eq('batch_id', batchId);
+      const { data, error } = await query;
+      if (!error && data) {
+        checkRowLimitGuard(data.length, 'stage_movements');
+        return (data as Record<string, unknown>[]).map(normalizeRawMovementRecord) as MovementWithRelations[];
+      }
+    } catch {
+      // Fall back to in-memory join
     }
-  } catch {
-    // Fall back to in-memory join
-  }
 
-  // Graceful fallback: Manual in-memory join
-  const [stages, rawMovesRes] = await Promise.all([
-    fetchStages().catch(() => []),
-    batchId
-      ? supabase.from('stage_movements').select('*').eq('batch_id', batchId).order('moved_on', { ascending: true }).limit(QUERY_SAFETY_LIMIT)
-      : supabase.from('stage_movements').select('*').order('moved_on', { ascending: true }).limit(QUERY_SAFETY_LIMIT),
-  ]);
+    // Graceful fallback: Manual in-memory join
+    const [stages, rawMovesRes] = await Promise.all([
+      fetchStages().catch(() => []),
+      batchId
+        ? supabase.from('stage_movements').select('*').eq('batch_id', batchId).order('moved_on', { ascending: true }).limit(QUERY_SAFETY_LIMIT)
+        : supabase.from('stage_movements').select('*').order('moved_on', { ascending: true }).limit(QUERY_SAFETY_LIMIT),
+    ]);
 
-  if (rawMovesRes.error) throw rawMovesRes.error;
-  checkRowLimitGuard(rawMovesRes.data?.length, 'stage_movements');
-  const stageMap = new Map(stages.map((s) => [s.id, s]));
-  return (rawMovesRes.data ?? []).map((m: Record<string, unknown>) => {
-    const normalized = normalizeRawMovementRecord(m);
-    return {
-      ...normalized,
-      from_stage: stageMap.get(m.from_stage_id as string) ?? null,
-      to_stage: stageMap.get(m.to_stage_id as string) ?? null,
-    };
-  }) as MovementWithRelations[];
+    if (rawMovesRes.error) throw rawMovesRes.error;
+    checkRowLimitGuard(rawMovesRes.data?.length, 'stage_movements');
+    const stageMap = new Map(stages.map((s) => [s.id, s]));
+    return (rawMovesRes.data ?? []).map((m: Record<string, unknown>) => {
+      const normalized = normalizeRawMovementRecord(m);
+      return {
+        ...normalized,
+        from_stage: stageMap.get(m.from_stage_id as string) ?? null,
+        to_stage: stageMap.get(m.to_stage_id as string) ?? null,
+      };
+    }) as MovementWithRelations[];
+  }, CACHE_TTL.SHORT);
 }
 
 export async function fetchDispatches(batchId?: string): Promise<Dispatch[]> {
-  let query = supabase
-    .from('dispatches')
-    .select('*')
-    .order('dispatched_on', { ascending: false })
-    .limit(QUERY_SAFETY_LIMIT);
-  if (batchId) query = query.eq('batch_id', batchId);
-  const { data, error } = await query;
-  if (error) throw error;
-  checkRowLimitGuard(data?.length, 'dispatches');
-  return (data ?? []).map((d: Record<string, unknown>) => normalizeRawDispatchRecord(d)) as Dispatch[];
+  const cacheKey = batchId ? `dispatches_${batchId}` : 'dispatches';
+  return fetchWithCache(cacheKey, async () => {
+    let query = supabase
+      .from('dispatches')
+      .select('*')
+      .order('dispatched_on', { ascending: false })
+      .limit(QUERY_SAFETY_LIMIT);
+    if (batchId) query = query.eq('batch_id', batchId);
+    const { data, error } = await query;
+    if (error) throw error;
+    checkRowLimitGuard(data?.length, 'dispatches');
+    return (data ?? []).map((d: Record<string, unknown>) => normalizeRawDispatchRecord(d)) as Dispatch[];
+  }, CACHE_TTL.SHORT);
 }
 
 export async function fetchStageStock(): Promise<StageStock[]> {
@@ -1429,7 +1435,24 @@ export async function fetchBatchStock(batchId: string): Promise<BatchStock[]> {
  * Used to decide which inward batches can still be deleted: a batch is only
  * deletable while nothing downstream references it.
  */
-export async function fetchUsedBatchIds(): Promise<Set<string>> {
+export async function fetchUsedBatchIds(preloaded?: {
+  movements?: Pick<StageMovement, 'batch_id'>[];
+  dispatches?: Pick<Dispatch, 'batch_id'>[];
+  allocations?: { source_batch_id?: string; destination_batch_id?: string }[];
+}): Promise<Set<string>> {
+  if (preloaded?.movements && preloaded?.dispatches) {
+    const used = new Set<string>();
+    for (const m of preloaded.movements) used.add(m.batch_id);
+    for (const d of preloaded.dispatches) used.add(d.batch_id);
+    if (preloaded.allocations) {
+      for (const a of preloaded.allocations) {
+        if (a.source_batch_id) used.add(a.source_batch_id);
+        if (a.destination_batch_id) used.add(a.destination_batch_id);
+      }
+    }
+    return used;
+  }
+
   const [moves, disps, allocs] = await Promise.all([
     supabase.from('stage_movements').select('batch_id'),
     supabase.from('dispatches').select('batch_id'),
@@ -1497,6 +1520,7 @@ export async function allocateStockBetweenBatches(payload: {
   });
 
   if (!error && data) {
+    invalidateCache();
     return data as {
       allocation_id: string;
       source_batch_id: string;
@@ -1531,6 +1555,7 @@ export async function allocateStockBetweenBatches(payload: {
     .single();
 
   if (insertError) throw insertError;
+  invalidateCache();
 
   return {
     allocation_id: insertData?.id || '',
@@ -1549,37 +1574,40 @@ export async function allocateStockBetweenBatches(payload: {
  * Fetches all stock allocations, optionally filtered by a specific batch (source or destination).
  */
 export async function fetchBatchAllocations(batchId?: string): Promise<BatchAllocationWithRelations[]> {
-  try {
-    let query = supabase
-      .from('batch_allocations')
-      .select('*, item:items(*)')
-      .order('allocated_on', { ascending: false })
-      .order('created_at', { ascending: false });
+  const cacheKey = batchId ? `allocations_${batchId}` : 'allocations';
+  return fetchWithCache(cacheKey, async () => {
+    try {
+      let query = supabase
+        .from('batch_allocations')
+        .select('*, item:items(*)')
+        .order('allocated_on', { ascending: false })
+        .order('created_at', { ascending: false });
 
-    if (batchId) {
-      query = query.or(`source_batch_id.eq.${batchId},destination_batch_id.eq.${batchId}`);
+      if (batchId) {
+        query = query.or(`source_batch_id.eq.${batchId},destination_batch_id.eq.${batchId}`);
+      }
+
+      const { data, error } = await query;
+      if (error) {
+        if (error.code === 'PGRST205' || error.code === '42P01') return [];
+        throw error;
+      }
+
+      if (!data || data.length === 0) return [];
+
+      const batches = await fetchBatches().catch(() => []);
+      const batchMap = new Map(batches.map((b) => [b.id, b]));
+
+      return (data as (BatchAllocation & { item: Item | null })[]).map((alloc) => ({
+        ...alloc,
+        source_batch: batchMap.get(alloc.source_batch_id) || null,
+        destination_batch: batchMap.get(alloc.destination_batch_id) || null,
+      }));
+    } catch (err) {
+      console.warn('Failed to fetch batch allocations:', err);
+      return [];
     }
-
-    const { data, error } = await query;
-    if (error) {
-      if (error.code === 'PGRST205' || error.code === '42P01') return [];
-      throw error;
-    }
-
-    if (!data || data.length === 0) return [];
-
-    const batches = await fetchBatches().catch(() => []);
-    const batchMap = new Map(batches.map((b) => [b.id, b]));
-
-    return (data as (BatchAllocation & { item: Item | null })[]).map((alloc) => ({
-      ...alloc,
-      source_batch: batchMap.get(alloc.source_batch_id) || null,
-      destination_batch: batchMap.get(alloc.destination_batch_id) || null,
-    }));
-  } catch (err) {
-    console.warn('Failed to fetch batch allocations:', err);
-    return [];
-  }
+  }, CACHE_TTL.SHORT);
 }
 
 /**
@@ -1588,33 +1616,35 @@ export async function fetchBatchAllocations(batchId?: string): Promise<BatchAllo
  * is what was received minus what has already been dispatched.
  */
 export async function fetchLocationStock(): Promise<LocationStock[]> {
-  const fromView = await viewQuery<LocationStock>(() =>
-    supabase.from('v_location_stock').select('location, qty'),
-  );
-  if (fromView) return fromView.sort((a, b) => b.qty - a.qty);
+  return fetchWithCache('location_stock', async () => {
+    const fromView = await viewQuery<LocationStock>(() =>
+      supabase.from('v_location_stock').select('location, qty'),
+    );
+    if (fromView) return fromView.sort((a, b) => b.qty - a.qty);
 
-  // Fallback: computed locally (used until the migration is applied).
-  const [batches, dispatches] = await Promise.all([
-    supabase.from('inward_batches').select('id, location, qty_received'),
-    supabase.from('dispatches').select('batch_id, qty'),
-  ]);
-  if (batches.error) throw batches.error;
-  if (dispatches.error) throw dispatches.error;
+    // Fallback: computed locally (used until the migration is applied).
+    const [batches, dispatches] = await Promise.all([
+      supabase.from('inward_batches').select('id, location, qty_received'),
+      supabase.from('dispatches').select('batch_id, qty'),
+    ]);
+    if (batches.error) throw batches.error;
+    if (dispatches.error) throw dispatches.error;
 
-  const dispatchedByBatch = new Map<string, number>();
-  for (const d of (dispatches.data ?? []) as Pick<Dispatch, 'batch_id' | 'qty'>[]) {
-    dispatchedByBatch.set(d.batch_id, (dispatchedByBatch.get(d.batch_id) ?? 0) + d.qty);
-  }
+    const dispatchedByBatch = new Map<string, number>();
+    for (const d of (dispatches.data ?? []) as Pick<Dispatch, 'batch_id' | 'qty'>[]) {
+      dispatchedByBatch.set(d.batch_id, (dispatchedByBatch.get(d.batch_id) ?? 0) + d.qty);
+    }
 
-  const byLocation = new Map<string, number>();
-  for (const b of (batches.data ?? []) as Pick<InwardBatch, 'id' | 'location' | 'qty_received'>[]) {
-    const inFactory = b.qty_received - (dispatchedByBatch.get(b.id) ?? 0);
-    if (inFactory <= 0) continue;
-    byLocation.set(b.location, (byLocation.get(b.location) ?? 0) + inFactory);
-  }
-  return [...byLocation.entries()]
-    .map(([location, qty]) => ({ location, qty }))
-    .sort((a, b) => b.qty - a.qty);
+    const byLocation = new Map<string, number>();
+    for (const b of (batches.data ?? []) as Pick<InwardBatch, 'id' | 'location' | 'qty_received'>[]) {
+      const inFactory = b.qty_received - (dispatchedByBatch.get(b.id) ?? 0);
+      if (inFactory <= 0) continue;
+      byLocation.set(b.location, (byLocation.get(b.location) ?? 0) + inFactory);
+    }
+    return [...byLocation.entries()]
+      .map(([location, qty]) => ({ location, qty }))
+      .sort((a, b) => b.qty - a.qty);
+  }, CACHE_TTL.SHORT);
 }
 
 export type ComponentStockViewRow = {
@@ -1653,15 +1683,28 @@ export async function fetchComponentStockFromView(): Promise<ComponentStockViewR
  * 5. Available In-Stock Balance
  * 6. Granular orderUsageList and batchUsageList for 100% auditability
  */
-export async function fetchComponentStockSummary(asOfDate?: string | null): Promise<ComponentStockSummary[]> {
+export type PreloadedComponentEntities = {
+  items?: Item[];
+  stages?: Stage[];
+  batches?: unknown[];
+  movements?: unknown[];
+  dispatches?: unknown[];
+  receipts?: ItemStockReceipt[];
+  allocations?: unknown[];
+};
+
+export async function fetchComponentStockSummary(
+  asOfDate?: string | null,
+  preloaded?: PreloadedComponentEntities
+): Promise<ComponentStockSummary[]> {
   const [items, stages, batchesData, movementsData, dispatchesData, receiptsData, allocationsData] = await Promise.all([
-    fetchItems().catch(() => []),
-    fetchStages().catch(() => []),
-    fetchPagedRows<Record<string, unknown>>('inward_batches').catch(() => []),
-    fetchPagedRows<Record<string, unknown>>('stage_movements').catch(() => []),
-    fetchPagedRows<Record<string, unknown>>('dispatches').catch(() => []),
-    fetchItemStockReceipts().catch(() => []),
-    fetchPagedRows<Record<string, unknown>>('batch_allocations').catch(() => []),
+    preloaded?.items ?? fetchItems().catch(() => []),
+    preloaded?.stages ?? fetchStages().catch(() => []),
+    preloaded?.batches ?? fetchBatches().catch(() => []),
+    preloaded?.movements ?? fetchMovements().catch(() => []),
+    preloaded?.dispatches ?? fetchDispatches().catch(() => []),
+    preloaded?.receipts ?? fetchItemStockReceipts().catch(() => []),
+    preloaded?.allocations ?? fetchBatchAllocations().catch(() => []),
   ]);
 
   const stageMap = new Map(stages.map((s) => [s.id, s]));
@@ -1700,7 +1743,7 @@ export async function fetchComponentStockSummary(asOfDate?: string | null): Prom
     receiptsByItem.set(r.item_id, (receiptsByItem.get(r.item_id) ?? 0) + (Number(r.qty) || 0));
   }
 
-  const allMovements = movementsData.map((m: Record<string, unknown>) => ({
+  const allMovements = (movementsData as unknown as Record<string, unknown>[]).map((m) => ({
     id: (m.id as string) || '',
     batch_id: (m.batch_id as string) || '',
     qty_moved: Number(m.qty_moved || 0),
@@ -1715,13 +1758,13 @@ export async function fetchComponentStockSummary(asOfDate?: string | null): Prom
     cap_qty_used: Number(m.cap_qty_used || 0),
     atomizer_qty_used: Number(m.atomizer_qty_used || 0),
     box_qty_used: Number(m.box_qty_used || 0),
-    from_stage: stageMap.get(m.from_stage_id as string) ?? null,
-    to_stage: stageMap.get(m.to_stage_id as string) ?? null,
+    from_stage: (m.from_stage as Stage) ?? (m.from_stage_id ? stageMap.get(m.from_stage_id as string) ?? null : null),
+    to_stage: (m.to_stage as Stage) ?? (m.to_stage_id ? stageMap.get(m.to_stage_id as string) ?? null : null),
     remarks: (m.remarks as string) || null,
   }));
   const rawMovements = asOfDate ? allMovements.filter((m) => m.moved_on <= asOfDate) : allMovements;
 
-  const allDispatches = dispatchesData.map((d: Record<string, unknown>) => ({
+  const allDispatches = (dispatchesData as unknown as Record<string, unknown>[]).map((d) => ({
     id: (d.id as string) || '',
     batch_id: (d.batch_id as string) || '',
     qty: Number(d.qty || 0),
@@ -2250,3 +2293,306 @@ export async function fetchComponentStockSummary(asOfDate?: string | null): Prom
   });
 }
 
+
+// ============================================================
+// VENDOR PORTAL: Client, Production Order, Material Allocation,
+// BOM Category, Vendor Pending, and Order History Queries
+// ============================================================
+
+// --------------- CLIENTS ---------------
+
+export async function fetchClients(): Promise<Client[]> {
+  return fetchWithCache('clients', async () => {
+    const { data, error } = await supabase
+      .from('clients')
+      .select('*')
+      .order('name');
+    if (error) throw error;
+    return (data ?? []) as Client[];
+  }, CACHE_TTL.SHORT);
+}
+
+export async function createClient(payload: {
+  name: string;
+  company_name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  preferences?: string | null;
+  status?: 'active' | 'inactive';
+}): Promise<Client> {
+  const { data, error } = await supabase
+    .from('clients')
+    .insert({
+      name: payload.name.trim(),
+      company_name: payload.company_name?.trim() || null,
+      email: payload.email?.trim() || null,
+      phone: payload.phone?.trim() || null,
+      preferences: payload.preferences?.trim() || null,
+      status: payload.status || 'active',
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  invalidateCache('clients');
+  return data as Client;
+}
+
+export async function updateClient(
+  id: string,
+  payload: Partial<Omit<Client, 'id' | 'created_at'>>
+): Promise<Client> {
+  const { data, error } = await supabase
+    .from('clients')
+    .update(payload)
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw error;
+  invalidateCache('clients');
+  return data as Client;
+}
+
+export async function deleteClient(id: string): Promise<void> {
+  const { error } = await supabase.from('clients').delete().eq('id', id);
+  if (error) throw error;
+  invalidateCache('clients');
+}
+
+// --------------- BOM CATEGORIES ---------------
+
+export async function fetchBomCategories(): Promise<BomCategory[]> {
+  return fetchWithCache('bom_categories', async () => {
+    const { data, error } = await supabase
+      .from('bom_categories')
+      .select('*')
+      .order('sort_order');
+    if (error) throw error;
+    return (data ?? []) as BomCategory[];
+  }, CACHE_TTL.STAGES);
+}
+
+// --------------- PRODUCTION ORDERS ---------------
+
+export async function fetchProductionOrders(
+  statusFilter?: string
+): Promise<ProductionOrderWithRelations[]> {
+  let query = supabase
+    .from('production_orders')
+    .select('*, client:clients(*), material_allocations(*)')
+    .order('created_at', { ascending: false });
+
+  if (statusFilter && statusFilter !== 'all') {
+    query = query.eq('status', statusFilter);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data ?? []) as ProductionOrderWithRelations[];
+}
+
+export async function createProductionOrder(payload: {
+  client_id: string;
+  product_name: string;
+  variants?: unknown[];
+  total_qty?: number;
+  due_date?: string | null;
+  notes?: string | null;
+}): Promise<ProductionOrder> {
+  const { data, error } = await supabase.rpc('create_production_order_with_allocations', {
+    p_client_id: payload.client_id,
+    p_product_name: payload.product_name.trim(),
+    p_variants: JSON.stringify(payload.variants || []),
+    p_total_qty: payload.total_qty || 0,
+    p_due_date: payload.due_date || null,
+    p_notes: payload.notes?.trim() || null,
+  });
+  if (error) throw error;
+  invalidateCache('clients');
+  return data as ProductionOrder;
+}
+
+export async function updateProductionOrder(
+  id: string,
+  payload: Partial<Omit<ProductionOrder, 'id' | 'order_no' | 'created_at'>>
+): Promise<ProductionOrder> {
+  const { data, error } = await supabase
+    .from('production_orders')
+    .update(payload)
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data as ProductionOrder;
+}
+
+export async function completeProductionOrder(id: string): Promise<ProductionOrder> {
+  const { data, error } = await supabase
+    .from('production_orders')
+    .update({ status: 'completed', completed_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data as ProductionOrder;
+}
+
+export async function reopenProductionOrder(id: string): Promise<ProductionOrder> {
+  const { data, error } = await supabase
+    .from('production_orders')
+    .update({ status: 'in_progress', completed_at: null })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data as ProductionOrder;
+}
+
+export async function deleteProductionOrder(id: string): Promise<void> {
+  const { error } = await supabase.from('production_orders').delete().eq('id', id);
+  if (error) throw error;
+}
+
+// --------------- MATERIAL ALLOCATIONS ---------------
+
+export async function updateMaterialAllocation(
+  id: string,
+  payload: Partial<Omit<MaterialAllocation, 'id' | 'order_id' | 'created_at'>>
+): Promise<MaterialAllocation> {
+  const { data, error } = await supabase
+    .from('material_allocations')
+    .update(payload)
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data as MaterialAllocation;
+}
+
+export async function markAllocationReceived(id: string): Promise<MaterialAllocation> {
+  const { data, error } = await supabase
+    .from('material_allocations')
+    .update({ status: 'received', received_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data as MaterialAllocation;
+}
+
+export async function revertAllocationToPending(id: string): Promise<MaterialAllocation> {
+  const { data, error } = await supabase
+    .from('material_allocations')
+    .update({ status: 'pending', received_at: null })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data as MaterialAllocation;
+}
+
+export async function deleteAllocation(id: string): Promise<void> {
+  const { error } = await supabase.from('material_allocations').delete().eq('id', id);
+  if (error) throw error;
+}
+
+export async function addAllocationRow(payload: {
+  order_id: string;
+  component_name: string;
+  sort_order?: number;
+  source?: 'vendor' | 'stock';
+}): Promise<MaterialAllocation> {
+  const { data, error } = await supabase
+    .from('material_allocations')
+    .insert({
+      order_id: payload.order_id,
+      component_name: payload.component_name.trim(),
+      sort_order: payload.sort_order ?? 99,
+      source: payload.source || 'vendor',
+      status: 'pending',
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data as MaterialAllocation;
+}
+
+// --------------- VENDOR PENDING BOARD ---------------
+
+export async function fetchVendorPendingList(): Promise<MaterialAllocationWithVendorRelations[]> {
+  const { data, error } = await supabase
+    .from('material_allocations')
+    .select(`
+      *,
+      order:production_orders(*),
+      vendor:suppliers(*),
+      stock_item:items(*)
+    `)
+    .eq('status', 'pending')
+    .eq('source', 'vendor')
+    .order('sort_order');
+  if (error) throw error;
+
+  // Enrich with client data from orders
+  const enriched = (data ?? []).map((row: Record<string, unknown>) => {
+    return {
+      ...row,
+      client: null, // Client fetched separately if needed
+    } as MaterialAllocationWithVendorRelations;
+  });
+
+  return enriched;
+}
+
+// --------------- ORDER HISTORY ---------------
+
+export async function fetchCompletedOrders(): Promise<ProductionOrderWithRelations[]> {
+  const { data, error } = await supabase
+    .from('production_orders')
+    .select('*, client:clients(*), material_allocations(*)')
+    .eq('status', 'completed')
+    .order('completed_at', { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as ProductionOrderWithRelations[];
+}
+
+export async function repeatOrder(sourceOrderId: string): Promise<ProductionOrder> {
+  const { data, error } = await supabase.rpc('repeat_production_order', {
+    p_source_order_id: sourceOrderId,
+  });
+  if (error) throw error;
+  return data as ProductionOrder;
+}
+
+// --------------- EXTENDED SUPPLIER UPDATE ---------------
+
+export async function updateSupplierExtended(
+  id: string,
+  payload: Partial<Omit<ExtendedSupplier, 'id' | 'created_at'>>
+): Promise<ExtendedSupplier> {
+  const { data, error } = await supabase
+    .from('suppliers')
+    .update(payload)
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw error;
+  invalidateCache('suppliers');
+  return data as ExtendedSupplier;
+}
+
+// --------------- BATCH ALLOCATION REVERSAL ---------------
+
+export async function reverseBatchAllocation(payload: {
+  allocationId: string;
+  reversedBy?: string;
+  reason?: string;
+}): Promise<string> {
+  const { data, error } = await supabase.rpc('reverse_batch_allocation', {
+    p_allocation_id: payload.allocationId,
+    p_reversed_by: payload.reversedBy || null,
+    p_reason: payload.reason || null,
+  });
+  if (error) throw error;
+  invalidateCache();
+  return data as string;
+}

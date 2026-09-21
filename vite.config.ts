@@ -10,6 +10,18 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom'],
+          'vendor-supabase': ['@supabase/supabase-js'],
+          'vendor-icons': ['lucide-react'],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 600,
+  },
   optimizeDeps: {
     include: ['lucide-react', '@supabase/supabase-js', 'react', 'react-dom'],
   },

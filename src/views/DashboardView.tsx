@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import {
-  ShieldCheck, Download, Printer, RefreshCw, Zap, Package, LayoutDashboard, Layers, ArrowLeftRight, Truck, MapPin, PackageCheck, Filter, Clock, RotateCcw, Calendar
+  ShieldCheck, Download, Printer, RefreshCw, Zap, Package, LayoutDashboard, Layers, ArrowLeftRight, Truck, MapPin, PackageCheck, Filter, Clock, RotateCcw, Calendar, ClipboardList, Users
 } from 'lucide-react';
 import {
   Button, ErrorBanner, SearchInput, CardSkeleton, TableSkeleton, Modal
@@ -17,7 +17,11 @@ import {
   fetchItems,
   fetchComponentStockSummary,
   fetchBatchAllocations,
+  fetchProductionOrders,
+  fetchVendorPendingList,
+  fetchClients,
 } from '@/lib/queries';
+import { invalidateCache } from '@/lib/cache';
 import type {
   Stage,
   BatchWithRelations,
@@ -80,6 +84,11 @@ export function DashboardView({
   const [items, setItems] = useState<Item[]>([]);
   const [componentStocks, setComponentStocks] = useState<ComponentStockSummary[]>([]);
   const [allocations, setAllocations] = useState<BatchAllocationWithRelations[]>([]);
+  const [vendorPortalMetrics, setVendorPortalMetrics] = useState<{
+    activeOrdersCount: number;
+    pendingVendorAllocationsCount: number;
+    clientsCount: number;
+  }>({ activeOrdersCount: 0, pendingVendorAllocationsCount: 0, clientsCount: 0 });
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -134,8 +143,10 @@ export function DashboardView({
         locationsData,
         suppliersData,
         itemsData,
-        componentStocksData,
         allocationsData,
+        ordersData,
+        pendingVendorData,
+        clientsData,
       ] = await Promise.all([
         fetchStages(),
         fetchBatches(),
@@ -144,9 +155,21 @@ export function DashboardView({
         fetchLocationStock(),
         fetchSuppliers(),
         fetchItems(),
-        fetchComponentStockSummary(),
         fetchBatchAllocations().catch(() => [] as BatchAllocationWithRelations[]),
+        fetchProductionOrders().catch(() => []),
+        fetchVendorPendingList().catch(() => []),
+        fetchClients().catch(() => []),
       ]);
+
+      // Calculate component stocks using the already-loaded entities - ZERO duplicate requests!
+      const componentStocksData = await fetchComponentStockSummary(asOfDate || null, {
+        items: itemsData,
+        stages: stagesData,
+        batches: batchesData,
+        movements: movementsData,
+        dispatches: dispatchesData,
+        allocations: allocationsData,
+      }).catch(() => [] as ComponentStockSummary[]);
 
       setStages(stagesData);
       setBatches(batchesData);
@@ -157,6 +180,11 @@ export function DashboardView({
       setItems(itemsData);
       setComponentStocks(componentStocksData);
       setAllocations(allocationsData);
+      setVendorPortalMetrics({
+        activeOrdersCount: (ordersData as { status: string }[]).filter((o) => o.status !== 'completed').length,
+        pendingVendorAllocationsCount: (pendingVendorData as unknown[]).length,
+        clientsCount: (clientsData as { status: string }[]).filter((c) => c.status === 'active').length,
+      });
     } catch (err) {
       const msg = getErrorMessage(err, 'Failed to load factory dashboard records');
       setError(msg);
@@ -164,22 +192,34 @@ export function DashboardView({
     } finally {
       setLoading(false);
     }
-  }, [toastError]);
+  }, [asOfDate, toastError]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
-  // Point-in-Time component stock reconciliation
+  // Point-in-Time component stock reconciliation (skip initial mount to prevent duplicate fetch)
+  const isFirstAsOfDateMountRef = useRef(true);
   useEffect(() => {
+    if (isFirstAsOfDateMountRef.current) {
+      isFirstAsOfDateMountRef.current = false;
+      return;
+    }
     let isMounted = true;
-    fetchComponentStockSummary(asOfDate || null).then((data) => {
+    fetchComponentStockSummary(asOfDate || null, {
+      items: items ?? undefined,
+      stages: stages ?? undefined,
+      batches: batches ?? undefined,
+      movements: movements ?? undefined,
+      dispatches: dispatches ?? undefined,
+      allocations: allocations ?? undefined,
+    }).then((data) => {
       if (isMounted) setComponentStocks(data);
     }).catch(() => {});
     return () => {
       isMounted = false;
     };
-  }, [asOfDate]);
+  }, [asOfDate, items, stages, batches, movements, dispatches, allocations]);
 
   // Realtime live syncing across multi-user terminals
   useEffect(() => {
@@ -187,6 +227,7 @@ export function DashboardView({
     const debouncedReload = () => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
+        invalidateCache();
         loadData();
       }, 300);
     };
@@ -845,6 +886,75 @@ export function DashboardView({
       )}
 
       {error && <ErrorBanner message={error} />}
+
+      {/* ─── Production Orders & Vendor Portal Quick KPI Strip ─── */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div
+          onClick={() => onViewChange('orders')}
+          className="p-4 rounded-2xl bg-gradient-to-r from-indigo-50/90 to-white border border-indigo-100/90 hover:border-indigo-300 shadow-2xs hover:shadow-xs transition-all cursor-pointer group flex items-center justify-between"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-indigo-600 text-white shadow-xs group-hover:scale-105 transition-transform">
+              <ClipboardList className="h-5 w-5" />
+            </div>
+            <div>
+              <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-700 block">
+                Active Production Orders
+              </span>
+              <p className="text-xl font-extrabold text-slate-900 font-mono">
+                {vendorPortalMetrics.activeOrdersCount}
+              </p>
+            </div>
+          </div>
+          <span className="text-xs font-semibold text-indigo-600 group-hover:translate-x-0.5 transition-transform">
+            View Orders &rarr;
+          </span>
+        </div>
+
+        <div
+          onClick={() => onViewChange('vendor-pending')}
+          className="p-4 rounded-2xl bg-gradient-to-r from-amber-50/90 to-white border border-amber-100/90 hover:border-amber-300 shadow-2xs hover:shadow-xs transition-all cursor-pointer group flex items-center justify-between"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-amber-500 text-white shadow-xs group-hover:scale-105 transition-transform">
+              <Clock className="h-5 w-5" />
+            </div>
+            <div>
+              <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700 block">
+                Vendor Pending Board
+              </span>
+              <p className="text-xl font-extrabold text-slate-900 font-mono">
+                {vendorPortalMetrics.pendingVendorAllocationsCount}
+              </p>
+            </div>
+          </div>
+          <span className="text-xs font-semibold text-amber-700 group-hover:translate-x-0.5 transition-transform">
+            Expedite &rarr;
+          </span>
+        </div>
+
+        <div
+          onClick={() => onViewChange('clients')}
+          className="p-4 rounded-2xl bg-gradient-to-r from-emerald-50/90 to-white border border-emerald-100/90 hover:border-emerald-300 shadow-2xs hover:shadow-xs transition-all cursor-pointer group flex items-center justify-between"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-emerald-600 text-white shadow-xs group-hover:scale-105 transition-transform">
+              <Users className="h-5 w-5" />
+            </div>
+            <div>
+              <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 block">
+                Registered Clients
+              </span>
+              <p className="text-xl font-extrabold text-slate-900 font-mono">
+                {vendorPortalMetrics.clientsCount}
+              </p>
+            </div>
+          </div>
+          <span className="text-xs font-semibold text-emerald-700 group-hover:translate-x-0.5 transition-transform">
+            Directory &rarr;
+          </span>
+        </div>
+      </div>
 
       {/* ─── Executive KPIs, Exception Strip & 4-Pillar Master ─── */}
       <DashboardKPIs

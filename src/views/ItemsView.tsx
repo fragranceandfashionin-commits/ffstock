@@ -13,6 +13,7 @@ import {
   fetchBoxes,
   fetchBatchAllocations,
 } from '@/lib/queries';
+import { invalidateCache } from '@/lib/cache';
 import { supabase, type Item, type ComponentStockSummary, type Supplier, type BatchWithRelations, type BatchAllocationWithRelations } from '@/lib/supabase';
 import type { View } from '@/lib/types';
 import type { NavigationContext } from '@/components/AppShell';
@@ -84,16 +85,19 @@ export function ItemsView({
     if (!isSilent) setLoading(true);
     setError(null);
     try {
-      const [itms, summary, supps, b, used, c, a, bx, allocs] = await Promise.all([
+      const [itms, supps, b, allocs] = await Promise.all([
         fetchItems(),
-        fetchComponentStockSummary().catch(() => [] as ComponentStockSummary[]),
         fetchSuppliers().catch(() => [] as Supplier[]),
         fetchBatches().catch(() => [] as BatchWithRelations[]),
+        fetchBatchAllocations().catch(() => [] as BatchAllocationWithRelations[]),
+      ]);
+
+      const [summary, used, c, a, bx] = await Promise.all([
+        fetchComponentStockSummary(null, { items: itms, batches: b, allocations: allocs }).catch(() => [] as ComponentStockSummary[]),
         fetchUsedBatchIds().catch(() => new Set<string>()),
         fetchCaps().catch(() => [] as Item[]),
         fetchAtomizers().catch(() => [] as Item[]),
         fetchBoxes().catch(() => [] as Item[]),
-        fetchBatchAllocations().catch(() => [] as BatchAllocationWithRelations[]),
       ]);
 
       setItems(itms);
@@ -143,6 +147,7 @@ export function ItemsView({
     const debouncedReload = () => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
+        invalidateCache();
         load(true);
       }, 300);
     };
@@ -175,56 +180,48 @@ export function ItemsView({
     setDeletingItem(true);
     try {
       const itemId = deleteModalItem.id;
-      // 1. Find all batches for this item
-      const { data: linkedBatches } = await supabase
-        .from('inward_batches')
-        .select('id, image_url')
-        .eq('item_id', itemId);
+      const summary = stockSummaryMap.get(itemId);
 
-      if (linkedBatches && linkedBatches.length > 0) {
-        const batchIds = linkedBatches.map((b) => b.id);
-        // Delete movements & dispatches for these batches
-        await supabase.from('stage_movements').delete().in('batch_id', batchIds);
-        await supabase.from('dispatches').delete().in('batch_id', batchIds);
-        // Clean any batch images from storage
-        for (const b of linkedBatches) {
-          if (b.image_url) {
-            try {
-              const u = new URL(b.image_url);
-              const parts = u.pathname.split('batch-images/');
-              if (parts[1]) {
-                await supabase.storage.from('batch-images').remove([decodeURIComponent(parts[1])]).catch(() => {});
-              }
-            } catch {
-              // ignore
-            }
-          }
-        }
-        // Delete the batches
-        await supabase.from('inward_batches').delete().in('id', batchIds);
+      // Check client-side stock summary first
+      if (
+        summary &&
+        ((summary.inwardBatchCount || 0) > 0 ||
+          (summary.usedInBatchCount || 0) > 0 ||
+          (summary.totalInwarded || 0) > 0 ||
+          (summary.totalUsedInBatches || 0) > 0)
+      ) {
+        toast.error(
+          `Cannot delete item "${deleteModalItem.name}" because it has recorded batch, receipt, or assembly history.`,
+          'Item Deletion Blocked'
+        );
+        setDeleteModalItem(null);
+        return;
       }
 
-      // 2. Delete item stock receipts
-      try {
-        await supabase.from('item_stock_receipts').delete().eq('item_id', itemId);
-      } catch {
-        // Ignored
+      // Check DB for any linked receipts, batches, or allocations
+      const [receiptRes, batchRes, allocRes] = await Promise.all([
+        supabase.from('item_stock_receipts').select('id', { count: 'exact', head: true }).eq('item_id', itemId),
+        supabase
+          .from('inward_batches')
+          .select('id', { count: 'exact', head: true })
+          .or(`item_id.eq.${itemId},cap_item_id.eq.${itemId},atomizer_item_id.eq.${itemId},box_item_id.eq.${itemId}`),
+        supabase.from('material_allocations').select('id', { count: 'exact', head: true }).eq('stock_item_id', itemId),
+      ]);
+
+      if (
+        (receiptRes.count && receiptRes.count > 0) ||
+        (batchRes.count && batchRes.count > 0) ||
+        (allocRes.count && allocRes.count > 0)
+      ) {
+        toast.error(
+          `Cannot delete item "${deleteModalItem.name}" because it is linked to existing inventory records.`,
+          'Item Deletion Blocked'
+        );
+        setDeleteModalItem(null);
+        return;
       }
 
-      // 3. Clear any component references in remaining batches or movements
-      try {
-        await supabase.from('inward_batches').update({ cap_item_id: null }).eq('cap_item_id', itemId);
-        await supabase.from('inward_batches').update({ atomizer_item_id: null }).eq('atomizer_item_id', itemId);
-        await supabase.from('inward_batches').update({ box_item_id: null }).eq('box_item_id', itemId);
-        await supabase.from('stage_movements').update({ cap_item_id: null }).eq('cap_item_id', itemId);
-        await supabase.from('stage_movements').update({ atomizer_item_id: null }).eq('atomizer_item_id', itemId);
-        await supabase.from('stage_movements').update({ box_item_id: null }).eq('box_item_id', itemId);
-        await supabase.from('dispatches').update({ box_item_id: null }).eq('box_item_id', itemId);
-      } catch {
-        // Ignored
-      }
-
-      // 4. Delete the item
+      // Delete the unused item
       const { error: deleteErr } = await supabase.from('items').delete().eq('id', itemId);
       if (deleteErr) throw deleteErr;
 
@@ -239,12 +236,36 @@ export function ItemsView({
     }
   };
 
-  // Delete Inward Batch handler (Clean cascade)
+  // Delete Inward Batch handler (Clean delete for unused batches)
   const executeDeleteBatch = async () => {
     if (!deleteModalBatch) return;
     setDeletingBatch(true);
     try {
       const batchId = deleteModalBatch.id;
+
+      // Pre-check for any movements, dispatches, or allocations
+      const [moveRes, dispRes, allocRes] = await Promise.all([
+        supabase.from('stage_movements').select('id', { count: 'exact', head: true }).eq('batch_id', batchId),
+        supabase.from('dispatches').select('id', { count: 'exact', head: true }).eq('batch_id', batchId),
+        supabase
+          .from('batch_allocations')
+          .select('id', { count: 'exact', head: true })
+          .or(`source_batch_id.eq.${batchId},destination_batch_id.eq.${batchId}`),
+      ]);
+
+      if (
+        (moveRes.count && moveRes.count > 0) ||
+        (dispRes.count && dispRes.count > 0) ||
+        (allocRes.count && allocRes.count > 0)
+      ) {
+        toast.error(
+          `Cannot delete batch "${deleteModalBatch.batch_no}" because it has recorded movement, dispatch, or allocation history.`,
+          'Batch Deletion Blocked'
+        );
+        setDeleteModalBatch(null);
+        return;
+      }
+
       if (deleteModalBatch.image_url) {
         try {
           const u = new URL(deleteModalBatch.image_url);
@@ -257,11 +278,7 @@ export function ItemsView({
         }
       }
 
-      // 1. Delete associated stage movements & dispatches for this batch
-      await supabase.from('stage_movements').delete().eq('batch_id', batchId);
-      await supabase.from('dispatches').delete().eq('batch_id', batchId);
-
-      // 2. Delete the batch record
+      // Delete the empty/unused batch record
       const { error: deleteErr } = await supabase.from('inward_batches').delete().eq('id', batchId);
       if (deleteErr) throw deleteErr;
 

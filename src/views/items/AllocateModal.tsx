@@ -101,10 +101,12 @@ export function AllocateModal({
     );
   }, [allBatches, sourceSearchQuery]);
 
-  // Available candidate batches for destination (excluding the source batch)
+  // Available candidate batches for destination (excluding the source batch and restricted to the same SKU)
   const candidateBatches = useMemo(() => {
     if (!effectiveSourceBatch) return [];
-    return allBatches.filter((b) => b.id !== effectiveSourceBatch.id);
+    return allBatches.filter(
+      (b) => b.id !== effectiveSourceBatch.id && b.item_id === effectiveSourceBatch.item_id
+    );
   }, [allBatches, effectiveSourceBatch]);
 
   // Filtered candidate destination batches based on user search
@@ -463,7 +465,7 @@ export function AllocateModal({
 
               {candidateBatches.length === 0 ? (
                 <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium">
-                  No other inward batches exist in the system. Create another inward batch first to allocate stock to it.
+                  No other inward batches of &quot;{effectiveSourceBatch.item?.name || 'this item'}&quot; exist in the system. Stock can only be allocated between batches of the exact same SKU.
                 </div>
               ) : (
                 <div className="space-y-2">

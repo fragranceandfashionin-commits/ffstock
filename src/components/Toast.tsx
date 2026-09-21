@@ -82,7 +82,7 @@ function ToastContainer({ toasts, onRemove }: { toasts: ToastMessage[]; onRemove
   return (
     <div
       aria-live="polite"
-      className="fixed bottom-20 right-4 left-4 sm:left-auto z-50 flex flex-col gap-2.5 max-w-sm w-auto sm:w-full pointer-events-none sm:bottom-6 sm:right-6"
+      className="fixed bottom-20 right-4 left-4 sm:left-auto z-[100] flex flex-col gap-2.5 max-w-sm w-auto sm:w-full pointer-events-none sm:bottom-6 sm:right-6"
     >
       {toasts.map((t) => {
         const icons = {
