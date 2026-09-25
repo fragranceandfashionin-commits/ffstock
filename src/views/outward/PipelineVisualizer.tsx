@@ -198,6 +198,8 @@ export function PipelineVisualizer({
                               title={
                                 canAdvance
                                   ? `Advance ${stage.name} to ${nextStage.name}`
+                                  : role === 'viewer'
+                                  ? 'Factory workstation is currently in read-only Auditor mode. Click "Station Sign In" in the top bar to authenticate as Admin or Operator.'
                                   : `Role (${roleDefinition.name}) not authorized to advance from ${stage.name} to ${nextStage.name}`
                               }
                               className={`w-full flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-extrabold transition min-w-0 ${
@@ -207,7 +209,13 @@ export function PipelineVisualizer({
                               }`}
                             >
                               <Zap className={`h-3.5 w-3.5 shrink-0 ${canAdvance ? 'text-amber-400' : 'text-slate-400'}`} />
-                              <span className="truncate">Advance → {nextStage.name}</span>
+                              <span className="truncate">
+                                {canAdvance
+                                  ? `Advance → ${nextStage.name}`
+                                  : role === 'viewer'
+                                  ? 'Sign In to Advance'
+                                  : `Advance → ${nextStage.name}`}
+                              </span>
                             </button>
                           )}
 

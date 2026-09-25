@@ -122,42 +122,83 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  // Load active session and fetch profile from user_profiles table
-  const loadProfile = useCallback(async (userId: string, email?: string): Promise<UserProfile | null> => {
-    try {
-      const queryPromise = supabase
-        .from('user_profiles')
-        .select('*')
-        .eq('id', userId)
-        .maybeSingle();
+  // Load active session and fetch profile from user_profiles table with resilient fallbacks
+  const loadProfile = useCallback(
+    async (
+      userId: string,
+      email?: string,
+      userMetadata?: Record<string, any>
+    ): Promise<UserProfile | null> => {
+      try {
+        const queryPromise = supabase
+          .from('user_profiles')
+          .select('*')
+          .eq('id', userId)
+          .maybeSingle();
 
-      const timeoutPromise = new Promise<{ data: null; error: null }>((resolve) =>
-        setTimeout(() => resolve({ data: null, error: null }), 1800)
-      );
+        const timeoutPromise = new Promise<{ data: null; error: null }>((resolve) =>
+          setTimeout(() => resolve({ data: null, error: null }), 4000)
+        );
 
-      const { data, error } = await Promise.race([queryPromise, timeoutPromise]);
+        const { data, error } = await Promise.race([queryPromise, timeoutPromise]);
 
-      if (error && error.code !== 'PGRST116') {
-        console.warn('Could not load user profile:', error);
+        if (error && error.code !== 'PGRST116') {
+          console.warn('Could not load user profile:', error);
+        }
+
+        if (data && data.role) {
+          return data as UserProfile;
+        }
+
+        // Determine fallback role from user metadata or known email patterns
+        let derivedRole: UserRole = 'viewer';
+        if (userMetadata?.role && userMetadata.role in ROLE_DEFINITIONS) {
+          derivedRole = userMetadata.role as UserRole;
+        } else if (email?.toLowerCase().startsWith('admin@')) {
+          derivedRole = 'admin';
+        } else if (email) {
+          const matched = Object.keys(ROLE_DEFINITIONS).find(
+            (r) => r !== 'viewer' && email.toLowerCase().includes(r.replace('_', ''))
+          ) as UserRole | undefined;
+          if (matched) derivedRole = matched;
+        }
+
+        const derivedName =
+          userMetadata?.display_name ||
+          (derivedRole in ROLE_DEFINITIONS ? ROLE_DEFINITIONS[derivedRole].name : null) ||
+          (email ? email.split('@')[0] : 'Factory Operator');
+
+        const fallbackProfile: UserProfile = {
+          id: userId,
+          email: email || null,
+          display_name: derivedName,
+          role: derivedRole,
+          is_active: true,
+          created_at: new Date().toISOString(),
+        };
+
+        // Asynchronously upsert profile to repair missing database records in background
+        supabase
+          .from('user_profiles')
+          .upsert({
+            id: userId,
+            email: email || null,
+            display_name: derivedName,
+            role: derivedRole,
+            is_active: true,
+          })
+          .then(({ error: upsertErr }) => {
+            if (upsertErr) console.warn('Auto-repair profile upsert notice:', upsertErr);
+          })
+          .catch(() => {});
+
+        return fallbackProfile;
+      } catch {
+        return null;
       }
-
-      if (data) {
-        return data as UserProfile;
-      }
-
-      // Default profile derived from authenticated credentials
-      return {
-        id: userId,
-        email: email || null,
-        display_name: email ? email.split('@')[0] : 'Factory Operator',
-        role: 'viewer',
-        is_active: true,
-        created_at: new Date().toISOString(),
-      };
-    } catch {
-      return null;
-    }
-  }, []);
+    },
+    []
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -182,7 +223,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(currentSession?.user ?? null);
 
         if (currentSession?.user) {
-          const prof = await loadProfile(currentSession.user.id, currentSession.user.email);
+          const prof = await loadProfile(currentSession.user.id, currentSession.user.email, currentSession.user.user_metadata);
           if (isMounted) {
             setProfile(prof);
             if (prof?.role) {
@@ -218,7 +259,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(newSession);
       setUser(newSession?.user ?? null);
       if (newSession?.user) {
-        const prof = await loadProfile(newSession.user.id, newSession.user.email);
+        const prof = await loadProfile(newSession.user.id, newSession.user.email, newSession.user.user_metadata);
         if (isMounted) {
           setProfile(prof);
           if (prof?.role) {
@@ -290,7 +331,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (data.user) {
           setUser(data.user);
           setSession(data.session);
-          const prof = await loadProfile(data.user.id, data.user.email);
+          const prof = await loadProfile(data.user.id, data.user.email, data.user.user_metadata);
           setProfile(prof);
           if (prof?.role) {
             setRole(prof.role);
