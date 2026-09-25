@@ -485,26 +485,31 @@ export async function insertMultiBatchStageMovement(payload: {
     }
 
     if (rpcError) {
-      const isMissingRpc =
+      const isRecoverableRpcError =
         rpcError.code === 'PGRST202' ||
         rpcError.code === '42883' ||
+        rpcError.code === 'P0001' ||
         rpcError.message?.toLowerCase().includes('schema cache') ||
+        rpcError.message?.toLowerCase().includes('not found') ||
         rpcError.message?.toLowerCase().includes('function public.execute_multi_batch_stage_movement');
-      if (!isMissingRpc) {
+      if (!isRecoverableRpcError) {
         throw rpcError;
       }
-      console.warn('execute_multi_batch_stage_movement RPC not found in schema cache. Using client sequential fallback.');
+      console.warn('execute_multi_batch_stage_movement RPC unavailable or encountered ledger RLS lock error. Using client sequential fallback:', rpcError.message);
     }
   } catch (err: unknown) {
     const postgrestErr = err as { code?: string; message?: string };
-    const isMissingRpc =
+    const isRecoverableRpcError =
       postgrestErr?.code === 'PGRST202' ||
       postgrestErr?.code === '42883' ||
+      postgrestErr?.code === 'P0001' ||
       postgrestErr?.message?.toLowerCase().includes('schema cache') ||
+      postgrestErr?.message?.toLowerCase().includes('not found') ||
       postgrestErr?.message?.toLowerCase().includes('function public.execute_multi_batch_stage_movement');
-    if (!isMissingRpc && (postgrestErr?.message || postgrestErr?.code)) {
+    if (!isRecoverableRpcError && (postgrestErr?.message || postgrestErr?.code)) {
       throw err;
     }
+    console.warn('Falling back to client sequential inserts for multi-batch movement:', postgrestErr?.message);
     // Fall back to client sequential inserts if migration pending
   }
 

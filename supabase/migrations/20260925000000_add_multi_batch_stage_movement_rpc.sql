@@ -1,6 +1,9 @@
 -- Migration: Add Atomic Multi-Batch Stage Movement & Scrap RPC
 -- Enables advancing and scrapping consolidated item stock spanning multiple batches in a single atomic transaction.
 
+ALTER TABLE stage_movements ADD COLUMN IF NOT EXISTS variant_name text;
+ALTER TABLE dispatches ADD COLUMN IF NOT EXISTS variant_name text;
+
 CREATE OR REPLACE FUNCTION execute_multi_batch_stage_movement(
   p_batch_splits jsonb,
   p_from_stage_id uuid,
@@ -23,7 +26,8 @@ CREATE OR REPLACE FUNCTION execute_multi_batch_stage_movement(
 )
 RETURNS jsonb
 LANGUAGE plpgsql
-SECURITY INVOKER
+SECURITY DEFINER
+SET search_path = public, extensions
 AS $$
 DECLARE
   v_split record;
@@ -57,11 +61,10 @@ BEGIN
       RAISE EXCEPTION 'Split quantity must be greater than zero. Received: %', v_split_qty;
     END IF;
 
-    -- Lock batch row and verify item consistency
+    -- Verify batch row and verify item consistency
     SELECT item_id INTO v_item_id
     FROM inward_batches
-    WHERE id = v_batch_id
-    FOR UPDATE;
+    WHERE id = v_batch_id;
 
     IF NOT FOUND THEN
       RAISE EXCEPTION 'Batch with ID % not found.', v_batch_id;
@@ -84,8 +87,7 @@ BEGIN
       IF v_split_qty > 0 THEN
         SELECT item_id INTO v_item_id
         FROM inward_batches
-        WHERE id = v_batch_id
-        FOR UPDATE;
+        WHERE id = v_batch_id;
 
         IF NOT FOUND THEN
           RAISE EXCEPTION 'Scrap batch with ID % not found.', v_batch_id;

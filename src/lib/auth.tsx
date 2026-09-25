@@ -178,15 +178,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         };
 
         // Asynchronously upsert profile to repair missing database records in background
-        supabase
-          .from('user_profiles')
-          .upsert({
-            id: userId,
-            email: email || null,
-            display_name: derivedName,
-            role: derivedRole,
-            is_active: true,
-          })
+        Promise.resolve(
+          supabase
+            .from('user_profiles')
+            .upsert({
+              id: userId,
+              email: email || null,
+              display_name: derivedName,
+              role: derivedRole,
+              is_active: true,
+            })
+        )
           .then(({ error: upsertErr }) => {
             if (upsertErr) console.warn('Auto-repair profile upsert notice:', upsertErr);
           })

@@ -2331,7 +2331,8 @@ CREATE OR REPLACE FUNCTION public.execute_multi_batch_stage_movement(
 )
 RETURNS jsonb
 LANGUAGE plpgsql
-SECURITY INVOKER
+SECURITY DEFINER
+SET search_path = public, extensions
 AS $$
 DECLARE
   v_split record;
@@ -2366,8 +2367,7 @@ BEGIN
 
     SELECT item_id INTO v_item_id
     FROM inward_batches
-    WHERE id = v_batch_id
-    FOR UPDATE;
+    WHERE id = v_batch_id;
 
     IF NOT FOUND THEN
       RAISE EXCEPTION 'Batch with ID % not found.', v_batch_id;
@@ -2389,8 +2389,7 @@ BEGIN
       IF v_split_qty > 0 THEN
         SELECT item_id INTO v_item_id
         FROM inward_batches
-        WHERE id = v_batch_id
-        FOR UPDATE;
+        WHERE id = v_batch_id;
 
         IF NOT FOUND THEN
           RAISE EXCEPTION 'Scrap batch with ID % not found.', v_batch_id;
