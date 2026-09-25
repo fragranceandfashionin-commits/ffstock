@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { Boxes, X, Download, FileSpreadsheet } from 'lucide-react';
 import {
   Card,
@@ -12,32 +12,23 @@ import {
 import { useToast } from '@/components/Toast';
 import { DeliveryChallanModal } from '@/components/DeliveryChallanModal';
 import {
-  fetchBatches,
-  fetchStages,
-  fetchBatchStock,
-  fetchMovements,
-  fetchDispatches,
   insertStageMovement,
   insertScrapMovement,
   insertDispatch,
   insertReversalMovement,
-  fetchCaps,
-  fetchAtomizers,
-  fetchBoxes,
   insertSplitStageMovementAndScrap,
   insertMultiVariantStageMovements,
   insertMultiVariantDispatches,
-  fetchComponentStockSummary,
-  fetchBatchAllocations,
+  insertMultiBatchStageMovement,
+  insertMultiBatchDispatches,
 } from '@/lib/queries';
-import { invalidateCache } from '@/lib/cache';
-import { supabase, SCRAP_REASONS, COMMON_COLORS, COMMON_PRINTING_DESIGNS } from '@/lib/supabase';
-import type { BatchWithRelations, Stage, MovementWithRelations, Dispatch, Item, ComponentStockSummary, BatchAllocationWithRelations } from '@/lib/supabase';
-import type { BatchStock } from '@/lib/types';
+import { SCRAP_REASONS, COMMON_COLORS, COMMON_PRINTING_DESIGNS } from '@/lib/supabase';
+import type { MovementWithRelations, Dispatch, BatchWithRelations } from '@/lib/supabase';
 import { getErrorMessage, getTodayDateString, formatNumber, downloadCSV } from '@/lib/utils';
+import { sortBatchesByFIFO } from '@/lib/fifo';
 
 // Outward Subcomponents & Types
-import type { ActiveAction, VariantRow } from './outward/types';
+import type { ActiveAction, BatchSplit } from './outward/types';
 import { deriveStageVariants } from './outward/types';
 import { BatchSelectorCard } from './outward/BatchSelectorCard';
 import { PipelineVisualizer } from './outward/PipelineVisualizer';
@@ -45,9 +36,12 @@ import { SingleMovementForm } from './outward/SingleMovementForm';
 import { MultiVariantSplitMatrix } from './outward/MultiVariantSplitMatrix';
 import { ScrapForm } from './outward/ScrapForm';
 import { DispatchForm } from './outward/DispatchForm';
+import { type BatchAllocationItem } from './outward/BatchLocationAllocationGrid';
 import { MovementAuditTrail } from './outward/MovementAuditTrail';
 import { ReversalModal } from './outward/ReversalModal';
 import { useAuth } from '@/lib/auth';
+import { useOutwardData } from './outward/useOutwardData';
+import { useOutwardFormState } from './outward/useOutwardFormState';
 
 export type OutwardViewProps = {
   initialBatchId?: string;
@@ -55,25 +49,181 @@ export type OutwardViewProps = {
 };
 
 export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewProps = {}) {
-  const [stages, setStages] = useState<Stage[] | null>(null);
-  const [batches, setBatches] = useState<BatchWithRelations[] | null>(null);
-  const [batchId, setBatchId] = useState(initialBatchId || '');
-  const [stock, setStock] = useState<BatchStock[]>([]);
-  const [movements, setMovements] = useState<MovementWithRelations[]>([]);
-  const [dispatches, setDispatches] = useState<Dispatch[]>([]);
-  const [caps, setCaps] = useState<Item[]>([]);
-  const [atomizers, setAtomizers] = useState<Item[]>([]);
-  const [boxes, setBoxes] = useState<Item[]>([]);
-  const [stockSummaryMap, setStockSummaryMap] = useState<Map<string, ComponentStockSummary>>(new Map());
-  const [allocations, setAllocations] = useState<BatchAllocationWithRelations[]>([]);
+  // Data management custom hook
+  const {
+    stages,
+    batches,
+    batchId,
+    setBatchId,
+    stock,
+    movements,
+    dispatches,
+    caps,
+    atomizers,
+    boxes,
+    stockSummaryMap,
+    loading,
+    error,
+    selectedBatch,
+    processStages,
+    qtyAt,
+    dispatchedTotal,
+    allocatedOutQty,
+    allocatedInQty,
+    netReceivedQty,
+    readyQty,
+    inFactory,
+    scrappedTotal,
+    unitLabel,
+    refreshBatchData,
+    selectedItemId,
+    setSelectedItemId,
+    selectedItem,
+    itemGroups,
+    itemBatches,
+    perBatchStock,
+    batchStageDetails,
+    computeFIFOSplits,
+    computeFIFOSplitsFromRemaining,
+  } = useOutwardData(initialBatchId);
+
+  // Form state custom hook
+  const {
+    moveQty,
+    setMoveQty,
+    moveAllocations,
+    handleMoveAllocationChange,
+    moveVariantName,
+    setMoveVariantName,
+    moveColor,
+    setMoveColor,
+    movePrintingDesign,
+    setMovePrintingDesign,
+    capName,
+    setCapName,
+    moveCapItemId,
+    setMoveCapItemId,
+    atomizerName,
+    setAtomizerName,
+    moveAtomizerItemId,
+    setMoveAtomizerItemId,
+    moveBoxName,
+    setMoveBoxName,
+    moveBoxItemId,
+    setMoveBoxItemId,
+    moveRemarks,
+    setMoveRemarks,
+    moveDoneBy,
+    setMoveDoneBy,
+    splitScrapEnabled,
+    setSplitScrapEnabled,
+    splitScrapReason,
+    setSplitScrapReason,
+    moveMode,
+    setMoveMode,
+    variantRows,
+    setVariantRows,
+    scrapQty,
+    setScrapQty,
+    scrapAllocations,
+    handleScrapAllocationChange,
+    scrapReason,
+    setScrapReason,
+    dispatchMode,
+    setDispatchMode,
+    dispatchQty,
+    setDispatchQty,
+    dispatchAllocations,
+    handleDispatchAllocationChange,
+    dispatchVariantName,
+    setDispatchVariantName,
+    customerName,
+    setCustomerName,
+    invoiceNo,
+    setInvoiceNo,
+    dispatchDate,
+    setDispatchDate,
+    dispatchColor,
+    setDispatchColor,
+    dispatchPrintingDesign,
+    setDispatchPrintingDesign,
+    dispatchCapName,
+    setDispatchCapName,
+    dispatchAtomizerName,
+    setDispatchAtomizerName,
+    dispatchBoxName,
+    setDispatchBoxName,
+    dispatchProductSpecs,
+    setDispatchProductSpecs,
+    submitting,
+    setSubmitting,
+    formError,
+    setFormError,
+    resetForm,
+  } = useOutwardFormState();
 
   const lastHandledBatchIdRef = useRef<string | null>(null);
   const actionPanelRef = useRef<HTMLDivElement>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   // Active user action
   const [activeAction, setActiveAction] = useState<ActiveAction>(null);
+
+  const batchMap = useMemo(() => {
+    const map = new Map<string, BatchWithRelations>();
+    for (const b of batches || []) {
+      map.set(b.id, b);
+    }
+    return map;
+  }, [batches]);
+
+  // Derive allocation items for any stage
+  const getAllocationItemsForStage = useCallback(
+    (stageId: string, allocationsMap: Record<string, string>): BatchAllocationItem[] => {
+      return itemBatches
+        .map((b) => {
+          const stockRecords = perBatchStock.get(b.id) || [];
+          const stageRec = stockRecords.find((s) => s.stage_id === stageId);
+          const availableQty = stageRec?.qty || 0;
+          return {
+            batch_id: b.id,
+            batch_no: b.batch_no,
+            location: b.location || 'Bay Unassigned',
+            supplier_name: b.supplier?.name || null,
+            received_on: b.received_on || null,
+            availableQty,
+            allocatedQty: Number(allocationsMap[b.id]) || 0,
+          };
+        })
+        .filter((item) => item.availableQty > 0);
+    },
+    [itemBatches, perBatchStock]
+  );
+
+  const moveAllocationItems = useMemo(() => {
+    if (activeAction?.type !== 'stage-move') return [];
+    return getAllocationItemsForStage(activeAction.fromStageId, moveAllocations);
+  }, [activeAction, getAllocationItemsForStage, moveAllocations]);
+
+  const scrapAllocationItems = useMemo(() => {
+    if (activeAction?.type !== 'scrap') return [];
+    return getAllocationItemsForStage(activeAction.fromStageId, scrapAllocations);
+  }, [activeAction, getAllocationItemsForStage, scrapAllocations]);
+
+  const readyStageId = useMemo(() => {
+    return stages?.find((s) => s.name === 'Ready')?.id || '';
+  }, [stages]);
+
+  const readyAllocationItems = useMemo(() => {
+    if (!readyStageId) return [];
+    return getAllocationItemsForStage(readyStageId, dispatchAllocations);
+  }, [readyStageId, getAllocationItemsForStage, dispatchAllocations]);
+
+  const fifoSplitsForForm = useMemo(() => {
+    if (activeAction?.type !== 'stage-move') return [];
+    const num = Number(moveQty) || 0;
+    if (num <= 0) return [];
+    return computeFIFOSplits(num, activeAction.fromStageId);
+  }, [activeAction, moveQty, computeFIFOSplits]);
 
   // Smooth scroll to action panel when activated
   useEffect(() => {
@@ -92,52 +242,15 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
     };
     window.addEventListener('keydown', handleGlobalEsc);
     return () => window.removeEventListener('keydown', handleGlobalEsc);
-  }, [activeAction]);
+  }, [activeAction, resetForm]);
 
-  // Movement Form state
-  const [moveQty, setMoveQty] = useState('');
-  const [moveVariantName, setMoveVariantName] = useState('');
-  const [moveColor, setMoveColor] = useState('');
-  const [movePrintingDesign, setMovePrintingDesign] = useState('');
-  const [capName, setCapName] = useState('');
-  const [moveCapItemId, setMoveCapItemId] = useState('');
-  const [atomizerName, setAtomizerName] = useState('');
-  const [moveAtomizerItemId, setMoveAtomizerItemId] = useState('');
-  const [moveBoxName, setMoveBoxName] = useState('');
-  const [moveBoxItemId, setMoveBoxItemId] = useState('');
-  const { profile, role, roleDefinition, canPerform, canTransitionStage } = useAuth();
-  const [moveRemarks, setMoveRemarks] = useState('');
-  const [moveDoneBy, setMoveDoneBy] = useState('');
-  const [splitScrapEnabled, setSplitScrapEnabled] = useState(false);
-  const [splitScrapReason, setSplitScrapReason] = useState<string>(SCRAP_REASONS[0]);
+  const { profile, role, roleDefinition, operatorName, canPerform, canTransitionStage } = useAuth();
 
   useEffect(() => {
     if (!moveDoneBy && (profile?.display_name || profile?.email || roleDefinition.name)) {
       setMoveDoneBy(profile?.display_name || profile?.email || roleDefinition.name);
     }
-  }, [profile, roleDefinition, moveDoneBy]);
-
-  // Multi-variant split allocation
-  const [moveMode, setMoveMode] = useState<'single' | 'multi-split'>('single');
-  const [variantRows, setVariantRows] = useState<VariantRow[]>([]);
-
-  // Scrap Form state
-  const [scrapQty, setScrapQty] = useState('');
-  const [scrapReason, setScrapReason] = useState<string>(SCRAP_REASONS[0]);
-
-  // Dispatch Form state
-  const [dispatchMode, setDispatchMode] = useState<'single' | 'multi-split'>('single');
-  const [dispatchQty, setDispatchQty] = useState('');
-  const [dispatchVariantName, setDispatchVariantName] = useState('');
-  const [customerName, setCustomerName] = useState('');
-  const [invoiceNo, setInvoiceNo] = useState('');
-  const [dispatchDate, setDispatchDate] = useState(getTodayDateString());
-  const [dispatchColor, setDispatchColor] = useState('');
-  const [dispatchPrintingDesign, setDispatchPrintingDesign] = useState('');
-  const [dispatchCapName, setDispatchCapName] = useState('');
-  const [dispatchAtomizerName, setDispatchAtomizerName] = useState('');
-  const [dispatchBoxName, setDispatchBoxName] = useState('');
-  const [dispatchProductSpecs, setDispatchProductSpecs] = useState('');
+  }, [profile, roleDefinition, moveDoneBy, setMoveDoneBy]);
 
   // Reversal Modal state
   const [reversalModalOpen, setReversalModalOpen] = useState(false);
@@ -152,200 +265,8 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
   const [challanModalOpen, setChallanModalOpen] = useState(false);
   const [challanDispatch, setChallanDispatch] = useState<Dispatch | null>(null);
 
-  // Submission state
-  const [submitting, setSubmitting] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-
   const toast = useToast();
 
-  const loadInitial = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [stg, b, c, a, bx] = await Promise.all([
-        fetchStages(),
-        fetchBatches(),
-        fetchCaps(),
-        fetchAtomizers(),
-        fetchBoxes(),
-      ]);
-      const summary = await fetchComponentStockSummary(null, { stages: stg, batches: b }).catch(() => [] as ComponentStockSummary[]);
-
-      setStages(stg);
-      setBatches(b);
-      setCaps(c);
-      setAtomizers(a);
-      setBoxes(bx);
-      const sMap = new Map<string, ComponentStockSummary>();
-      for (const sm of summary) sMap.set(sm.item.id, sm);
-      setStockSummaryMap(sMap);
-      if (b.length > 0 && !batchId) {
-        setBatchId(b[0].id);
-      }
-    } catch (err) {
-      setError(getErrorMessage(err, 'Failed to load outward workflow'));
-    } finally {
-      setLoading(false);
-    }
-  }, [batchId]);
-
-  useEffect(() => {
-    loadInitial();
-  }, [loadInitial]);
-
-  const refreshBatchData = useCallback(async () => {
-    if (!batchId) {
-      setStock([]);
-      setMovements([]);
-      setDispatches([]);
-      setAllocations([]);
-      return;
-    }
-    try {
-      const [stk, mov, disp, allocs] = await Promise.all([
-        fetchBatchStock(batchId),
-        fetchMovements(batchId),
-        fetchDispatches(batchId),
-        fetchBatchAllocations(batchId).catch(() => [] as BatchAllocationWithRelations[]),
-      ]);
-      setStock(stk);
-      setMovements(mov);
-      setDispatches(disp);
-      setAllocations(allocs);
-    } catch (err) {
-      console.error('Error refreshing batch stock data:', err);
-    }
-  }, [batchId]);
-
-  useEffect(() => {
-    refreshBatchData();
-  }, [refreshBatchData]);
-
-  // Realtime subscription
-  useEffect(() => {
-    let timer: NodeJS.Timeout | null = null;
-    const debouncedRefresh = () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        invalidateCache();
-        refreshBatchData();
-      }, 300);
-    };
-
-    const debouncedBatchesRefresh = () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(async () => {
-        invalidateCache();
-        const b = await fetchBatches().catch(() => []);
-        setBatches(b);
-        refreshBatchData();
-      }, 300);
-    };
-
-    const channel = supabase
-      .channel(`outward-realtime-sync-${batchId || 'global'}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'inward_batches' }, debouncedBatchesRefresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'batch_allocations' }, debouncedBatchesRefresh)
-      .on(
-        'postgres_changes',
-        batchId ? { event: '*', schema: 'public', table: 'stage_movements', filter: `batch_id=eq.${batchId}` } : { event: '*', schema: 'public', table: 'stage_movements' },
-        debouncedRefresh
-      )
-      .on(
-        'postgres_changes',
-        batchId ? { event: '*', schema: 'public', table: 'dispatches', filter: `batch_id=eq.${batchId}` } : { event: '*', schema: 'public', table: 'dispatches' },
-        debouncedRefresh
-      )
-      .subscribe();
-
-    return () => {
-      if (timer) clearTimeout(timer);
-      supabase.removeChannel(channel);
-    };
-  }, [batchId, refreshBatchData]);
-
-  const selectedBatch = useMemo(
-    () => batches?.find((b) => b.id === batchId) ?? null,
-    [batches, batchId]
-  );
-
-  const processStages = useMemo(
-    () => stages?.filter((s) => s.name !== 'Scrap / Defect') ?? [],
-    [stages]
-  );
-
-  const qtyAt = useCallback((stageId: string): number => {
-    return stock.find((s) => s.stage_id === stageId)?.qty ?? 0;
-  }, [stock]);
-
-  const dispatchedTotal = useMemo(
-    () => dispatches.reduce((acc, d) => acc + d.qty, 0),
-    [dispatches]
-  );
-
-  const allocatedOutQty = useMemo(
-    () => allocations.filter((a) => a.source_batch_id === batchId).reduce((acc, a) => acc + a.qty, 0),
-    [allocations, batchId]
-  );
-
-  const allocatedInQty = useMemo(
-    () => allocations.filter((a) => a.destination_batch_id === batchId).reduce((acc, a) => acc + a.qty, 0),
-    [allocations, batchId]
-  );
-
-  const netReceivedQty = useMemo(() => {
-    if (!selectedBatch) return 0;
-    return Math.max(0, selectedBatch.qty_received - allocatedOutQty + allocatedInQty);
-  }, [selectedBatch, allocatedOutQty, allocatedInQty]);
-
-  const readyQty = useMemo(() => {
-    const readyStage = stages?.find((s) => s.name === 'Ready');
-    return readyStage ? qtyAt(readyStage.id) : 0;
-  }, [stages, qtyAt]);
-
-  const inFactory = useMemo(() => {
-    if (!selectedBatch) return 0;
-    return processStages.reduce((sum, s) => sum + qtyAt(s.id), 0);
-  }, [selectedBatch, processStages, qtyAt]);
-
-  const scrappedTotal = useMemo(() => {
-    const scrapStage = stages?.find((s) => s.name === 'Scrap / Defect' || s.name.toLowerCase().includes('scrap'));
-    return scrapStage ? qtyAt(scrapStage.id) : 0;
-  }, [stages, qtyAt]);
-
-  const unitLabel = selectedBatch?.item?.unit || 'units';
-
-  const resetForm = () => {
-    setMoveQty('');
-    setMoveVariantName('');
-    setMoveColor('');
-    setMovePrintingDesign('');
-    setCapName('');
-    setMoveCapItemId('');
-    setAtomizerName('');
-    setMoveAtomizerItemId('');
-    setMoveBoxName('');
-    setMoveBoxItemId('');
-    setMoveRemarks('');
-    setMoveDoneBy('');
-    setSplitScrapEnabled(false);
-    setSplitScrapReason(SCRAP_REASONS[0]);
-    setScrapQty('');
-    setScrapReason(SCRAP_REASONS[0]);
-    setDispatchQty('');
-    setDispatchVariantName('');
-    setCustomerName('');
-    setInvoiceNo('');
-    setDispatchDate(getTodayDateString());
-    setDispatchColor('');
-    setDispatchPrintingDesign('');
-    setDispatchCapName('');
-    setDispatchAtomizerName('');
-    setDispatchBoxName('');
-    setDispatchProductSpecs('');
-    setVariantRows([]);
-    setFormError(null);
-  };
 
   // Determine stage flags
   const sourceStage = stages?.find((s) => activeAction?.type === 'stage-move' && s.id === activeAction.fromStageId);
@@ -664,8 +585,25 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
       return;
     }
 
+    const dispatchedStageId = stages?.find((s) => s.name === 'Dispatched')?.id;
+    if (tId === dispatchedStageId) {
+      setFormError('Stock cannot be transferred to Dispatched via internal stage move. Please use "Dispatch to Customer" to generate invoice and challan records.');
+      return;
+    }
+
     // Multi-split mode
     if (moveMode === 'multi-split') {
+      const batchesWithStock = itemBatches.filter(
+        (b) => (perBatchStock.get(b.id)?.find((s) => s.stage_id === fId)?.qty ?? 0) > 0
+      );
+      if (batchesWithStock.length > 1) {
+        setFormError(
+          `Multi-variant split matrix is active for single batches. Stock in ${fromName} spans ${batchesWithStock.length} batches. Please use Single Advance mode.`
+        );
+        return;
+      }
+      const targetBatchId = batchesWithStock[0]?.id || batchId;
+
       if (variantRows.length === 0) {
         setFormError('Please add at least one variant row.');
         return;
@@ -784,11 +722,11 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
         });
 
         await insertMultiVariantStageMovements({
-          batch_id: batchId,
+          batch_id: targetBatchId,
           from_stage_id: fId,
           to_stage_id: tId,
           variants: variantsPayload,
-          done_by: moveDoneBy.trim() || null,
+          done_by: profile?.display_name || profile?.email || roleDefinition.name || moveDoneBy.trim() || null,
           general_remarks: moveRemarks.trim() || null,
           scrapped_qty: splitScrapEnabled && remainingLoss > 0 ? remainingLoss : 0,
           scrap_reason: splitScrapReason,
@@ -897,58 +835,134 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
         }
       }
 
-      if (splitScrapEnabled && remainingLoss > 0 && stages) {
-        await insertSplitStageMovementAndScrap({
-          batch_id: batchId,
-          from_stage_id: fId,
-          to_stage_id: tId,
-          qty_forward: qtyNum,
-          qty_scrapped: remainingLoss,
-          scrap_reason: splitScrapReason,
-          variant_name: resolvedVariantName,
-          cap_name: resolvedCapName,
-          atomizer_name: resolvedAtomizerName,
-          box_name: resolvedBoxName,
-          color: resolvedColor,
-          printing_design: resolvedPrinting,
-          cap_item_id: resolvedCapItemId,
-          atomizer_item_id: resolvedAtomizerItemId,
-          box_item_id: resolvedBoxItemId,
-          remarks: moveRemarks.trim() || null,
-          done_by: moveDoneBy.trim() || null,
-          stages,
+      // User-specified allocations from custom multi-room grid
+      const userSplits: BatchSplit[] = Object.entries(moveAllocations)
+        .filter(([, qtyStr]) => Number(qtyStr) > 0)
+        .map(([bId, qtyStr]) => {
+          const b = itemBatches.find((item) => item.id === bId);
+          return {
+            batch_id: bId,
+            batch_no: b?.batch_no || '',
+            location: b?.location || '',
+            qty: Number(qtyStr),
+          };
         });
 
-        toast.success(
-          `Moved ${formatNumber(qtyNum)} ${unitLabel} (${fromName} → ${toName}) and recorded ${formatNumber(remainingLoss)} ${unitLabel} scrapped (${splitScrapReason}). Zero ghost stock left!`,
-          'Stage Advance Completed'
-        );
+      const forwardSplits = userSplits.length > 0 ? userSplits : computeFIFOSplits(qtyNum, fId);
+      if (forwardSplits.length === 0) {
+        setFormError(`No stock available in ${fromName}.`);
+        setSubmitting(false);
+        return;
+      }
+
+      const scrapSplits =
+        splitScrapEnabled && remainingLoss > 0
+          ? (userSplits.length > 0
+              ? itemBatches
+                  .map((b) => {
+                    const avail = (perBatchStock.get(b.id) || []).find((s) => s.stage_id === fId)?.qty || 0;
+                    const allocated = Number(moveAllocations[b.id]) || 0;
+                    const remain = Math.max(0, avail - allocated);
+                    return {
+                      batch_id: b.id,
+                      batch_no: b.batch_no,
+                      location: b.location || '',
+                      qty: remain,
+                    };
+                  })
+                  .filter((s) => s.qty > 0)
+              : computeFIFOSplitsFromRemaining(remainingLoss, fId, forwardSplits))
+          : [];
+
+      const scrapStageId = stages?.find(
+        (s) => s.name === 'Scrap / Defect' || s.name.toLowerCase().includes('scrap')
+      )?.id;
+
+      if (forwardSplits.length === 1 && scrapSplits.length <= 1) {
+        if (scrapSplits.length === 1 && splitScrapEnabled && stages) {
+          await insertSplitStageMovementAndScrap({
+            batch_id: forwardSplits[0].batch_id,
+            from_stage_id: fId,
+            to_stage_id: tId,
+            qty_forward: forwardSplits[0].qty,
+            qty_scrapped: scrapSplits[0].qty,
+            scrap_reason: splitScrapReason,
+            variant_name: resolvedVariantName,
+            cap_name: resolvedCapName,
+            atomizer_name: resolvedAtomizerName,
+            box_name: resolvedBoxName,
+            color: resolvedColor,
+            printing_design: resolvedPrinting,
+            cap_item_id: resolvedCapItemId,
+            atomizer_item_id: resolvedAtomizerItemId,
+            box_item_id: resolvedBoxItemId,
+            remarks: moveRemarks.trim() || null,
+            done_by: profile?.display_name || profile?.email || roleDefinition.name || moveDoneBy.trim() || null,
+            stages,
+          });
+
+          toast.success(
+            `Moved ${formatNumber(qtyNum)} ${unitLabel} (${fromName} → ${toName}) and recorded ${formatNumber(scrapSplits[0].qty)} ${unitLabel} scrapped (${splitScrapReason}). Zero ghost stock left!`,
+            'Stage Advance Completed'
+          );
+        } else {
+          await insertStageMovement({
+            batch_id: forwardSplits[0].batch_id,
+            from_stage_id: fId,
+            to_stage_id: tId,
+            qty_moved: forwardSplits[0].qty,
+            moved_on: getTodayDateString(),
+            variant_name: resolvedVariantName,
+            cap_name: resolvedCapName,
+            atomizer_name: resolvedAtomizerName,
+            box_name: resolvedBoxName,
+            color: resolvedColor,
+            printing_design: resolvedPrinting,
+            cap_item_id: resolvedCapItemId,
+            atomizer_item_id: resolvedAtomizerItemId,
+            box_item_id: resolvedBoxItemId,
+            cap_qty_used: resolvedCapItemId ? forwardSplits[0].qty : null,
+            atomizer_qty_used: resolvedAtomizerItemId ? forwardSplits[0].qty : null,
+            box_qty_used: resolvedBoxItemId ? forwardSplits[0].qty : null,
+            remarks: moveRemarks.trim() || null,
+            done_by: profile?.display_name || profile?.email || roleDefinition.name || moveDoneBy.trim() || null,
+          });
+
+          toast.success(
+            `Moved ${formatNumber(qtyNum)} ${unitLabel}: ${fromName} → ${toName}`,
+            'Stage Advance Completed'
+          );
+        }
       } else {
-        await insertStageMovement({
-          batch_id: batchId,
+        // Multi-batch atomic execution via RPC
+        await insertMultiBatchStageMovement({
+          splits: forwardSplits,
           from_stage_id: fId,
           to_stage_id: tId,
-          qty_moved: qtyNum,
-          moved_on: getTodayDateString(),
           variant_name: resolvedVariantName,
+          color: resolvedColor,
+          printing_design: resolvedPrinting,
           cap_name: resolvedCapName,
           atomizer_name: resolvedAtomizerName,
           box_name: resolvedBoxName,
-          color: resolvedColor,
-          printing_design: resolvedPrinting,
           cap_item_id: resolvedCapItemId,
           atomizer_item_id: resolvedAtomizerItemId,
           box_item_id: resolvedBoxItemId,
-          cap_qty_used: resolvedCapItemId ? qtyNum : null,
-          atomizer_qty_used: resolvedAtomizerItemId ? qtyNum : null,
-          box_qty_used: resolvedBoxItemId ? qtyNum : null,
           remarks: moveRemarks.trim() || null,
-          done_by: moveDoneBy.trim() || null,
+          done_by: profile?.display_name || profile?.email || roleDefinition.name || moveDoneBy.trim() || null,
+          scrap_splits: scrapSplits.length > 0 ? scrapSplits : undefined,
+          scrap_reason: splitScrapReason,
+          scrap_stage_id: scrapStageId,
+          stages: stages ?? undefined,
         });
 
         toast.success(
-          `Moved ${formatNumber(qtyNum)} ${unitLabel}: ${fromName} → ${toName}`,
-          'Stage Advance Completed'
+          `Moved ${formatNumber(qtyNum)} ${unitLabel} across ${forwardSplits.length} ${forwardSplits.length === 1 ? 'batch' : 'batches'} (${fromName} → ${toName})${
+            scrapSplits.length > 0
+              ? ` with ${formatNumber(scrapSplits.reduce((acc, s) => acc + s.qty, 0))} ${unitLabel} scrapped across ${scrapSplits.length} batches`
+              : ''
+          }!`,
+          'Multi-Batch Advance Completed'
         );
       }
 
@@ -999,18 +1013,51 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
       const latestHistoricalVariant = movements.slice().reverse().find((m) => m.variant_name?.trim())?.variant_name?.trim() || '';
       const resolvedVariantName = moveVariantName.trim() || variantRows[0]?.variant_name?.trim() || latestHistoricalVariant || null;
 
-      await insertScrapMovement({
-        batch_id: batchId,
-        from_stage_id: fId,
-        qty_scrapped: qtyNum,
-        reason: scrapReason,
-        variant_name: resolvedVariantName,
-        color: moveColor.trim() || selectedBatch?.color || null,
-        printing_design: movePrintingDesign.trim() || null,
-        remarks: moveRemarks.trim() || null,
-        done_by: moveDoneBy.trim() || null,
-        stages,
-      });
+      const userScrapSplits: BatchSplit[] = Object.entries(scrapAllocations)
+        .filter(([, qtyStr]) => Number(qtyStr) > 0)
+        .map(([bId, qtyStr]) => {
+          const b = itemBatches.find((item) => item.id === bId);
+          return {
+            batch_id: bId,
+            batch_no: b?.batch_no || '',
+            location: b?.location || '',
+            qty: Number(qtyStr),
+          };
+        });
+
+      const scrapSplits = userScrapSplits.length > 0 ? userScrapSplits : computeFIFOSplits(qtyNum, fId);
+      if (scrapSplits.length === 0) {
+        setFormError(`Only ${formatNumber(available)} ${unitLabel} available in ${fromName}. Cannot scrap ${formatNumber(qtyNum)}.`);
+        setSubmitting(false);
+        return;
+      }
+
+      const scrapStageId = stages?.find(
+        (s) => s.name === 'Scrap / Defect' || s.name.toLowerCase().includes('scrap')
+      )?.id;
+
+      if (scrapSplits.length === 1 && stages) {
+        await insertScrapMovement({
+          batch_id: scrapSplits[0].batch_id,
+          from_stage_id: fId,
+          qty_scrapped: scrapSplits[0].qty,
+          reason: scrapReason,
+          variant_name: resolvedVariantName,
+          color: moveColor.trim() || selectedBatch?.color || null,
+          printing_design: movePrintingDesign.trim() || null,
+          remarks: moveRemarks.trim() || null,
+          done_by: (operatorName || moveDoneBy.trim() || 'Operator').trim(),
+          stages,
+        });
+      } else if (scrapSplits.length > 1 && scrapStageId) {
+        await insertMultiBatchStageMovement({
+          splits: scrapSplits,
+          from_stage_id: fId,
+          to_stage_id: scrapStageId,
+          remarks: `[SCRAP: ${scrapReason}] ${moveRemarks.trim() || ''}`.trim(),
+          done_by: (operatorName || moveDoneBy.trim() || 'Operator').trim(),
+        });
+      }
 
       toast.success(`Recorded ${formatNumber(qtyNum)} ${unitLabel} scrapped from ${fromName} (${scrapReason}).`, 'Scrap Logged');
       resetForm();
@@ -1042,6 +1089,20 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
 
     // Multi-Variant Dispatch Mode
     if (dispatchMode === 'multi-split') {
+      const readyStageId = stages?.find((s) => s.name === 'Ready')?.id;
+      if (!readyStageId) {
+        setFormError('Ready stage not found in stages catalog.');
+        return;
+      }
+      const readyBatches = itemBatches.filter(
+        (b) => (perBatchStock.get(b.id)?.find((s) => s.stage_id === readyStageId)?.qty ?? 0) > 0
+      );
+
+      if (readyBatches.length === 0) {
+        setFormError('No Ready stock available for dispatch.');
+        return;
+      }
+
       if (variantRows.length === 0) {
         setFormError('Please add at least one variant row to dispatch.');
         return;
@@ -1063,7 +1124,29 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
 
       setSubmitting(true);
       try {
-        const variantsPayload = variantRows.map((r) => {
+        const sortedReadyBatches = sortBatchesByFIFO(readyBatches);
+        const batchRemainingMap = new Map<string, number>();
+        for (const b of sortedReadyBatches) {
+          const avail = perBatchStock.get(b.id)?.find((s) => s.stage_id === readyStageId)?.qty ?? 0;
+          batchRemainingMap.set(b.id, avail);
+        }
+
+        type VariantPayloadItem = {
+          qty: number;
+          variant_name: string | null;
+          color: string | null;
+          printing_design: string | null;
+          cap_name: string | null;
+          atomizer_name: string | null;
+          box_name: string | null;
+          box_item_id: string | null;
+          product_specs: string | null;
+        };
+
+        const batchDispatchesMap = new Map<string, VariantPayloadItem[]>();
+
+        for (const r of variantRows) {
+          let needed = Number(r.qty);
           const rowVariant = r.variant_name?.trim() || resolvedDispatchVariant;
           const variantSpecs = [
             rowVariant ? `Variant: ${rowVariant}` : '',
@@ -1074,29 +1157,49 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
             r.box_name ? `Box: ${r.box_name}` : '',
           ].filter(Boolean).join(' • ');
 
-          return {
-            qty: Number(r.qty),
-            variant_name: rowVariant,
-            color: r.color?.trim() || null,
-            printing_design: r.printing_design?.trim() || null,
-            cap_name: r.cap_name?.trim() || null,
-            atomizer_name: r.atomizer_name?.trim() || null,
-            box_name: r.box_name?.trim() || null,
-            box_item_id: r.box_item_id || null,
-            product_specs: variantSpecs || null,
-          };
-        });
+          for (const b of sortedReadyBatches) {
+            if (needed <= 0) break;
+            const currentAvail = batchRemainingMap.get(b.id) ?? 0;
+            if (currentAvail <= 0) continue;
 
-        await insertMultiVariantDispatches({
-          batch_id: batchId,
-          customer_name: customerName.trim(),
-          invoice_no: invoiceNo.trim(),
-          dispatched_on: dispatchDate,
-          variants: variantsPayload,
-        });
+            const take = Math.min(needed, currentAvail);
+            batchRemainingMap.set(b.id, currentAvail - take);
+            needed -= take;
 
+            if (!batchDispatchesMap.has(b.id)) {
+              batchDispatchesMap.set(b.id, []);
+            }
+            batchDispatchesMap.get(b.id)!.push({
+              qty: take,
+              variant_name: rowVariant,
+              color: r.color?.trim() || null,
+              printing_design: r.printing_design?.trim() || null,
+              cap_name: r.cap_name?.trim() || null,
+              atomizer_name: r.atomizer_name?.trim() || null,
+              box_name: r.box_name?.trim() || null,
+              box_item_id: r.box_item_id || null,
+              product_specs: variantSpecs || null,
+            });
+          }
+
+          if (needed > 0) {
+            throw new Error(`Insufficient batch stock for variant "${rowVariant || 'Variant'}".`);
+          }
+        }
+
+        for (const [targetBatchId, batchVariants] of batchDispatchesMap.entries()) {
+          await insertMultiVariantDispatches({
+            batch_id: targetBatchId,
+            customer_name: customerName.trim(),
+            invoice_no: invoiceNo.trim(),
+            dispatched_on: dispatchDate,
+            variants: batchVariants,
+          });
+        }
+
+        const batchCount = batchDispatchesMap.size;
         toast.success(
-          `Dispatched ${formatNumber(totalVariantQty)} ${unitLabel} across ${variantRows.length} variants to ${customerName.trim()} (Inv #${invoiceNo.trim()}).`,
+          `Dispatched ${formatNumber(totalVariantQty)} ${unitLabel} across ${variantRows.length} variants${batchCount > 1 ? ` spanning ${batchCount} batches via FIFO` : ''} to ${customerName.trim()} (Inv #${invoiceNo.trim()}).`,
           'Dispatch Recorded'
         );
         resetForm();
@@ -1127,24 +1230,70 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
       return;
     }
 
-    setSubmitting(true);
-    try {
-      await insertDispatch({
-        batch_id: batchId,
-        qty: qtyNum,
-        customer_name: customerName.trim(),
-        invoice_no: invoiceNo.trim(),
-        dispatched_on: dispatchDate,
-        variant_name: resolvedDispatchVariant,
-        color: dispatchColor.trim() || selectedBatch?.color || null,
-        printing_design: dispatchPrintingDesign.trim() || null,
-        cap_name: dispatchCapName.trim() || null,
-        atomizer_name: dispatchAtomizerName.trim() || null,
-        box_name: dispatchBoxName.trim() || null,
-        product_specs: dispatchProductSpecs.trim() || null,
+    const readyStageId = stages?.find((s) => s.name === 'Ready')?.id;
+    if (!readyStageId) {
+      setFormError('Ready stage not found in stages catalog.');
+      return;
+    }
+
+    const userDispatchSplits: BatchSplit[] = Object.entries(dispatchAllocations)
+      .filter(([, qtyStr]) => Number(qtyStr) > 0)
+      .map(([bId, qtyStr]) => {
+        const b = itemBatches.find((item) => item.id === bId);
+        return {
+          batch_id: bId,
+          batch_no: b?.batch_no || '',
+          location: b?.location || '',
+          qty: Number(qtyStr),
+        };
       });
 
-      toast.success(`Dispatched ${formatNumber(qtyNum)} ${unitLabel} to ${customerName.trim()} (Inv #${invoiceNo.trim()}).`, 'Dispatch Recorded');
+    const dispatchSplits = userDispatchSplits.length > 0
+      ? userDispatchSplits
+      : computeFIFOSplits(qtyNum, readyStageId);
+
+    if (dispatchSplits.length === 0) {
+      setFormError(`Only ${formatNumber(readyQty)} ${unitLabel} are Ready. Cannot ship ${formatNumber(qtyNum)}.`);
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      if (dispatchSplits.length === 1) {
+        await insertDispatch({
+          batch_id: dispatchSplits[0].batch_id,
+          qty: dispatchSplits[0].qty,
+          customer_name: customerName.trim(),
+          invoice_no: invoiceNo.trim(),
+          dispatched_on: dispatchDate,
+          variant_name: resolvedDispatchVariant,
+          color: dispatchColor.trim() || selectedBatch?.color || null,
+          printing_design: dispatchPrintingDesign.trim() || null,
+          cap_name: dispatchCapName.trim() || null,
+          atomizer_name: dispatchAtomizerName.trim() || null,
+          box_name: dispatchBoxName.trim() || null,
+          product_specs: dispatchProductSpecs.trim() || null,
+        });
+      } else {
+        await insertMultiBatchDispatches({
+          splits: dispatchSplits,
+          customer_name: customerName.trim(),
+          invoice_no: invoiceNo.trim(),
+          dispatched_on: dispatchDate,
+          variant_name: resolvedDispatchVariant,
+          color: dispatchColor.trim() || selectedBatch?.color || null,
+          printing_design: dispatchPrintingDesign.trim() || null,
+          cap_name: dispatchCapName.trim() || null,
+          atomizer_name: dispatchAtomizerName.trim() || null,
+          box_name: dispatchBoxName.trim() || null,
+          product_specs: dispatchProductSpecs.trim() || null,
+        });
+      }
+
+      toast.success(
+        `Dispatched ${formatNumber(qtyNum)} ${unitLabel} across ${dispatchSplits.length} ${dispatchSplits.length === 1 ? 'batch' : 'batches'} to ${customerName.trim()} (Inv #${invoiceNo.trim()}).`,
+        'Dispatch Recorded'
+      );
       resetForm();
       setActiveAction(null);
       await refreshBatchData();
@@ -1160,11 +1309,13 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
   // Reversal Handlers
   const openReversalModal = (m: MovementWithRelations) => {
     setReversalTarget(m);
-    setReversalReason(`Correction of movement in ${selectedBatch?.batch_no || ''}`.trim());
+    const targetBatch = batchMap.get(m.batch_id || '') || selectedBatch;
+    setReversalReason(`Correction of movement in Batch ${targetBatch?.batch_no || ''}`.trim());
     setReversalDoneBy(profile?.display_name || profile?.email || roleDefinition.name);
     setReversalError(null);
 
-    const availableInStage = stock.find((s) => s.stage_id === m.to_stage_id)?.qty ?? 0;
+    const bStocks = perBatchStock.get(m.batch_id || '') || stock;
+    const availableInStage = bStocks.find((s) => s.stage_id === m.to_stage_id)?.qty ?? 0;
     const maxReversible = Math.min(m.qty_moved, Math.max(0, availableInStage));
 
     setReversalQty(maxReversible > 0 ? String(maxReversible) : String(m.qty_moved));
@@ -1192,13 +1343,14 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
       return;
     }
 
-    const availableInStage = stock.find((s) => s.stage_id === reversalTarget.to_stage_id)?.qty ?? 0;
+    const bStocks = perBatchStock.get(reversalTarget.batch_id || '') || stock;
+    const availableInStage = bStocks.find((s) => s.stage_id === reversalTarget.to_stage_id)?.qty ?? 0;
     if (availableInStage <= 0) {
-      setReversalError(`Cannot reverse: 0 units currently remain in ${reversalTarget.to_stage?.name ?? 'the current stage'}.`);
+      setReversalError(`Cannot reverse: 0 units currently remain in ${reversalTarget.to_stage?.name ?? 'the current stage'} for this specific batch.`);
       return;
     }
     if (qtyNum > availableInStage) {
-      setReversalError(`Cannot reverse ${qtyNum} units: Only ${availableInStage} units are currently available in ${reversalTarget.to_stage?.name ?? 'the current stage'}.`);
+      setReversalError(`Cannot reverse ${qtyNum} units: Only ${availableInStage} units are currently available in ${reversalTarget.to_stage?.name ?? 'the current stage'} for this batch.`);
       return;
     }
     if (qtyNum > reversalTarget.qty_moved) {
@@ -1237,7 +1389,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
         setBatchId(initialBatchId);
       }
     }
-  }, [initialBatchId, batches, batchId]);
+  }, [initialBatchId, batches, batchId, setBatchId]);
 
   // CSV Export Handlers
   const exportBatchMovementsCSV = () => {
@@ -1247,6 +1399,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
         'Movement Date',
         'Brand Name',
         'Batch No',
+        'Storage Location',
         'Item Name',
         'From Stage',
         'To Stage',
@@ -1260,25 +1413,30 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
         'Operator',
         'Remarks',
       ];
-      const rows = movements.map((m) => [
-        m.moved_on,
-        selectedBatch?.brand_name || '—',
-        selectedBatch?.batch_no || 'Batch',
-        selectedBatch?.item?.name || 'Product',
-        m.from_stage?.name ?? '',
-        m.to_stage?.name ?? '',
-        m.qty_moved,
-        m.variant_name || '',
-        m.color || '',
-        m.printing_design || '',
-        m.cap_name || '',
-        m.atomizer_name || '',
-        m.box_name || '',
-        m.done_by || '',
-        m.remarks || '',
-      ]);
+      const rows = movements.map((m) => {
+        const b = batchMap.get(m.batch_id || '') || selectedBatch;
+        return [
+          m.moved_on,
+          b?.brand_name || '—',
+          b?.batch_no || 'Batch',
+          b?.location || '—',
+          b?.item?.name || selectedItem?.name || 'Product',
+          m.from_stage?.name ?? '',
+          m.to_stage?.name ?? '',
+          m.qty_moved,
+          m.variant_name || '',
+          m.color || '',
+          m.printing_design || '',
+          m.cap_name || '',
+          m.atomizer_name || '',
+          m.box_name || '',
+          m.done_by || '',
+          m.remarks || '',
+        ];
+      });
 
-      const filename = `ffstock_batch_${selectedBatch?.batch_no || 'all'}_movements_${getTodayDateString()}`;
+      const itemNameSlug = (selectedItem?.name || selectedBatch?.item?.name || selectedBatch?.batch_no || 'all').replace(/\s+/g, '_').toLowerCase();
+      const filename = `ffstock_${itemNameSlug}_movements_${getTodayDateString()}`;
       downloadCSV(filename, headers, rows);
       toast.success('Movement audit history CSV exported successfully', 'Export Complete');
     } catch (err) {
@@ -1295,6 +1453,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
         'Dispatch Date',
         'Brand Name',
         'Batch No',
+        'Storage Location',
         'Item SKU',
         'Dispatched Qty',
         'Variant Name',
@@ -1305,24 +1464,29 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
         'Box Name',
         'Product Specifications',
       ];
-      const rows = dispatches.map((d) => [
-        d.invoice_no,
-        d.customer_name,
-        d.dispatched_on,
-        selectedBatch?.brand_name || '—',
-        selectedBatch?.batch_no || 'Batch',
-        selectedBatch?.item?.name || 'Product',
-        d.qty,
-        d.variant_name || '',
-        d.color || '',
-        d.printing_design || '',
-        d.cap_name || '',
-        d.atomizer_name || '',
-        d.box_name || '',
-        d.product_specs || '',
-      ]);
+      const rows = dispatches.map((d) => {
+        const b = batchMap.get(d.batch_id || '') || selectedBatch;
+        return [
+          d.invoice_no,
+          d.customer_name,
+          d.dispatched_on,
+          b?.brand_name || '—',
+          b?.batch_no || 'Batch',
+          b?.location || '—',
+          b?.item?.name || selectedItem?.name || 'Product',
+          d.qty,
+          d.variant_name || '',
+          d.color || '',
+          d.printing_design || '',
+          d.cap_name || '',
+          d.atomizer_name || '',
+          d.box_name || '',
+          d.product_specs || '',
+        ];
+      });
 
-      const filename = `ffstock_batch_${selectedBatch?.batch_no || 'all'}_dispatches_${getTodayDateString()}`;
+      const itemNameSlug = (selectedItem?.name || selectedBatch?.item?.name || selectedBatch?.batch_no || 'all').replace(/\s+/g, '_').toLowerCase();
+      const filename = `ffstock_${itemNameSlug}_dispatches_${getTodayDateString()}`;
       downloadCSV(filename, headers, rows);
       toast.success('Dispatches register CSV exported successfully', 'Export Complete');
     } catch (err) {
@@ -1402,12 +1566,23 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
             allocatedOutQty={allocatedOutQty}
             netReceivedQty={netReceivedQty}
             scrappedTotal={scrappedTotal}
+            selectedItemId={selectedItemId}
+            onSelectItem={(itemId, activeBId) => {
+              setSelectedItemId(itemId);
+              if (activeBId) {
+                setBatchId(activeBId);
+              }
+            }}
+            itemGroups={itemGroups}
+            selectedItem={selectedItem}
+            batchStageDetails={batchStageDetails}
+            stages={stages}
           />
 
-          {!batchId ? (
+          {!batchId && !selectedItemId ? (
             <Card className="text-center py-12 border-dashed">
               <Boxes className="h-10 w-10 text-slate-300 mx-auto mb-3" />
-              <p className="text-sm font-semibold text-slate-700">Select a batch above to view its live pipeline</p>
+              <p className="text-sm font-semibold text-slate-700">Select a product item or batch above to view its live pipeline</p>
               <p className="text-xs text-slate-400 mt-1">You will see each stage balance and 1-click advance buttons for that stock item.</p>
             </Card>
           ) : (
@@ -1422,6 +1597,12 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
                   onStartDispatch={startDispatch}
                   onStartScrap={startScrap}
                   unitLabel={unitLabel}
+                  dispatchedTotal={dispatchedTotal}
+                  dispatchesCount={dispatches.length}
+                  onViewDispatchLog={() => {
+                    const el = document.getElementById('movement-audit-trail');
+                    el?.scrollIntoView({ behavior: 'smooth' });
+                  }}
                 />
 
                 {/* Step 3: Active Action Panel */}
@@ -1531,6 +1712,8 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
                               isLeavingPackaging={isLeavingPackaging}
                               moveQty={moveQty}
                               setMoveQty={setMoveQty}
+                              allocationItems={moveAllocationItems}
+                              onAllocationChange={handleMoveAllocationChange}
                               moveVariantName={moveVariantName}
                               setMoveVariantName={handleUpdateMoveVariantName}
                               moveColor={moveColor}
@@ -1569,6 +1752,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
                               }}
                               onSubmit={handleMoveSubmit}
                               formError={formError}
+                              fifoSplits={fifoSplitsForForm}
                             />
                           )}
                         </div>
@@ -1601,6 +1785,8 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
                             fromStageName={stages?.find((s) => s.id === activeAction.fromStageId)?.name || 'Current Stage'}
                             scrapQty={scrapQty}
                             setScrapQty={setScrapQty}
+                            scrapAllocationItems={scrapAllocationItems}
+                            onScrapAllocationChange={handleScrapAllocationChange}
                             scrapReason={scrapReason}
                             setScrapReason={setScrapReason}
                             moveDoneBy={moveDoneBy}
@@ -1654,6 +1840,8 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
                             setDispatchDate={setDispatchDate}
                             dispatchQty={dispatchQty}
                             setDispatchQty={setDispatchQty}
+                            readyAllocationItems={readyAllocationItems}
+                            onReadyAllocationChange={handleDispatchAllocationChange}
                             dispatchVariantName={dispatchVariantName}
                             setDispatchVariantName={handleUpdateDispatchVariantName}
                             dispatchColor={dispatchColor}
@@ -1702,6 +1890,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
                     setChallanDispatch(d);
                     setChallanModalOpen(true);
                   }}
+                  batchMap={batchMap}
                 />
               </>
             )
@@ -1717,8 +1906,8 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
           setReversalTarget(null);
         }}
         reversalTarget={reversalTarget}
-        selectedBatch={selectedBatch}
-        stock={stock}
+        selectedBatch={reversalTarget?.batch_id ? batchMap.get(reversalTarget.batch_id) || selectedBatch : selectedBatch}
+        stock={reversalTarget?.batch_id ? perBatchStock.get(reversalTarget.batch_id) ?? [] : stock}
         reversalQty={reversalQty}
         setReversalQty={setReversalQty}
         reversalReason={reversalReason}
@@ -1739,7 +1928,7 @@ export function OutwardView({ initialBatchId, initialMovementId }: OutwardViewPr
           setChallanDispatch(null);
         }}
         dispatch={challanDispatch}
-        batch={selectedBatch}
+        batch={challanDispatch?.batch_id ? batchMap.get(challanDispatch.batch_id) || selectedBatch : selectedBatch}
       />
     </div>
   );

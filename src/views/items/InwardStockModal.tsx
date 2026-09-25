@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { PackagePlus, Sparkles, PlusCircle, Plus, Check, RotateCcw, Box, Search, History, ArrowRight, X, Layers } from 'lucide-react';
+import { PackagePlus, Sparkles, PlusCircle, Plus, Check, RotateCcw, Box, Search, History, ArrowRight, X, Layers, AlertTriangle } from 'lucide-react';
 import {
   Modal,
   Field,
@@ -156,13 +156,26 @@ export function InwardStockModal({
       .slice(0, 8);
   }, [batches, batchSearchQuery]);
 
+  // Live duplicate batch number detection
+  const isDuplicateBatchNo = useMemo(
+    () => (batches || []).some((b) => b.batch_no?.trim().toLowerCase() === batchNo.trim().toLowerCase()),
+    [batches, batchNo]
+  );
+
+  // Distinct warehouse locations for quick-pick chips
+  const distinctLocations = useMemo(
+    () => Array.from(new Set((batches || []).map((b) => b.location?.trim()).filter(Boolean) as string[])),
+    [batches]
+  );
+
   // Autofill form from an existing batch
   const handleSelectExistingBatch = (b: BatchWithRelations) => {
     setInwardItemId(b.item_id);
     setBrandName(b.brand_name || '');
     setSupplierId(b.supplier_id);
     setLocation(b.location || '');
-    setBatchNo(b.batch_no); // Keeps batch number for direct top-up / add
+    const randSuffix = Math.random().toString(36).substring(2, 5).toUpperCase();
+    setBatchNo(`${b.batch_no}-${randSuffix}`);
     setAutofilledBatch(b);
     setShowBatchAutofill(false);
     setBatchSearchQuery('');
@@ -269,6 +282,10 @@ export function InwardStockModal({
     }
     if (!batchNo.trim()) {
       setError('Batch number / Lot identifier is required.');
+      return;
+    }
+    if (isDuplicateBatchNo) {
+      setError('Batch number already exists. Each physical shipment must have a unique lot number.');
       return;
     }
     if (!supplierId || supplierId === NEW_OPTION) {
@@ -551,7 +568,7 @@ export function InwardStockModal({
               <div className="flex items-center gap-2 truncate">
                 <Sparkles className="h-4 w-4 text-indigo-600 shrink-0" />
                 <span className="truncate">
-                  Autofilled from past <strong>Batch {autofilledBatch.batch_no}</strong> ({autofilledBatch.brand_name || 'In-House'} • {autofilledBatch.item?.name}). Keeping batch number adds units directly. Click <strong>Auto</strong> to generate a new batch code.
+                  Autofilled specs from past <strong>Batch {autofilledBatch.batch_no}</strong> ({autofilledBatch.brand_name || 'In-House'} • {autofilledBatch.item?.name}). Generated unique lot code for this shipment.
                 </span>
               </div>
               <button
@@ -694,7 +711,7 @@ export function InwardStockModal({
                 <div className="flex gap-2">
                   <input
                     id="inward-batch-no"
-                    className={`${inputClass} font-mono font-black text-slate-950`}
+                    className={`${inputClass} font-mono font-black text-slate-950 ${isDuplicateBatchNo ? 'border-amber-400 bg-amber-50/50' : ''}`}
                     value={batchNo}
                     onChange={(e) => setBatchNo(e.target.value)}
                     placeholder="e.g. RC-2608-ABC"
@@ -712,6 +729,12 @@ export function InwardStockModal({
                     Auto
                   </Button>
                 </div>
+                {isDuplicateBatchNo && (
+                  <p className="mt-1 text-xs font-semibold text-amber-700 flex items-center gap-1 animate-in fade-in">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                    Batch number already exists. Each shipment must have a unique lot number.
+                  </p>
+                )}
               </Field>
             </div>
 
@@ -795,6 +818,20 @@ export function InwardStockModal({
                   placeholder="e.g. Warehouse Bay A-1, Rack 4"
                   required
                 />
+                {distinctLocations.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-1.5">
+                    {distinctLocations.slice(0, 6).map((loc) => (
+                      <button
+                        key={loc}
+                        type="button"
+                        onClick={() => setLocation(loc)}
+                        className="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 text-slate-600 border border-slate-200 transition cursor-pointer"
+                      >
+                        📍 {loc}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </Field>
             </div>
 
@@ -997,6 +1034,7 @@ export function InwardStockModal({
                   type="button"
                   variant="outline"
                   loading={submitting}
+                  disabled={submitting || isDuplicateBatchNo}
                   onClick={() => handleSaveInwardBatch(false)}
                   className="font-bold text-emerald-800 bg-emerald-50 border-emerald-300 hover:bg-emerald-100 cursor-pointer shadow-2xs"
                   title="Log this batch and keep the form open with shared supplier/brand to add another batch immediately"
@@ -1012,6 +1050,7 @@ export function InwardStockModal({
                   type="button"
                   variant="primary"
                   loading={submitting}
+                  disabled={submitting || isDuplicateBatchNo}
                   onClick={() => handleSaveInwardBatch(true)}
                   className="font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-md cursor-pointer"
                 >

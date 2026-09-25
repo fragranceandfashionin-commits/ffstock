@@ -7,6 +7,7 @@ import { Card, Button, Badge, ItemCategoryBadge, ColorBadge } from '@/components
 import type { Stage, BatchWithRelations } from '@/lib/supabase';
 import type { BatchMatrixRow, InspectedBatchItem } from './types';
 import { formatNumber, formatDate } from '@/lib/utils';
+import { useMediaQuery } from '@/lib/useMediaQuery';
 
 export type BatchMatrixTabProps = {
   filteredBatchMatrix: BatchMatrixRow[];
@@ -39,6 +40,7 @@ export function BatchMatrixTab({
   onOpenQuickModal,
   onOpenAllocateModal,
 }: BatchMatrixTabProps) {
+  const isDesktop = useMediaQuery('(min-width: 640px)');
   const [pageSize, setPageSize] = useState<number>(25);
   const [currentPage, setCurrentPage] = useState<number>(1);
 
@@ -159,9 +161,10 @@ export function BatchMatrixTab({
         </div>
       ) : (
         <div>
-          {/* ─── Mobile View: Card-Based Batch Matrix (< sm) ─── */}
-          <div className="p-3.5 space-y-3 sm:hidden">
-            {paginatedBatchMatrix.map((item) => {
+          {!isDesktop ? (
+            /* ─── Mobile View: Card-Based Batch Matrix (< sm) ─── */
+            <div className="p-3.5 space-y-3">
+              {paginatedBatchMatrix.map((item) => {
               const isExpanded = expandedBatchIds.has(item.batch.id);
               const activeStagesList = processStages
                 .map((s) => ({ stage: s, qty: item.stageQuantities[s.id] ?? 0 }))
@@ -546,9 +549,9 @@ export function BatchMatrixTab({
               );
             })}
           </div>
-
-          {/* ─── Desktop View: Full 13+ Column Matrix (>= sm) ─── */}
-          <div className="hidden sm:block overflow-x-auto">
+        ) : (
+          /* ─── Desktop View: Full 13+ Column Matrix (>= sm) ─── */
+          <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">
               <thead className="bg-slate-100 text-left text-xs font-black uppercase tracking-wider text-slate-700 border-b border-slate-200 select-none">
                 <tr>
@@ -1094,7 +1097,8 @@ export function BatchMatrixTab({
                   </div>
                 </div>
               ))}
-          </div>
+            </div>
+          )}
         </div>
       )}
       {renderPagination(false)}

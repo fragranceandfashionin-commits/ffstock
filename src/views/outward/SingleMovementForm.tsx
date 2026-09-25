@@ -2,7 +2,13 @@ import { Zap, ArrowRight, AlertTriangle, AlertCircle } from 'lucide-react';
 import { Field, inputClass, Button, ErrorBanner, Badge, ColorChipsInput, PrintingChipsInput } from '@/components/ui';
 import { COMMON_COLORS, COMMON_PRINTING_DESIGNS, SCRAP_REASONS } from '@/lib/supabase';
 import type { Item, ComponentStockSummary } from '@/lib/supabase';
+import type { BatchSplit } from './types';
 import { formatNumber } from '@/lib/utils';
+import { useAuth } from '@/lib/auth';
+import {
+  BatchLocationAllocationGrid,
+  type BatchAllocationItem,
+} from './BatchLocationAllocationGrid';
 
 export type SingleMovementFormProps = {
   activeSourceQty: number;
@@ -18,6 +24,8 @@ export type SingleMovementFormProps = {
   isLeavingPackaging: boolean;
   moveQty: string;
   setMoveQty: (val: string) => void;
+  allocationItems?: BatchAllocationItem[];
+  onAllocationChange?: (batchId: string, val: string) => void;
   moveVariantName?: string;
   setMoveVariantName?: (val: string) => void;
   moveColor: string;
@@ -53,10 +61,12 @@ export type SingleMovementFormProps = {
   onCancel: () => void;
   onSubmit: () => void;
   formError: string | null;
+  fifoSplits?: BatchSplit[];
 };
 
 export function SingleMovementForm({
   activeSourceQty,
+  fromStageName,
   toStageName,
   isColoringStage,
   isLeavingColoring,
@@ -66,6 +76,8 @@ export function SingleMovementForm({
   isLeavingPackaging,
   moveQty,
   setMoveQty,
+  allocationItems = [],
+  onAllocationChange,
   moveVariantName = '',
   setMoveVariantName,
   moveColor,
@@ -101,9 +113,14 @@ export function SingleMovementForm({
   onCancel,
   onSubmit,
   formError,
+  fifoSplits,
 }: SingleMovementFormProps) {
+  const { profile, isAuthenticated, roleDefinition } = useAuth();
   const numericQty = Number(moveQty) || 0;
-  const isOverQty = numericQty > activeSourceQty;
+  const hasCardOverAllocation = allocationItems && allocationItems.length > 0
+    ? allocationItems.some((item) => item.allocatedQty > item.availableQty)
+    : false;
+  const isOverQty = numericQty > activeSourceQty || hasCardOverAllocation;
   const remainingStageQty = Math.max(0, activeSourceQty - numericQty);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -120,73 +137,120 @@ export function SingleMovementForm({
 
   return (
     <div onKeyDown={handleKeyDown} className="space-y-4">
-      {/* Exact Raw Quantity Input */}
-      <Field label={`How many ${unitLabel} to move?`} htmlFor="move-qty" required>
-        <div className="space-y-2">
-          <div className="relative">
-            <input
-              id="move-qty"
-              type="number"
-              inputMode="numeric"
-              min={1}
-              max={activeSourceQty}
-              className={`${inputClass} text-base font-black pr-28 ${isOverQty ? 'border-rose-400 ring-2 ring-rose-100 bg-rose-50/40' : ''}`}
-              value={moveQty}
-              onChange={(e) => setMoveQty(e.target.value)}
-              placeholder={`1 to ${formatNumber(activeSourceQty)}`}
-              disabled={activeSourceQty === 0 || submitting}
-              autoFocus
-            />
-            {activeSourceQty > 0 && (
-              <button
-                type="button"
-                onClick={() => setMoveQty(String(activeSourceQty))}
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-bold text-white hover:bg-slate-800 transition flex items-center gap-1 shadow-2xs cursor-pointer"
-              >
-                <Zap className="h-3 w-3 text-amber-400" /> All ({formatNumber(activeSourceQty)})
-              </button>
-            )}
-          </div>
+      {/* Allocation Section: Rectangle Cards Grid or Fallback Scalar */}
+      {allocationItems && allocationItems.length > 0 && onAllocationChange ? (
+        <BatchLocationAllocationGrid
+          items={allocationItems}
+          onAllocationChange={onAllocationChange}
+          unitLabel={unitLabel}
+          stageName={fromStageName}
+          theme="indigo"
+          disabled={submitting}
+        />
+      ) : (
+        <>
+          {/* Exact Raw Quantity Input */}
+          <Field label={`How many ${unitLabel} to move?`} htmlFor="move-qty" required>
+            <div className="space-y-2">
+              <div className="relative">
+                <input
+                  id="move-qty"
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={activeSourceQty}
+                  className={`${inputClass} text-base font-black pr-28 ${isOverQty ? 'border-rose-400 ring-2 ring-rose-100 bg-rose-50/40' : ''}`}
+                  value={moveQty}
+                  onChange={(e) => setMoveQty(e.target.value)}
+                  placeholder={`1 to ${formatNumber(activeSourceQty)}`}
+                  disabled={activeSourceQty === 0 || submitting}
+                  autoFocus
+                />
+                {activeSourceQty > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setMoveQty(String(activeSourceQty))}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-bold text-white hover:bg-slate-800 transition flex items-center gap-1 shadow-2xs cursor-pointer"
+                  >
+                    <Zap className="h-3 w-3 text-amber-400" /> All ({formatNumber(activeSourceQty)})
+                  </button>
+                )}
+              </div>
 
-          {/* Quick Quantity Preset Chips */}
-          {activeSourceQty > 1 && (
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-[11px] font-bold text-slate-400 mr-1">Quick presets:</span>
-              <button
-                type="button"
-                onClick={() => setMoveQty(String(activeSourceQty))}
-                className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 cursor-pointer transition"
-              >
-                100% ({formatNumber(activeSourceQty)})
-              </button>
-              {halfQty > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setMoveQty(String(halfQty))}
-                  className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 cursor-pointer transition"
-                >
-                  50% ({formatNumber(halfQty)})
-                </button>
-              )}
-              {quarterQty > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setMoveQty(String(quarterQty))}
-                  className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 cursor-pointer transition"
-                >
-                  25% ({formatNumber(quarterQty)})
-                </button>
+              {/* Quick Quantity Preset Chips */}
+              {activeSourceQty > 1 && (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[11px] font-bold text-slate-400 mr-1">Quick presets:</span>
+                  <button
+                    type="button"
+                    onClick={() => setMoveQty(String(activeSourceQty))}
+                    className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 cursor-pointer transition"
+                  >
+                    100% ({formatNumber(activeSourceQty)})
+                  </button>
+                  {halfQty > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setMoveQty(String(halfQty))}
+                      className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 cursor-pointer transition"
+                    >
+                      50% ({formatNumber(halfQty)})
+                    </button>
+                  )}
+                  {quarterQty > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setMoveQty(String(quarterQty))}
+                      className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 cursor-pointer transition"
+                    >
+                      25% ({formatNumber(quarterQty)})
+                    </button>
+                  )}
+                </div>
               )}
             </div>
+            {isOverQty && (
+              <div className="mt-1 flex items-center gap-1 text-xs font-semibold text-rose-600">
+                <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                Exceeds available: Only {formatNumber(activeSourceQty)} {unitLabel} in source stage.
+              </div>
+            )}
+          </Field>
+
+          {/* FIFO Split Preview Badge Strip */}
+          {fifoSplits && fifoSplits.length > 1 && !isOverQty && (
+            <div className="p-3 rounded-xl bg-amber-50/80 border border-amber-200/90 text-xs text-amber-950 flex flex-col gap-1.5 animate-in fade-in duration-150">
+              <div className="flex items-center gap-1.5 font-bold text-[11px] uppercase tracking-wider text-amber-800">
+                <Zap className="h-3.5 w-3.5 text-amber-600 fill-amber-500" />
+                <span>Auto-FIFO Multi-Batch Deduction ({fifoSplits.length} batches)</span>
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {fifoSplits.map((split, sIdx) => (
+                  <span
+                    key={split.batch_id}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-amber-200 text-[11px] font-semibold text-slate-800 shadow-2xs"
+                  >
+                    <span className="font-mono font-black text-indigo-700">
+                      {formatNumber(split.qty)} {unitLabel}
+                    </span>
+                    <span className="text-slate-400">from</span>
+                    <strong className="font-mono text-slate-900">#{split.batch_no}</strong>
+                    {split.location && (
+                      <span className="text-[10px] font-medium text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
+                        📍 {split.location}
+                      </span>
+                    )}
+                    {sIdx < fifoSplits.length - 1 && (
+                      <span className="text-amber-500 font-black ml-1">+</span>
+                    )}
+                  </span>
+                ))}
+              </div>
+            </div>
           )}
-        </div>
-        {isOverQty && (
-          <div className="mt-1 flex items-center gap-1 text-xs font-semibold text-rose-600">
-            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-            Exceeds available: Only {formatNumber(activeSourceQty)} {unitLabel} in source stage.
-          </div>
-        )}
-      </Field>
+        </>
+      )}
+
 
       {/* VARIANT NAME SECTION */}
       {setMoveVariantName && (
@@ -620,14 +684,14 @@ export function SingleMovementForm({
 
       {/* Operator & Remarks */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-        <Field label="Operator / Done By (Optional)" htmlFor="done-by">
+        <Field label={isAuthenticated ? 'Verified Operator' : 'Operator / Done By (Optional)'} htmlFor="done-by">
           <input
             id="done-by"
-            className={inputClass}
-            value={moveDoneBy}
-            onChange={(e) => setMoveDoneBy(e.target.value)}
+            className={`${inputClass} ${isAuthenticated ? 'bg-slate-100 font-bold text-slate-800 cursor-not-allowed border-slate-300' : ''}`}
+            value={isAuthenticated ? (profile?.display_name || profile?.email || roleDefinition.name) : moveDoneBy}
+            onChange={(e) => !isAuthenticated && setMoveDoneBy(e.target.value)}
             placeholder="e.g. Ramesh / Shift A"
-            disabled={submitting}
+            disabled={submitting || isAuthenticated}
           />
         </Field>
         <Field label="Remarks (Optional)" htmlFor="remarks">
@@ -652,7 +716,7 @@ export function SingleMovementForm({
         <Button
           variant="primary"
           loading={submitting}
-          disabled={!moveQty || isOverQty || activeSourceQty === 0 || submitting}
+          disabled={!moveQty || numericQty <= 0 || isOverQty || activeSourceQty === 0 || submitting}
           onClick={onSubmit}
           className="flex-1 font-bold"
         >

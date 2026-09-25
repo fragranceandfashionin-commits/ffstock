@@ -14,6 +14,9 @@ export type PipelineVisualizerProps = {
   onStartDispatch: () => void;
   onStartScrap: (stageId: string) => void;
   unitLabel: string;
+  dispatchedTotal?: number;
+  dispatchesCount?: number;
+  onViewDispatchLog?: () => void;
 };
 
 export function PipelineVisualizer({
@@ -24,6 +27,9 @@ export function PipelineVisualizer({
   onStartDispatch,
   onStartScrap,
   unitLabel,
+  dispatchedTotal = 0,
+  dispatchesCount = 0,
+  onViewDispatchLog,
 }: PipelineVisualizerProps) {
   const { role, roleDefinition, canPerform, canTransitionStage } = useAuth();
   const totalStockInPipeline = processStages.reduce((sum, s) => sum + qtyAt(s.id), 0);
@@ -272,6 +278,86 @@ export function PipelineVisualizer({
               </div>
             );
           })}
+
+          {/* Terminal Outward Dispatched Milestone Card */}
+          <div
+            className={`min-w-[250px] xl:min-w-0 flex-1 snap-start relative rounded-2xl p-4 transition-all duration-200 flex flex-col justify-between border ${
+              dispatchedTotal > 0
+                ? 'border-violet-200/90 bg-gradient-to-b from-white to-violet-50/30 shadow-xs hover:border-violet-300'
+                : 'border-slate-200/70 bg-slate-50/40 opacity-75 hover:opacity-100'
+            }`}
+          >
+            <div>
+              {/* Milestone Badge & Status Pill */}
+              <div className="flex items-center justify-between mb-2">
+                <span className="inline-flex items-center gap-1 text-[11px] font-black uppercase tracking-wider text-violet-700">
+                  <span className="h-4 w-4 rounded-full bg-violet-100 text-violet-800 flex items-center justify-center text-[10px] font-bold">
+                    ✓
+                  </span>
+                  Terminal Outward
+                </span>
+
+                {dispatchedTotal > 0 ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-bold text-violet-800 border border-violet-200">
+                    <span className="h-1.5 w-1.5 rounded-full bg-violet-500 animate-pulse" />
+                    Fulfilled
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-semibold text-slate-400">Awaiting Orders</span>
+                )}
+              </div>
+
+              {/* Card Title */}
+              <h3 className="font-extrabold text-slate-900 text-sm tracking-tight flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <Truck className="h-4 w-4 text-violet-600" />
+                  Dispatched to Clients
+                </span>
+              </h3>
+
+              {/* Quantity Display */}
+              <div className="my-3">
+                <div className="flex items-baseline gap-1.5">
+                  <p className={`text-2xl font-black ${dispatchedTotal > 0 ? 'text-violet-950' : 'text-slate-400'}`}>
+                    {formatNumber(dispatchedTotal)}
+                  </p>
+                  <span className="text-xs font-bold text-slate-500">{unitLabel}</span>
+                </div>
+                <div className="flex items-center justify-between text-[11px] font-medium text-slate-400 mt-0.5">
+                  <span>
+                    {dispatchesCount > 0
+                      ? `${dispatchesCount} shipment${dispatchesCount === 1 ? '' : 's'} fulfilled`
+                      : '0 client shipments'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Actions for Dispatched Milestone */}
+            <div className="space-y-1.5 pt-2.5 border-t border-slate-100">
+              {dispatchedTotal > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onViewDispatchLog) {
+                      onViewDispatchLog();
+                    } else {
+                      const el = document.getElementById('movement-audit-trail');
+                      el?.scrollIntoView({ behavior: 'smooth' });
+                    }
+                  }}
+                  className="w-full flex items-center justify-center gap-1.5 rounded-xl border border-violet-200 bg-violet-50/70 hover:bg-violet-100 px-3 py-2 text-xs font-extrabold text-violet-800 transition active:scale-[0.98] cursor-pointer shadow-2xs"
+                >
+                  <Truck className="h-3.5 w-3.5 text-violet-600 shrink-0" />
+                  <span className="truncate">View Dispatch Log</span>
+                </button>
+              ) : (
+                <div className="py-2 text-center text-[11px] font-medium text-slate-400 italic">
+                  Awaiting dispatch orders
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </Card>

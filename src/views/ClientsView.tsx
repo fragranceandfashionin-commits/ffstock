@@ -34,6 +34,7 @@ import type { Client } from '@/lib/supabase';
 import type { View } from '@/lib/types';
 import type { NavigationContext } from '@/components/AppShell';
 import { getErrorMessage } from '@/lib/utils';
+import { useAuth } from '@/lib/auth';
 
 export type ClientsViewProps = {
   initialClientId?: string;
@@ -41,6 +42,7 @@ export type ClientsViewProps = {
 };
 
 export function ClientsView({ initialClientId, onViewChange }: ClientsViewProps) {
+  const { canPerform, role } = useAuth();
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -191,6 +193,11 @@ export function ClientsView({ initialClientId, onViewChange }: ClientsViewProps)
   // Delete Client with foreign-key protection guard
   const handleConfirmDelete = async () => {
     if (!deleteModalClient) return;
+    if (role !== 'admin') {
+      toast.error('Only Plant General Managers (admin) are authorized to delete clients.');
+      setDeleteModalClient(null);
+      return;
+    }
     setDeleting(true);
     try {
       await deleteClient(deleteModalClient.id);
@@ -219,12 +226,12 @@ export function ClientsView({ initialClientId, onViewChange }: ClientsViewProps)
       }
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const matchName = client.name.toLowerCase().includes(q);
-        const matchCompany = client.company_name?.toLowerCase().includes(q);
-        const matchEmail = client.email?.toLowerCase().includes(q);
-        const matchPhone = client.phone?.toLowerCase().includes(q);
-        const matchPref = client.preferences?.toLowerCase().includes(q);
-        return matchName || matchCompany || matchEmail || matchPhone || matchPref;
+        return (
+          client.name.toLowerCase().includes(q) ||
+          (client.company_name && client.company_name.toLowerCase().includes(q)) ||
+          (client.email && client.email.toLowerCase().includes(q)) ||
+          (client.phone && client.phone.toLowerCase().includes(q))
+        );
       }
       return true;
     });
@@ -240,13 +247,15 @@ export function ClientsView({ initialClientId, onViewChange }: ClientsViewProps)
         title="Clients Directory"
         subtitle="Manage client CRM profiles, contact details, and packaging specifications"
         action={
-          <Button
-            variant="primary"
-            onClick={handleOpenCreate}
-          >
-            <Plus className="h-4 w-4" />
-            New Client
-          </Button>
+          canPerform('manage_clients') ? (
+            <Button
+              variant="primary"
+              onClick={handleOpenCreate}
+            >
+              <Plus className="h-4 w-4" />
+              New Client
+            </Button>
+          ) : undefined
         }
       />
 

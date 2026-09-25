@@ -4,6 +4,10 @@ import { Field, inputClass, Button, ErrorBanner, ColorSelect, PrintingSelect } f
 import type { Item, ComponentStockSummary } from '@/lib/supabase';
 import type { VariantRow } from './types';
 import { formatNumber } from '@/lib/utils';
+import {
+  BatchLocationAllocationGrid,
+  type BatchAllocationItem,
+} from './BatchLocationAllocationGrid';
 
 export type DispatchFormProps = {
   dispatchMode: 'single' | 'multi-split';
@@ -18,6 +22,8 @@ export type DispatchFormProps = {
   setDispatchDate: (val: string) => void;
   dispatchQty: string;
   setDispatchQty: (val: string) => void;
+  readyAllocationItems?: BatchAllocationItem[];
+  onReadyAllocationChange?: (batchId: string, val: string) => void;
   dispatchVariantName?: string;
   setDispatchVariantName?: (val: string) => void;
   dispatchColor: string;
@@ -60,6 +66,8 @@ export function DispatchForm({
   setDispatchDate,
   dispatchQty,
   setDispatchQty,
+  readyAllocationItems = [],
+  onReadyAllocationChange,
   dispatchVariantName = '',
   setDispatchVariantName,
   dispatchColor,
@@ -89,7 +97,10 @@ export function DispatchForm({
   formError,
 }: DispatchFormProps) {
   const numericQty = Number(dispatchQty) || 0;
-  const isOverQty = numericQty > readyQty;
+  const hasReadyCardOverAllocation = readyAllocationItems && readyAllocationItems.length > 0
+    ? readyAllocationItems.some((item) => item.allocatedQty > item.availableQty)
+    : false;
+  const isOverQty = numericQty > readyQty || hasReadyCardOverAllocation;
   const totalVariantQty = variantRows.reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
   const unallocatedVariantQty = Math.max(0, readyQty - totalVariantQty);
   const isVariantOverAllocated = totalVariantQty > readyQty;
@@ -428,39 +439,50 @@ export function DispatchForm({
           </div>
         </div>
       ) : (
-        /* OPTION 2: SINGLE / FULL BATCH DISPATCH */
+        /* OPTION 2: SINGLE / MULTI-ROOM BATCH DISPATCH */
         <div className="space-y-4">
-          <Field label={`Dispatch Quantity (${unitLabel})`} htmlFor="disp-qty" required>
-            <div className="relative">
-              <input
-                id="disp-qty"
-                type="number"
-                inputMode="numeric"
-                min={1}
-                max={readyQty}
-                className={`${inputClass} text-base font-black pr-24 ${isOverQty ? 'border-rose-400 ring-2 ring-rose-100 bg-rose-50/40' : ''}`}
-                value={dispatchQty}
-                onChange={(e) => setDispatchQty(e.target.value)}
-                placeholder={`1 to ${formatNumber(readyQty)}`}
-                disabled={readyQty === 0 || submitting}
-              />
-              {readyQty > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setDispatchQty(String(readyQty))}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg bg-emerald-700 px-2.5 py-1.5 text-xs font-bold text-white hover:bg-emerald-800 transition flex items-center gap-1 shadow-2xs cursor-pointer"
-                >
-                  <Zap className="h-3 w-3 text-amber-300" /> All ({formatNumber(readyQty)})
-                </button>
-              )}
-            </div>
-            {isOverQty && (
-              <div className="mt-1 flex items-center gap-1 text-xs font-semibold text-rose-600">
-                <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-                Only {formatNumber(readyQty)} {unitLabel} ready for dispatch.
+          {readyAllocationItems && readyAllocationItems.length > 0 && onReadyAllocationChange ? (
+            <BatchLocationAllocationGrid
+              items={readyAllocationItems}
+              onAllocationChange={onReadyAllocationChange}
+              unitLabel={unitLabel}
+              stageName="Ready Stock"
+              theme="emerald"
+              disabled={submitting}
+            />
+          ) : (
+            <Field label={`Dispatch Quantity (${unitLabel})`} htmlFor="disp-qty" required>
+              <div className="relative">
+                <input
+                  id="disp-qty"
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={readyQty}
+                  className={`${inputClass} text-base font-black pr-24 ${isOverQty ? 'border-rose-400 ring-2 ring-rose-100 bg-rose-50/40' : ''}`}
+                  value={dispatchQty}
+                  onChange={(e) => setDispatchQty(e.target.value)}
+                  placeholder={`1 to ${formatNumber(readyQty)}`}
+                  disabled={readyQty === 0 || submitting}
+                />
+                {readyQty > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setDispatchQty(String(readyQty))}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg bg-emerald-700 px-2.5 py-1.5 text-xs font-bold text-white hover:bg-emerald-800 transition flex items-center gap-1 shadow-2xs cursor-pointer"
+                  >
+                    <Zap className="h-3 w-3 text-amber-300" /> All ({formatNumber(readyQty)})
+                  </button>
+                )}
               </div>
-            )}
-          </Field>
+              {isOverQty && (
+                <div className="mt-1 flex items-center gap-1 text-xs font-semibold text-rose-600">
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                  Only {formatNumber(readyQty)} {unitLabel} ready for dispatch.
+                </div>
+              )}
+            </Field>
+          )}
 
           {/* Product Specification for Dispatch */}
           <div className="rounded-xl border border-emerald-200 bg-emerald-50/30 p-3.5 space-y-3">
@@ -620,7 +642,7 @@ export function DispatchForm({
             submitting ||
             (dispatchMode === 'multi-split'
               ? totalVariantQty <= 0 || isVariantOverAllocated
-              : !dispatchQty || isOverQty)
+              : !dispatchQty || numericQty <= 0 || isOverQty)
           }
           onClick={onSubmit}
           className="flex-1 bg-emerald-600 hover:bg-emerald-700 shadow-xs font-bold"

@@ -38,12 +38,14 @@ import type {
 import type { View } from '@/lib/types';
 import type { NavigationContext } from '@/components/AppShell';
 import { getErrorMessage, formatDate, getTodayDateString } from '@/lib/utils';
+import { useAuth } from '@/lib/auth';
 
 export type VendorPendingViewProps = {
   onViewChange?: (view: View, context?: NavigationContext) => void;
 };
 
 export function VendorPendingView({ onViewChange }: VendorPendingViewProps) {
+  const { canPerform } = useAuth();
   const [items, setItems] = useState<MaterialAllocationWithVendorRelations[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
@@ -107,6 +109,10 @@ export function VendorPendingView({ onViewChange }: VendorPendingViewProps) {
 
   // Mark as Received (1-click action with undo capability)
   const handleMarkReceived = async (alloc: MaterialAllocationWithVendorRelations) => {
+    if (!canPerform('manage_orders')) {
+      toast.error('Permission denied: You do not have permission to mark components received.');
+      return;
+    }
     try {
       await markAllocationReceived(alloc.id);
       toast.success(`Received ${alloc.component_name} for order ${alloc.order?.order_no || ''}!`);
@@ -127,6 +133,10 @@ export function VendorPendingView({ onViewChange }: VendorPendingViewProps) {
 
   // Revert Received item back to Pending (Reversibility!)
   const handleRevertToPending = async (alloc: MaterialAllocationWithVendorRelations) => {
+    if (!canPerform('reverse_allocation')) {
+      toast.error('Permission denied: Only administrators and production managers can revert allocations.');
+      return;
+    }
     try {
       await revertAllocationToPending(alloc.id);
       toast.info(`Reverted ${alloc.component_name} back to pending`);
@@ -143,6 +153,10 @@ export function VendorPendingView({ onViewChange }: VendorPendingViewProps) {
 
   // Reassign Vendor
   const handleConfirmReassign = async () => {
+    if (!canPerform('manage_orders')) {
+      toast.error('Permission denied: You do not have permission to reassign components.');
+      return;
+    }
     if (!reassignItem || !newVendorId) return;
     setReassigning(true);
     try {
@@ -451,15 +465,19 @@ export function VendorPendingView({ onViewChange }: VendorPendingViewProps) {
                         {item.received_at ? formatDate(item.received_at) : 'Just now'}
                       </td>
                       <td className="py-2.5 px-3 text-right">
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => handleRevertToPending(item)}
-                          title="Revert back to pending"
-                        >
-                          <RotateCcw className="h-4 w-4" />
-                          Revert to Pending
-                        </Button>
+                        {canPerform('reverse_allocation') ? (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => handleRevertToPending(item)}
+                            title="Revert back to pending"
+                          >
+                            <RotateCcw className="h-4 w-4" />
+                            Revert to Pending
+                          </Button>
+                        ) : (
+                          <span className="text-slate-400 text-xs italic">Received</span>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -674,34 +692,40 @@ export function VendorPendingView({ onViewChange }: VendorPendingViewProps) {
                                   )}
                                 </td>
 
-                                {/* Actions */}
-                                <td className="py-2.5 px-4 text-right">
-                                  <div className="flex items-center justify-end gap-1.5">
-                                    {/* Reassign Button */}
-                                    <button
-                                      type="button"
-                                      className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition"
-                                      onClick={() => {
-                                        setReassignItem(item);
-                                        setNewVendorId(item.vendor_id || '');
-                                      }}
-                                      title="Reassign to another vendor"
-                                    >
-                                      <ArrowRightLeft className="h-4 w-4" />
-                                    </button>
+                                 {/* Actions */}
+                                 <td className="py-2.5 px-4 text-right">
+                                   <div className="flex items-center justify-end gap-1.5">
+                                     {canPerform('manage_orders') ? (
+                                       <>
+                                         {/* Reassign Button */}
+                                         <button
+                                           type="button"
+                                           className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition"
+                                           onClick={() => {
+                                             setReassignItem(item);
+                                             setNewVendorId(item.vendor_id || '');
+                                           }}
+                                           title="Reassign to another vendor"
+                                         >
+                                           <ArrowRightLeft className="h-4 w-4" />
+                                         </button>
 
-                                    {/* Mark Received Button */}
-                                    <Button
-                                      variant="primary"
-                                      size="sm"
-                                      className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                                      onClick={() => handleMarkReceived(item)}
-                                    >
-                                      <Check className="h-4 w-4" />
-                                      Received
-                                    </Button>
-                                  </div>
-                                </td>
+                                         {/* Mark Received Button */}
+                                         <Button
+                                           variant="primary"
+                                           size="sm"
+                                           className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                                           onClick={() => handleMarkReceived(item)}
+                                         >
+                                           <Check className="h-4 w-4" />
+                                           Received
+                                         </Button>
+                                       </>
+                                     ) : (
+                                       <span className="text-slate-400 text-xs italic">Pending</span>
+                                     )}
+                                   </div>
+                                 </td>
                               </tr>
                             );
                           })}

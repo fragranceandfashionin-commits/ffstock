@@ -15,6 +15,7 @@ import {
   History,
   MoreHorizontal,
   UserCheck,
+  LogIn,
 } from 'lucide-react';
 import type { View } from '@/lib/types';
 import { classNames } from '@/lib/utils';
@@ -62,7 +63,7 @@ export function AppShell({ view, onViewChange, children }: AppShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
-  const { roleDefinition, canAccessView } = useAuth();
+  const { roleDefinition, canAccessView, isAuthenticated, profile } = useAuth();
 
   const visibleNavItems = useMemo(
     () => ALL_NAV_ITEMS.filter((item) => canAccessView(item.id)),
@@ -107,9 +108,31 @@ export function AppShell({ view, onViewChange, children }: AppShellProps) {
     return () => window.removeEventListener('keydown', onKey);
   }, [searchOpen]);
 
+  const [isOnline, setIsOnline] = useState(() =>
+    typeof navigator !== 'undefined' && 'onLine' in navigator ? navigator.onLine : true
+  );
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
   return (
     <ToastProvider>
       <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col antialiased">
+        {!isOnline && (
+          <div className="bg-amber-600 text-white text-xs font-bold px-4 py-2 text-center sticky top-0 z-50 shadow-md">
+            ⚠️ Factory Workstation Offline. Network disconnected. Please reconnect before logging movements.
+          </div>
+        )}
         <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/90 backdrop-blur-md">
           <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-3 sm:px-6 gap-2 sm:gap-3">
             {/* Left: Brand & Mobile Menu Button */}
@@ -166,15 +189,29 @@ export function AppShell({ view, onViewChange, children }: AppShellProps) {
             {/* Right: Desktop Navigation Tabs & Mobile Search Icon */}
             <div className="flex items-center gap-1.5 sm:gap-2">
               {/* Workstation Shift / Role Badge */}
-              <button
-                type="button"
-                onClick={() => setLoginOpen(true)}
-                className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition shadow-2xs cursor-pointer ${roleDefinition.color}`}
-                title={`Active Station: ${roleDefinition.label} (${roleDefinition.department}). Click to change station.`}
-              >
-                <UserCheck className="h-3.5 w-3.5" />
-                <span className="truncate max-w-[120px] xl:max-w-[150px]">{roleDefinition.label}</span>
-              </button>
+              {isAuthenticated ? (
+                <button
+                  type="button"
+                  onClick={() => setLoginOpen(true)}
+                  className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition shadow-2xs cursor-pointer ${roleDefinition.color}`}
+                  title={`Active Station: ${roleDefinition.label} (${roleDefinition.department})${profile?.display_name ? ` • ${profile.display_name}` : ''}. Click to manage shift.`}
+                >
+                  <UserCheck className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate max-w-[120px] xl:max-w-[150px]">
+                    {profile?.display_name || roleDefinition.label}
+                  </span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setLoginOpen(true)}
+                  className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition shadow-xs cursor-pointer"
+                  title="Sign In to Factory Workstation"
+                >
+                  <LogIn className="h-3.5 w-3.5" />
+                  <span>Station Sign In</span>
+                </button>
+              )}
 
               <button
                 type="button"
@@ -251,20 +288,26 @@ export function AppShell({ view, onViewChange, children }: AppShellProps) {
                 {/* Station Switcher Banner */}
                 <div className="mb-4 p-3 rounded-2xl border border-slate-200 bg-slate-50 flex items-center justify-between gap-2">
                   <div className="min-w-0">
-                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Active Workstation</span>
-                    <p className="text-xs font-black text-slate-900 truncate">{roleDefinition.label}</p>
-                    <p className="text-[10px] text-slate-500 truncate">{roleDefinition.department}</p>
+                    <span className="text-[10px] font-bold uppercase text-slate-400 block">
+                      {isAuthenticated ? 'Active Workstation' : 'Workstation Status'}
+                    </span>
+                    <p className="text-xs font-black text-slate-900 truncate">
+                      {isAuthenticated ? (profile?.display_name || roleDefinition.label) : 'Not Authenticated'}
+                    </p>
+                    <p className="text-[10px] text-slate-500 truncate">
+                      {isAuthenticated ? roleDefinition.department : 'Sign in to access workstation'}
+                    </p>
                   </div>
                   <Button
-                    variant="outline"
+                    variant={isAuthenticated ? 'outline' : 'primary'}
                     size="sm"
                     onClick={() => {
                       setLoginOpen(true);
                       setMobileOpen(false);
                     }}
-                    className="text-xs font-bold shrink-0 cursor-pointer"
+                    className={`text-xs font-bold shrink-0 cursor-pointer ${!isAuthenticated ? 'bg-indigo-600 text-white' : ''}`}
                   >
-                    Switch
+                    {isAuthenticated ? 'Shift Handover' : 'Sign In'}
                   </Button>
                 </div>
 

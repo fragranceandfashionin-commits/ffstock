@@ -18,6 +18,7 @@ import { supabase, type Item, type ComponentStockSummary, type Supplier, type Ba
 import type { View } from '@/lib/types';
 import type { NavigationContext } from '@/components/AppShell';
 import { getErrorMessage } from '@/lib/utils';
+import { useAuth } from '@/lib/auth';
 
 import { ItemCatalogueTab } from './items/ItemCatalogueTab';
 import { InwardBatchesTab } from './items/InwardBatchesTab';
@@ -43,6 +44,9 @@ export function ItemsView({
   initialActiveTab,
   onViewChange,
 }: ItemsViewProps = {}) {
+  const { canPerform, role } = useAuth();
+  const toast = useToast();
+
   // Navigation Tabs State: 'catalogue' (SKU Master) vs 'batches' (Inward Batches Ledger)
   const [activeTab, setActiveTab] = useState<'catalogue' | 'batches'>(initialActiveTab || 'catalogue');
 
@@ -78,8 +82,6 @@ export function ItemsView({
 
   const [inspectedItemSummary, setInspectedItemSummary] = useState<ComponentStockSummary | null>(null);
   const lastHandledItemIdRef = useRef<string | null>(null);
-
-  const toast = useToast();
 
   const load = useCallback(async (isSilent = false) => {
     if (!isSilent) setLoading(true);
@@ -177,6 +179,11 @@ export function ItemsView({
   // Delete Item SKU handler (Clean cascade)
   const executeDeleteItem = async () => {
     if (!deleteModalItem) return;
+    if (role !== 'admin') {
+      toast.error('Only Plant General Managers (admin) are authorized to delete catalogue items.');
+      setDeleteModalItem(null);
+      return;
+    }
     setDeletingItem(true);
     try {
       const itemId = deleteModalItem.id;
@@ -239,6 +246,11 @@ export function ItemsView({
   // Delete Inward Batch handler (Clean delete for unused batches)
   const executeDeleteBatch = async () => {
     if (!deleteModalBatch) return;
+    if (role !== 'admin') {
+      toast.error('Only Plant General Managers (admin) are authorized to delete inward batches.');
+      setDeleteModalBatch(null);
+      return;
+    }
     setDeletingBatch(true);
     try {
       const batchId = deleteModalBatch.id;
@@ -322,27 +334,31 @@ export function ItemsView({
         subtitle="Manage master catalogue SKUs, receive stock batches with brand name tagging, and launch batches directly into the production pipeline."
         action={
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              onClick={() => {
-                if (batches && batches.length > 0) {
-                  setAllocateModalBatch(batches[0]);
-                }
-              }}
-              className="font-bold bg-teal-50/80 hover:bg-teal-100 text-teal-900 border-teal-300 shadow-2xs py-2 px-3.5 rounded-xl flex items-center gap-1.5 text-xs cursor-pointer"
-              title="Transfer / Allocate stock between batches"
-            >
-              <ArrowRightLeft className="h-4 w-4 text-teal-600" />
-              <span>Allocate Stock</span>
-            </Button>
-            <Button
-              variant="primary"
-              onClick={() => openInwardStockModal()}
-              className="font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm py-2 px-4 rounded-xl flex items-center gap-2 text-xs cursor-pointer"
-            >
-              <PackagePlus className="h-4 w-4 text-emerald-100" />
-              <span>Inward Stock & Batch</span>
-            </Button>
+            {canPerform('manage_items') && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  if (batches && batches.length > 0) {
+                    setAllocateModalBatch(batches[0]);
+                  }
+                }}
+                className="font-bold bg-teal-50/80 hover:bg-teal-100 text-teal-900 border-teal-300 shadow-2xs py-2 px-3.5 rounded-xl flex items-center gap-1.5 text-xs cursor-pointer"
+                title="Transfer / Allocate stock between batches"
+              >
+                <ArrowRightLeft className="h-4 w-4 text-teal-600" />
+                <span>Allocate Stock</span>
+              </Button>
+            )}
+            {canPerform('inward') && (
+              <Button
+                variant="primary"
+                onClick={() => openInwardStockModal()}
+                className="font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm py-2 px-4 rounded-xl flex items-center gap-2 text-xs cursor-pointer"
+              >
+                <PackagePlus className="h-4 w-4 text-emerald-100" />
+                <span>Inward Stock & Batch</span>
+              </Button>
+            )}
           </div>
         }
       />

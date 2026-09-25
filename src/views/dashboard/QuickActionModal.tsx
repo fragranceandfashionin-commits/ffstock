@@ -7,6 +7,7 @@ import { SCRAP_REASONS, COMMON_COLORS, COMMON_PRINTING_DESIGNS } from '@/lib/sup
 import { insertStageMovement, insertScrapMovement, insertDispatch } from '@/lib/queries';
 import { formatNumber, getErrorMessage, getTodayDateString } from '@/lib/utils';
 import type { DashboardCalculations } from './dashboardCalculations';
+import { useAuth } from '@/lib/auth';
 
 export type QuickActionModalProps = {
   isOpen: boolean;
@@ -37,6 +38,7 @@ export function QuickActionModal({
   onSuccess,
   onNavigateToOutward,
 }: QuickActionModalProps) {
+  const { operatorName, canPerform, role, canTransitionStage } = useAuth();
   const [tab, setTab] = useState<'move' | 'scrap' | 'dispatch'>(initialTab);
   const [batchId, setBatchId] = useState(initialBatchId || (batches[0]?.id ?? ''));
   const [fromStageId, setFromStageId] = useState('');
@@ -66,7 +68,14 @@ export function QuickActionModal({
 
   useEffect(() => {
     if (isOpen) {
-      setTab(initialTab);
+      const defaultTab: 'move' | 'scrap' | 'dispatch' =
+        (initialTab === 'dispatch' && canPerform('dispatch')) ? 'dispatch'
+        : (initialTab === 'scrap' && canPerform('stage_move')) ? 'scrap'
+        : (initialTab === 'move' && canPerform('stage_move')) ? 'move'
+        : canPerform('stage_move') ? 'move'
+        : canPerform('dispatch') ? 'dispatch'
+        : 'move';
+      setTab(defaultTab);
       const targetBatchId = initialBatchId || (batches[0]?.id ?? '');
       setBatchId(targetBatchId);
       setQty('');
@@ -81,7 +90,7 @@ export function QuickActionModal({
       setAtomizerName('');
       setBoxName('');
       setRemarks('');
-      setDoneBy('');
+      setDoneBy(operatorName || '');
       setCustomerName('');
       setInvoiceNo('');
       setDispatchDate(getTodayDateString());
@@ -99,7 +108,7 @@ export function QuickActionModal({
         }
       }
     }
-  }, [isOpen, initialBatchId, initialTab, batches, calculations, processStages]);
+  }, [isOpen, initialBatchId, initialTab, batches, calculations, processStages, canPerform, operatorName]);
 
   const selectedBatchItem = useMemo(() => {
     if (!calculations || !batchId) return null;
@@ -262,6 +271,17 @@ export function QuickActionModal({
         }
       }
 
+      if (!canPerform('stage_move')) {
+        setError('Permission denied: You do not have permission to record stage movements.');
+        return;
+      }
+      const fromStageObj = stages.find((s) => s.id === fromStageId);
+      const toStageObj = stages.find((s) => s.id === toStageId);
+      if (fromStageObj && toStageObj && !canTransitionStage(fromStageObj.sequence_no, toStageObj.sequence_no)) {
+        setError(`Permission denied: Your role (${role}) is not authorized to transition batches from "${fromStageObj.name}" to "${toStageObj.name}".`);
+        return;
+      }
+
       setSubmitting(true);
       try {
         const latestM = selectedBatchItem?.movements?.slice().reverse().find((m) => m.variant_name?.trim());
@@ -286,7 +306,7 @@ export function QuickActionModal({
           atomizer_qty_used: atomizerItemId ? qtyNum : null,
           box_qty_used: boxItemId ? qtyNum : null,
           remarks: remarks.trim() || null,
-          done_by: doneBy.trim() || null,
+          done_by: (doneBy.trim() || operatorName || 'Operator').trim(),
         });
         setSuccess(`Successfully transferred ${formatNumber(qtyNum)} units.`);
         await onSuccess();
@@ -297,6 +317,10 @@ export function QuickActionModal({
         setSubmitting(false);
       }
     } else if (tab === 'scrap') {
+      if (!canPerform('stage_move')) {
+        setError('Permission denied: You do not have permission to record scrap write-offs.');
+        return;
+      }
       if (!fromStageId) {
         setError('Please select the origin stage where scrap occurred.');
         return;
@@ -325,7 +349,7 @@ export function QuickActionModal({
           color: color.trim() || null,
           printing_design: printingDesign.trim() || null,
           remarks: remarks.trim() || null,
-          done_by: doneBy.trim() || null,
+          done_by: (doneBy.trim() || operatorName || 'Operator').trim(),
           stages,
         });
         setSuccess(`Successfully recorded defect write-off of ${formatNumber(qtyNum)} units.`);
@@ -337,6 +361,10 @@ export function QuickActionModal({
         setSubmitting(false);
       }
     } else if (tab === 'dispatch') {
+      if (!canPerform('dispatch')) {
+        setError('Permission denied: You do not have permission to record customer dispatches.');
+        return;
+      }
       if (!customerName.trim() || !invoiceNo.trim()) {
         setError('Please provide customer name and invoice number.');
         return;
@@ -395,42 +423,48 @@ export function QuickActionModal({
 
         {/* Modal Tabs */}
         <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl">
-          <button
-            type="button"
-            onClick={() => setTab('move')}
-            className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
-              tab === 'move'
-                ? 'bg-white text-slate-900 shadow-2xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <Zap className="inline h-3.5 w-3.5 mr-1 text-amber-500" />
-            Stage Transfer
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab('scrap')}
-            className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
-              tab === 'scrap'
-                ? 'bg-white text-rose-900 shadow-2xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <Flame className="inline h-3.5 w-3.5 mr-1 text-rose-600" />
-            Scrap / Defect
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab('dispatch')}
-            className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
-              tab === 'dispatch'
-                ? 'bg-white text-slate-900 shadow-2xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <Truck className="inline h-3.5 w-3.5 mr-1 text-violet-600" />
-            Dispatch
-          </button>
+          {canPerform('stage_move') && (
+            <button
+              type="button"
+              onClick={() => setTab('move')}
+              className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
+                tab === 'move'
+                  ? 'bg-white text-slate-900 shadow-2xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Zap className="inline h-3.5 w-3.5 mr-1 text-amber-500" />
+              Stage Transfer
+            </button>
+          )}
+          {canPerform('stage_move') && (
+            <button
+              type="button"
+              onClick={() => setTab('scrap')}
+              className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
+                tab === 'scrap'
+                  ? 'bg-white text-rose-900 shadow-2xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Flame className="inline h-3.5 w-3.5 mr-1 text-rose-600" />
+              Scrap / Defect
+            </button>
+          )}
+          {canPerform('dispatch') && (
+            <button
+              type="button"
+              onClick={() => setTab('dispatch')}
+              className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
+                tab === 'dispatch'
+                  ? 'bg-white text-slate-900 shadow-2xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Truck className="inline h-3.5 w-3.5 mr-1 text-violet-600" />
+              Dispatch
+            </button>
+          )}
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">

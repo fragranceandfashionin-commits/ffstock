@@ -35,12 +35,14 @@ import type {
 import type { View } from '@/lib/types';
 import type { NavigationContext } from '@/components/AppShell';
 import { getErrorMessage, formatDate } from '@/lib/utils';
+import { useAuth } from '@/lib/auth';
 
 export type OrderHistoryViewProps = {
   onViewChange?: (view: View, context?: NavigationContext) => void;
 };
 
 export function OrderHistoryView({ onViewChange }: OrderHistoryViewProps) {
+  const { canPerform, role } = useAuth();
   const [orders, setOrders] = useState<ProductionOrderWithRelations[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
@@ -114,6 +116,10 @@ export function OrderHistoryView({ onViewChange }: OrderHistoryViewProps) {
 
   // Repeat Order (Atomic clone)
   const handleConfirmRepeat = async () => {
+    if (!canPerform('manage_orders')) {
+      toast.error('Permission denied: You do not have permission to clone or create orders.');
+      return;
+    }
     if (!repeatModalOrder) return;
     setRepeating(true);
     try {
@@ -136,6 +142,10 @@ export function OrderHistoryView({ onViewChange }: OrderHistoryViewProps) {
 
   // Reopen Order (Restore to active status - Operational reversibility)
   const handleConfirmReopen = async () => {
+    if (role !== 'admin' && !canPerform('manage_orders')) {
+      toast.error('Permission denied: Only administrators and production managers can reopen archived orders.');
+      return;
+    }
     if (!reopenModalOrder) return;
     setReopening(true);
     try {
@@ -448,27 +458,31 @@ export function OrderHistoryView({ onViewChange }: OrderHistoryViewProps) {
                     </Button>
 
                     {/* Reopen Order Button */}
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => setReopenModalOrder(order)}
-                      title="Reopen order and move back to active orders"
-                    >
-                      <RotateCcw className="h-4 w-4" />
-                      Reopen
-                    </Button>
+                    {(role === 'admin' || canPerform('manage_orders')) && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => setReopenModalOrder(order)}
+                        title="Reopen order and move back to active orders"
+                      >
+                        <RotateCcw className="h-4 w-4" />
+                        Reopen
+                      </Button>
+                    )}
 
                     {/* Repeat Order Button */}
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      className="bg-indigo-600 hover:bg-indigo-700 text-white"
-                      onClick={() => setRepeatModalOrder(order)}
-                      title="Clone this order and generate new order sequence"
-                    >
-                      <Repeat className="h-4 w-4" />
-                      Repeat Order
-                    </Button>
+                    {canPerform('manage_orders') && (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                        onClick={() => setRepeatModalOrder(order)}
+                        title="Clone this order and generate new order sequence"
+                      >
+                        <Repeat className="h-4 w-4" />
+                        Repeat Order
+                      </Button>
+                    )}
                   </div>
                 </div>
 

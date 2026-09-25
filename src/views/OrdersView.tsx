@@ -56,6 +56,7 @@ import type {
 import type { View } from '@/lib/types';
 import type { NavigationContext } from '@/components/AppShell';
 import { getErrorMessage, formatDate } from '@/lib/utils';
+import { useAuth } from '@/lib/auth';
 
 export type OrdersViewProps = {
   initialOrderId?: string;
@@ -64,6 +65,7 @@ export type OrdersViewProps = {
 };
 
 export function OrdersView({ initialOrderId, initialClientId, onViewChange }: OrdersViewProps) {
+  const { canPerform, role } = useAuth();
   const [orders, setOrders] = useState<ProductionOrderWithRelations[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -311,6 +313,11 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
   // Delete Order
   const handleConfirmDelete = async () => {
     if (!deleteModalOrder) return;
+    if (role !== 'admin') {
+      toast.error('Only Plant General Managers (admin) are authorized to delete production orders.');
+      setDeleteModalOrder(null);
+      return;
+    }
     setDeleting(true);
     try {
       await deleteProductionOrder(deleteModalOrder.id);
@@ -330,6 +337,10 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
     field: keyof MaterialAllocation,
     value: string | null
   ) => {
+    if (!canPerform('manage_orders')) {
+      toast.error('Permission denied: You do not have permission to modify order allocations.');
+      return;
+    }
     try {
       await updateMaterialAllocation(allocationId, { [field]: value });
       // Optimistic update
@@ -350,6 +361,14 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
   // Toggle Allocation Status (Pending <-> Received)
   const handleToggleAllocationStatus = async (allocation: MaterialAllocation) => {
     const isPending = allocation.status === 'pending';
+    if (!isPending && !canPerform('reverse_allocation')) {
+      toast.error('Permission denied: Only administrators and production managers can revert received allocations.');
+      return;
+    }
+    if (isPending && !canPerform('manage_orders')) {
+      toast.error('Permission denied: You do not have permission to mark components received.');
+      return;
+    }
     try {
       if (isPending) {
         await markAllocationReceived(allocation.id);
@@ -379,6 +398,10 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
 
   // Add extra component row to order
   const handleAddCustomRow = async (orderId: string) => {
+    if (!canPerform('manage_orders')) {
+      toast.error('Permission denied: You do not have permission to add component rows.');
+      return;
+    }
     const compName = newRowComponent[orderId]?.trim();
     if (!compName) return;
 
@@ -397,6 +420,10 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
 
   // Delete Allocation Row
   const handleDeleteAllocationRow = async (allocationId: string, compName: string) => {
+    if (!canPerform('manage_orders')) {
+      toast.error('Permission denied: You do not have permission to delete component rows.');
+      return;
+    }
     try {
       await deleteAllocation(allocationId);
       toast.info(`Removed component "${compName}"`);
@@ -584,13 +611,15 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
               <RefreshCw className="h-4 w-4" />
               Refresh
             </Button>
-            <Button
-              variant="primary"
-              onClick={() => setShowCreateModal(true)}
-            >
-              <Plus className="h-4 w-4" />
-              New Order
-            </Button>
+            {canPerform('manage_orders') && (
+              <Button
+                variant="primary"
+                onClick={() => setShowCreateModal(true)}
+              >
+                <Plus className="h-4 w-4" />
+                New Order
+              </Button>
+            )}
           </div>
         }
       />
@@ -1034,28 +1063,51 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
 
                                   {/* Status 1-Click Toggle */}
                                   <td className="py-2 px-3 text-center">
-                                    <button
-                                      type="button"
-                                      className={`w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition-all shadow-2xs ${
-                                        isReceived
-                                          ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 border border-emerald-300'
-                                          : 'bg-amber-100 text-amber-800 hover:bg-amber-200 border border-amber-300'
-                                      }`}
-                                      onClick={() => handleToggleAllocationStatus(alloc)}
-                                      title={isReceived ? 'Click to revert to pending' : 'Click to mark as received'}
-                                    >
-                                      {isReceived ? (
-                                        <>
-                                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                                          Received
-                                        </>
-                                      ) : (
-                                        <>
-                                          <Clock className="h-3.5 w-3.5 text-amber-600" />
-                                          Pending
-                                        </>
-                                      )}
-                                    </button>
+                                    {(!isReceived && !canPerform('manage_orders')) || (isReceived && !canPerform('reverse_allocation')) ? (
+                                      <span
+                                        className={`w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold opacity-75 cursor-not-allowed ${
+                                          isReceived
+                                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                            : 'bg-amber-100 text-amber-800 border border-amber-300'
+                                        }`}
+                                        title="Permission restricted"
+                                      >
+                                        {isReceived ? (
+                                          <>
+                                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                                            Received
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Clock className="h-3.5 w-3.5 text-amber-600" />
+                                            Pending
+                                          </>
+                                        )}
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className={`w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition-all shadow-2xs cursor-pointer ${
+                                          isReceived
+                                            ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 border border-emerald-300'
+                                            : 'bg-amber-100 text-amber-800 hover:bg-amber-200 border border-amber-300'
+                                        }`}
+                                        onClick={() => handleToggleAllocationStatus(alloc)}
+                                        title={isReceived ? 'Click to revert to pending' : 'Click to mark as received'}
+                                      >
+                                        {isReceived ? (
+                                          <>
+                                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                                            Received
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Clock className="h-3.5 w-3.5 text-amber-600" />
+                                            Pending
+                                          </>
+                                        )}
+                                      </button>
+                                    )}
                                   </td>
 
                                   {/* Remarks */}
@@ -1064,7 +1116,10 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                                       type="text"
                                       defaultValue={alloc.remarks || ''}
                                       placeholder="Operator remarks"
-                                      className="w-full text-xs px-2 py-1 rounded border border-slate-200 bg-white focus:border-indigo-500"
+                                      disabled={!canPerform('manage_orders')}
+                                      className={`w-full text-xs px-2 py-1 rounded border border-slate-200 bg-white focus:border-indigo-500 ${
+                                        !canPerform('manage_orders') ? 'opacity-60 cursor-not-allowed bg-slate-50' : ''
+                                      }`}
                                       onBlur={(e) => {
                                         if (e.target.value !== (alloc.remarks || '')) {
                                           handleAllocationFieldChange(alloc.id, 'remarks', e.target.value.trim() || null);
@@ -1075,7 +1130,7 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
 
                                   {/* Delete Custom Row */}
                                   <td className="py-2 px-2 text-center">
-                                    {alloc.sort_order > 10 && (
+                                    {alloc.sort_order > 10 && canPerform('manage_orders') && (
                                       <button
                                         type="button"
                                         className="text-slate-400 hover:text-rose-600 p-1 rounded"
@@ -1094,34 +1149,36 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                     </div>
 
                     {/* Add Custom Component Row */}
-                    <div className="mt-3 flex items-center gap-2">
-                      <input
-                        type="text"
-                        placeholder="+ Add custom component name (e.g. Pump, Ribbon)..."
-                        className="text-xs px-3 py-1.5 rounded-lg border border-slate-200 bg-white w-64 focus:border-indigo-500"
-                        value={newRowComponent[order.id] || ''}
-                        onChange={(e) =>
-                          setNewRowComponent((prev) => ({
-                            ...prev,
-                            [order.id]: e.target.value,
-                          }))
-                        }
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            handleAddCustomRow(order.id);
+                    {canPerform('manage_orders') && (
+                      <div className="mt-3 flex items-center gap-2">
+                        <input
+                          type="text"
+                          placeholder="+ Add custom component name (e.g. Pump, Ribbon)..."
+                          className="text-xs px-3 py-1.5 rounded-lg border border-slate-200 bg-white w-64 focus:border-indigo-500"
+                          value={newRowComponent[order.id] || ''}
+                          onChange={(e) =>
+                            setNewRowComponent((prev) => ({
+                              ...prev,
+                              [order.id]: e.target.value,
+                            }))
                           }
-                        }}
-                      />
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => handleAddCustomRow(order.id)}
-                      >
-                        <Plus className="h-4 w-4" />
-                        Add Row
-                      </Button>
-                    </div>
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleAddCustomRow(order.id);
+                            }
+                          }}
+                        />
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => handleAddCustomRow(order.id)}
+                        >
+                          <Plus className="h-4 w-4" />
+                          Add Row
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 )}
               </Card>

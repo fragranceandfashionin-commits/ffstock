@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { ArrowLeftRight, ArrowRight, Undo2, Truck, Printer } from 'lucide-react';
 import { Card, Badge, ColorBadge, PrintingBadge, Button } from '@/components/ui';
-import type { MovementWithRelations, Dispatch } from '@/lib/supabase';
+import type { MovementWithRelations, Dispatch, BatchWithRelations } from '@/lib/supabase';
 import { formatNumber, formatDate } from '@/lib/utils';
 
 export type MovementAuditTrailProps = {
@@ -11,6 +11,7 @@ export type MovementAuditTrailProps = {
   highlightMovementId?: string;
   onOpenReversalModal: (m: MovementWithRelations) => void;
   onOpenChallanModal: (d: Dispatch) => void;
+  batchMap?: Map<string, BatchWithRelations>;
 };
 
 export function MovementAuditTrail({
@@ -20,6 +21,7 @@ export function MovementAuditTrail({
   highlightMovementId,
   onOpenReversalModal,
   onOpenChallanModal,
+  batchMap,
 }: MovementAuditTrailProps) {
   const scrolledRef = useRef<string | null>(null);
 
@@ -33,7 +35,7 @@ export function MovementAuditTrail({
     }
   }, [highlightMovementId, movements]);
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+    <div id="movement-audit-trail" className="grid grid-cols-1 gap-6 lg:grid-cols-12 scroll-mt-6">
       {/* Movement History */}
       <Card className="lg:col-span-6 shadow-2xs border-slate-200/90">
         <h3 className="mb-3 flex items-center justify-between text-sm font-extrabold text-slate-900">
@@ -53,13 +55,14 @@ export function MovementAuditTrail({
             {movements.map((m) => {
               const isScrap = (m.remarks ?? '').startsWith('[SCRAP') || m.to_stage?.name === 'Scrap / Defect';
               const isReversal = (m.remarks ?? '').startsWith('[REVERSAL');
+              const isDirectDispatch = m.to_stage?.name === 'Dispatched';
               const isHighlighted = highlightMovementId === m.id;
 
               return (
                 <li key={m.id} id={`movement-row-${m.id}`} className="relative scroll-mt-24">
                   <span
                     className={`absolute -left-[27px] top-1.5 flex h-3.5 w-3.5 items-center justify-center rounded-full ring-4 ring-white ${
-                      isScrap ? 'bg-rose-600' : isReversal ? 'bg-amber-500' : isHighlighted ? 'bg-amber-600 ring-amber-200 animate-pulse' : 'bg-slate-900'
+                      isScrap ? 'bg-rose-600' : isReversal ? 'bg-amber-500' : isDirectDispatch ? 'bg-violet-600' : isHighlighted ? 'bg-amber-600 ring-amber-200 animate-pulse' : 'bg-slate-900'
                     }`}
                   />
                   <div className={`flex flex-wrap items-center justify-between gap-2 text-xs p-3 rounded-xl border transition-all duration-300 ${
@@ -68,17 +71,24 @@ export function MovementAuditTrail({
                       : 'bg-slate-50 border-slate-200/70'
                   }`}>
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className={`font-bold ${isScrap ? 'text-rose-900' : isReversal ? 'text-amber-900' : 'text-slate-900'}`}>
+                      <span className={`font-bold ${isScrap ? 'text-rose-900' : isReversal ? 'text-amber-900' : isDirectDispatch ? 'text-violet-900' : 'text-slate-900'}`}>
                         {m.from_stage?.name ?? '—'}{' '}
                         <ArrowRight className="mx-1 inline h-3 w-3 text-slate-400" />{' '}
                         {m.to_stage?.name ?? '—'}
                       </span>
+                      {batchMap && m.batch_id && batchMap.has(m.batch_id) && (
+                        <span className="font-mono text-[10px] font-bold text-slate-700 bg-slate-200/80 border border-slate-300/80 px-1.5 py-0.2 rounded-md">
+                          #{batchMap.get(m.batch_id)?.batch_no}
+                          {batchMap.get(m.batch_id)?.location ? ` • ${batchMap.get(m.batch_id)?.location}` : ''}
+                        </span>
+                      )}
                       {isHighlighted && <Badge label="Search Match" variant="amber" size="sm" />}
                       {isScrap && <Badge label="Scrap Loss" variant="rose" size="sm" />}
                       {isReversal && <Badge label="Reversal Entry" variant="amber" size="sm" />}
+                      {isDirectDispatch && <Badge label="Direct Dispatch Entry" variant="indigo" size="sm" />}
                     </div>
                     <div className="flex items-center gap-2">
-                      <Badge label={`${formatNumber(m.qty_moved)} ${unitLabel}`} variant={isScrap ? 'rose' : isReversal ? 'amber' : 'emerald'} />
+                      <Badge label={`${formatNumber(m.qty_moved)} ${unitLabel}`} variant={isScrap ? 'rose' : isReversal ? 'amber' : isDirectDispatch ? 'violet' : 'emerald'} />
                       {!isReversal && (
                         <button
                           type="button"
@@ -152,9 +162,17 @@ export function MovementAuditTrail({
                 <div key={`mob-audit-dispatch-${d.id}`} className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-2">
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <span className="font-mono font-bold text-slate-700 bg-white px-1.5 py-0.5 rounded border border-slate-200 text-[10px]">
-                        #{d.invoice_no}
-                      </span>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-mono font-bold text-slate-700 bg-white px-1.5 py-0.5 rounded border border-slate-200 text-[10px]">
+                          #{d.invoice_no}
+                        </span>
+                        {batchMap && d.batch_id && batchMap.has(d.batch_id) && (
+                          <span className="font-mono text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded">
+                            #{batchMap.get(d.batch_id)?.batch_no}
+                            {batchMap.get(d.batch_id)?.location ? ` • ${batchMap.get(d.batch_id)?.location}` : ''}
+                          </span>
+                        )}
+                      </div>
                       <h4 className="font-extrabold text-slate-900 text-sm mt-1">{d.customer_name}</h4>
                       <p className="text-[10px] text-slate-400">{formatDate(d.dispatched_on)}</p>
                     </div>
@@ -225,7 +243,17 @@ export function MovementAuditTrail({
                     <tr key={d.id} className="hover:bg-slate-50/50 transition">
                       <td className="px-3 py-2.5 text-slate-500">{formatDate(d.dispatched_on)}</td>
                       <td className="px-3 py-2.5 font-bold text-slate-800">{d.customer_name}</td>
-                      <td className="px-3 py-2.5 text-slate-600">{d.invoice_no}</td>
+                      <td className="px-3 py-2.5 text-slate-600">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span>{d.invoice_no}</span>
+                          {batchMap && d.batch_id && batchMap.has(d.batch_id) && (
+                            <span className="font-mono text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.2 rounded">
+                              #{batchMap.get(d.batch_id)?.batch_no}
+                              {batchMap.get(d.batch_id)?.location ? ` • ${batchMap.get(d.batch_id)?.location}` : ''}
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="px-3 py-2.5">
                         <div className="flex flex-wrap gap-1">
                           {d.variant_name && (

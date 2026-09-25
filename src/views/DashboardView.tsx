@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import {
   ShieldCheck, Download, Printer, RefreshCw, Zap, Package, LayoutDashboard, Layers, ArrowLeftRight, Truck, MapPin, PackageCheck, Filter, Clock, RotateCcw, Calendar, ClipboardList, Users
 } from 'lucide-react';
@@ -7,33 +7,14 @@ import {
 } from '@/components/ui';
 import { useToast } from '@/components/Toast';
 import { DeliveryChallanModal } from '@/components/DeliveryChallanModal';
-import {
-  fetchStages,
-  fetchBatches,
-  fetchMovements,
-  fetchDispatches,
-  fetchLocationStock,
-  fetchSuppliers,
-  fetchItems,
-  fetchComponentStockSummary,
-  fetchBatchAllocations,
-  fetchProductionOrders,
-  fetchVendorPendingList,
-  fetchClients,
-} from '@/lib/queries';
-import { invalidateCache } from '@/lib/cache';
 import type {
-  Stage,
   BatchWithRelations,
   MovementWithRelations,
   Dispatch,
-  Supplier,
-  Item,
   ComponentStockSummary,
-  BatchAllocationWithRelations,
 } from '@/lib/supabase';
-import { supabase, ITEM_CATEGORIES, COMMON_COLORS } from '@/lib/supabase';
-import type { LocationStock, View } from '@/lib/types';
+import { ITEM_CATEGORIES, COMMON_COLORS } from '@/lib/supabase';
+import type { View } from '@/lib/types';
 import {
   formatDate,
   getErrorMessage,
@@ -42,7 +23,7 @@ import {
 } from '@/lib/utils';
 
 // Modular Dashboard Subcomponents & Engine
-import type { DashboardTab, KpiFilter, DynamicContextType, DynamicContext, InspectedBatchItem } from './dashboard/types';
+import type { DynamicContext, DynamicContextType, InspectedBatchItem } from './dashboard/types';
 import { calculateDashboardMetrics } from './dashboard/dashboardCalculations';
 import { DashboardKPIs } from './dashboard/DashboardKPIs';
 import { BatchMatrixTab } from './dashboard/BatchMatrixTab';
@@ -58,6 +39,9 @@ import { ComponentDrilldownModal } from './dashboard/ComponentDrilldownModal';
 import { BatchInspectionModal } from './dashboard/BatchInspectionModal';
 import { AllocateModal } from './items/AllocateModal';
 import type { NavigationContext } from '@/components/AppShell';
+import { useDashboardData } from './dashboard/useDashboardData';
+import { useDashboardFilters } from './dashboard/useDashboardFilters';
+import { useAuth } from '@/lib/auth';
 
 export type DashboardViewProps = {
   onViewChange: (view: View, context?: NavigationContext) => void;
@@ -73,45 +57,53 @@ export function DashboardView({
   initialBatchId,
 }: DashboardViewProps) {
   const { success, error: toastError } = useToast();
+  const { canPerform } = useAuth();
 
-  // Raw Database Entity State
-  const [stages, setStages] = useState<Stage[] | null>(null);
-  const [batches, setBatches] = useState<BatchWithRelations[] | null>(null);
-  const [movements, setMovements] = useState<MovementWithRelations[]>([]);
-  const [dispatches, setDispatches] = useState<Dispatch[]>([]);
-  const [locations, setLocations] = useState<LocationStock[]>([]);
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [items, setItems] = useState<Item[]>([]);
-  const [componentStocks, setComponentStocks] = useState<ComponentStockSummary[]>([]);
-  const [allocations, setAllocations] = useState<BatchAllocationWithRelations[]>([]);
-  const [vendorPortalMetrics, setVendorPortalMetrics] = useState<{
-    activeOrdersCount: number;
-    pendingVendorAllocationsCount: number;
-    clientsCount: number;
-  }>({ activeOrdersCount: 0, pendingVendorAllocationsCount: 0, clientsCount: 0 });
+  // Tab & Filter State from custom hook
+  const {
+    asOfDate,
+    setAsOfDate,
+    activeTab,
+    setActiveTab,
+    kpiFilter,
+    setKpiFilter,
+    selectedColor,
+    setSelectedColor,
+    selectedCategory,
+    setSelectedCategory,
+    selectedStageId,
+    setSelectedStageId,
+    selectedSupplierId,
+    setSelectedSupplierId,
+    selectedItemId,
+    setSelectedItemId,
+    searchQuery,
+    setSearchQuery,
+    expandedBatchIds,
+    setExpandedBatchIds,
+    expandedComponentIds,
+    setExpandedComponentIds,
+  } = useDashboardFilters();
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  // Point-in-Time Historical State (Time-Travel Engine)
-  const [asOfDate, setAsOfDate] = useState<string>('');
+  // Raw Database Entity State & Realtime Sync from custom hook
+  const {
+    stages,
+    batches,
+    movements,
+    dispatches,
+    locations,
+    suppliers,
+    items,
+    componentStocks,
+    allocations,
+    vendorPortalMetrics,
+    loading,
+    error,
+    loadData,
+  } = useDashboardData(asOfDate, toastError);
 
   // Export Modal State
   const [exportModalOpen, setExportModalOpen] = useState(false);
-
-  // Tab & Filter State
-  const [activeTab, setActiveTab] = useState<DashboardTab>('batch-matrix');
-  const [kpiFilter, setKpiFilter] = useState<KpiFilter>('ALL');
-  const [selectedColor, setSelectedColor] = useState<string>('ALL');
-  const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
-  const [selectedStageId, setSelectedStageId] = useState<string | 'ALL'>('ALL');
-  const [selectedSupplierId, setSelectedSupplierId] = useState<string | 'ALL'>('ALL');
-  const [selectedItemId, setSelectedItemId] = useState<string | 'ALL'>('ALL');
-  const [searchQuery, setSearchQuery] = useState('');
-
-  // Expandable Accordions
-  const [expandedBatchIds, setExpandedBatchIds] = useState<Set<string>>(new Set());
-  const [expandedComponentIds, setExpandedComponentIds] = useState<Set<string>>(new Set());
 
   // Modal Dialog States
   const [quickModalOpen, setQuickModalOpen] = useState(false);
@@ -131,123 +123,6 @@ export function DashboardView({
 
   const [allocateModalBatch, setAllocateModalBatch] = useState<BatchWithRelations | null>(null);
 
-  // Load Data
-  const loadData = useCallback(async () => {
-    try {
-      setError(null);
-      const [
-        stagesData,
-        batchesData,
-        movementsData,
-        dispatchesData,
-        locationsData,
-        suppliersData,
-        itemsData,
-        allocationsData,
-        ordersData,
-        pendingVendorData,
-        clientsData,
-      ] = await Promise.all([
-        fetchStages(),
-        fetchBatches(),
-        fetchMovements(),
-        fetchDispatches(),
-        fetchLocationStock(),
-        fetchSuppliers(),
-        fetchItems(),
-        fetchBatchAllocations().catch(() => [] as BatchAllocationWithRelations[]),
-        fetchProductionOrders().catch(() => []),
-        fetchVendorPendingList().catch(() => []),
-        fetchClients().catch(() => []),
-      ]);
-
-      // Calculate component stocks using the already-loaded entities - ZERO duplicate requests!
-      const componentStocksData = await fetchComponentStockSummary(asOfDate || null, {
-        items: itemsData,
-        stages: stagesData,
-        batches: batchesData,
-        movements: movementsData,
-        dispatches: dispatchesData,
-        allocations: allocationsData,
-      }).catch(() => [] as ComponentStockSummary[]);
-
-      setStages(stagesData);
-      setBatches(batchesData);
-      setMovements(movementsData as MovementWithRelations[]);
-      setDispatches(dispatchesData);
-      setLocations(locationsData);
-      setSuppliers(suppliersData);
-      setItems(itemsData);
-      setComponentStocks(componentStocksData);
-      setAllocations(allocationsData);
-      setVendorPortalMetrics({
-        activeOrdersCount: (ordersData as { status: string }[]).filter((o) => o.status !== 'completed').length,
-        pendingVendorAllocationsCount: (pendingVendorData as unknown[]).length,
-        clientsCount: (clientsData as { status: string }[]).filter((c) => c.status === 'active').length,
-      });
-    } catch (err) {
-      const msg = getErrorMessage(err, 'Failed to load factory dashboard records');
-      setError(msg);
-      toastError(msg, 'Data sync failed');
-    } finally {
-      setLoading(false);
-    }
-  }, [asOfDate, toastError]);
-
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
-
-  // Point-in-Time component stock reconciliation (skip initial mount to prevent duplicate fetch)
-  const isFirstAsOfDateMountRef = useRef(true);
-  useEffect(() => {
-    if (isFirstAsOfDateMountRef.current) {
-      isFirstAsOfDateMountRef.current = false;
-      return;
-    }
-    let isMounted = true;
-    fetchComponentStockSummary(asOfDate || null, {
-      items: items ?? undefined,
-      stages: stages ?? undefined,
-      batches: batches ?? undefined,
-      movements: movements ?? undefined,
-      dispatches: dispatches ?? undefined,
-      allocations: allocations ?? undefined,
-    }).then((data) => {
-      if (isMounted) setComponentStocks(data);
-    }).catch(() => {});
-    return () => {
-      isMounted = false;
-    };
-  }, [asOfDate, items, stages, batches, movements, dispatches, allocations]);
-
-  // Realtime live syncing across multi-user terminals
-  useEffect(() => {
-    let timer: NodeJS.Timeout | null = null;
-    const debouncedReload = () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        invalidateCache();
-        loadData();
-      }, 300);
-    };
-
-    const channel = supabase
-      .channel('dashboard-realtime-sync')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'inward_batches' }, debouncedReload)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'batch_allocations' }, debouncedReload)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'stage_movements' }, debouncedReload)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'dispatches' }, debouncedReload)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'item_stock_receipts' }, debouncedReload)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'suppliers' }, debouncedReload)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, debouncedReload)
-      .subscribe();
-
-    return () => {
-      if (timer) clearTimeout(timer);
-      supabase.removeChannel(channel);
-    };
-  }, [loadData]);
 
   // Pure Calculation Engine with Point-in-Time asOfDate
   const calculations = useMemo(() => {
@@ -835,25 +710,29 @@ export function DashboardView({
             Sync
           </Button>
 
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => openQuickModal()}
-            className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm font-bold text-xs cursor-pointer"
-          >
-            <Zap className="h-3.5 w-3.5 text-amber-300" />
-            Quick Action
-          </Button>
+          {(canPerform('stage_move') || canPerform('dispatch')) && (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => openQuickModal()}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm font-bold text-xs cursor-pointer"
+            >
+              <Zap className="h-3.5 w-3.5 text-amber-300" />
+              Quick Action
+            </Button>
+          )}
 
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => onViewChange('items', { openInwardModal: true })}
-            className="text-xs font-bold cursor-pointer"
-          >
-            <Package className="h-3.5 w-3.5 text-emerald-600" />
-            Inward Stock
-          </Button>
+          {canPerform('inward') && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => onViewChange('items', { openInwardModal: true })}
+              className="text-xs font-bold cursor-pointer"
+            >
+              <Package className="h-3.5 w-3.5 text-emerald-600" />
+              Inward Stock
+            </Button>
+          )}
         </div>
       </div>
 

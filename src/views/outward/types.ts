@@ -1,4 +1,48 @@
-import type { BatchWithRelations, MovementWithRelations, Dispatch } from '@/lib/supabase';
+import type { BatchWithRelations, MovementWithRelations, Dispatch, Item } from '@/lib/supabase';
+
+export type ItemGroup = {
+  item_id: string;
+  item: Item;
+  batches: BatchWithRelations[];
+  supplierNames: string[];
+  locations: string[];
+  totalIntake: number;
+};
+
+export type AggregatedStageStock = {
+  stage_id: string;
+  stage_name: string;
+  sequence_no: number;
+  qty: number;
+};
+
+export type BatchSplit = {
+  batch_id: string;
+  batch_no: string;
+  location?: string;
+  qty: number;
+};
+
+export type BatchStageDetail = {
+  batch_id: string;
+  batch_no: string;
+  received_on: string;
+  location: string;
+  brand_name?: string | null;
+  supplier_name?: string | null;
+  color?: string | null;
+  qty_received: number;
+  fifo_rank: number;
+  stageStock: {
+    stage_id: string;
+    stage_name: string;
+    qty: number;
+  }[];
+  totalInFactory: number;
+  readyQty: number;
+  dispatchedQty: number;
+  scrappedQty: number;
+};
 
 export type ActiveAction =
   | { type: 'stage-move'; fromStageId: string; toStageId: string }

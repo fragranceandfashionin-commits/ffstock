@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, useMemo, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import type { User, Session } from '@supabase/supabase-js';
-import { supabase, type UserRole, type UserProfile, ROLE_DEFINITIONS } from '@/lib/supabase';
+import { supabase, type UserRole, type UserProfile, type AuthAction, ROLE_DEFINITIONS } from '@/lib/supabase';
 import type { View } from '@/lib/types';
 
 export type AuthContextType = {
@@ -10,42 +10,46 @@ export type AuthContextType = {
   profile: UserProfile | null;
   role: UserRole;
   roleDefinition: typeof ROLE_DEFINITIONS[UserRole];
+  operatorName: string;
   loading: boolean;
+  isAuthenticated: boolean;
+  isDevMode: boolean;
+  error: string | null;
   signIn: (email: string, password?: string) => Promise<void>;
   signOut: () => Promise<void>;
   switchRole: (role: UserRole) => void;
   canAccessView: (view: View) => boolean;
   canTransitionStage: (fromSeq: number, toSeq: number) => boolean;
-  canPerform: (action: 'inward' | 'stage_move' | 'dispatch' | 'manage_orders' | 'manage_items' | 'reverse_allocation') => boolean;
+  canPerform: (action: AuthAction) => boolean;
 };
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-const STORAGE_ROLE_KEY = 'ffstock_active_role';
+const DEV_MOCK_ROLE_KEY = 'ffstock_dev_mock_role';
 
 export function isOperatorTransitionAllowed(
   role: UserRole,
   fromSeq: number,
   toSeq: number
 ): boolean {
-  if (role === 'admin') return true;
+  if (role === 'admin' || role === 'stock_manager') return true;
 
   switch (role) {
     case 'coloring_operator':
-      // Raw(1)->Coloring(2), Coloring(2)->Printing(3), Coloring(2)->Scrap(8), Coloring(2)->Raw(1) [Reversal]
-      return (fromSeq === 1 && toSeq === 2) || (fromSeq === 2 && [1, 3, 8].includes(toSeq));
+      // Raw(1)->Coloring(2), Coloring(2)->Printing(3), Coloring(2)->Filling(4), Coloring(2)->Scrap(8), Coloring(2)->Raw(1) [Reversal]
+      return (fromSeq === 1 && toSeq === 2) || (fromSeq === 2 && [1, 3, 4, 8].includes(toSeq));
 
     case 'printing_operator':
-      // Printing(3)->Filling(4), Printing(3)->Scrap(8), Printing(3)->Coloring(2) [Reversal]
-      return fromSeq === 3 && [2, 4, 8].includes(toSeq);
+      // Pull Raw(1)->Printing(3), Coloring(2)->Printing(3), Printing(3)->Filling(4), Printing(3)->Scrap(8), Printing(3)->Coloring(2), Printing(3)->Raw(1)
+      return ([1, 2].includes(fromSeq) && toSeq === 3) || (fromSeq === 3 && [1, 2, 4, 8].includes(toSeq));
 
     case 'filling_operator':
-      // Filling(4)->Packaging(5), Filling(4)->Scrap(8), Filling(4)->Printing(3) [Reversal]
-      return fromSeq === 4 && [3, 5, 8].includes(toSeq);
+      // Pull Raw(1)->Filling(4), Coloring(2)->Filling(4), Printing(3)->Filling(4), Filling(4)->Packaging(5), Filling(4)->Scrap(8), Filling(4)->Reversals(1,2,3)
+      return ([1, 2, 3].includes(fromSeq) && toSeq === 4) || (fromSeq === 4 && [1, 2, 3, 5, 8].includes(toSeq));
 
     case 'packaging_operator':
-      // Packaging(5)->Ready(6), Packaging(5)->Scrap(8), Packaging(5)->Filling(4) [Reversal]
-      return fromSeq === 5 && [4, 6, 8].includes(toSeq);
+      // Filling(4)->Packaging(5), Packaging(5)->Ready(6), Packaging(5)->Scrap(8), Packaging(5)->Filling(4) [Reversal]
+      return (fromSeq === 4 && toSeq === 5) || (fromSeq === 5 && [4, 6, 8].includes(toSeq));
 
     default:
       return false;
@@ -74,27 +78,64 @@ export function canAccessView(role: UserRole, view: View): boolean {
   }
 }
 
+export function canPerformAction(role: UserRole, action: AuthAction): boolean {
+  if (role === 'admin') return true;
+  if (role === 'viewer') return false;
+
+  switch (action) {
+    case 'inward':
+      return ['admin', 'inward_manager'].includes(role);
+    case 'stage_move':
+      return ['admin', 'stock_manager', 'coloring_operator', 'printing_operator', 'filling_operator', 'packaging_operator'].includes(role);
+    case 'dispatch':
+      return ['admin', 'dispatch_manager'].includes(role);
+    case 'manage_orders':
+      return ['admin', 'vendor_manager'].includes(role);
+    case 'manage_items':
+      return ['admin', 'stock_manager'].includes(role);
+    case 'manage_suppliers':
+      return ['admin', 'vendor_manager', 'inward_manager'].includes(role);
+    case 'manage_clients':
+      return ['admin', 'vendor_manager'].includes(role);
+    case 'reverse_allocation':
+      return ['admin', 'stock_manager'].includes(role);
+    default:
+      return false;
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [activeRole, setActiveRole] = useState<UserRole>(() => {
-    const saved = localStorage.getItem(STORAGE_ROLE_KEY);
-    if (saved && saved in ROLE_DEFINITIONS) {
-      return saved as UserRole;
+  const [role, setRole] = useState<UserRole>(() => {
+    // In dev mode, check if a dev mock role was persisted
+    if (import.meta.env.DEV) {
+      const devSaved = localStorage.getItem(DEV_MOCK_ROLE_KEY);
+      if (devSaved && devSaved in ROLE_DEFINITIONS) {
+        return devSaved as UserRole;
+      }
     }
-    return 'admin'; // Factory workspace default for seamless handover
+    // Safe enterprise default: viewer (read-only until authenticated)
+    return 'viewer';
   });
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
 
-  // Load active session and fetch profile if logged in
+  // Load active session and fetch profile from user_profiles table
   const loadProfile = useCallback(async (userId: string, email?: string): Promise<UserProfile | null> => {
     try {
-      const { data, error } = await supabase
+      const queryPromise = supabase
         .from('user_profiles')
         .select('*')
         .eq('id', userId)
         .maybeSingle();
+
+      const timeoutPromise = new Promise<{ data: null; error: null }>((resolve) =>
+        setTimeout(() => resolve({ data: null, error: null }), 1800)
+      );
+
+      const { data, error } = await Promise.race([queryPromise, timeoutPromise]);
 
       if (error && error.code !== 'PGRST116') {
         console.warn('Could not load user profile:', error);
@@ -104,26 +145,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return data as UserProfile;
       }
 
-      // Default synthetic profile for active user
+      // Default profile derived from authenticated credentials
       return {
         id: userId,
         email: email || null,
         display_name: email ? email.split('@')[0] : 'Factory Operator',
-        role: activeRole,
+        role: 'viewer',
         is_active: true,
         created_at: new Date().toISOString(),
       };
     } catch {
       return null;
     }
-  }, [activeRole]);
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
 
+    // Safety fallback: Never keep the workstation stuck in loading state for more than 1.5 seconds
+    const safetyTimer = setTimeout(() => {
+      if (isMounted) {
+        setLoading(false);
+      }
+    }, 1500);
+
     async function initAuth() {
       try {
-        const { data: { session: currentSession } } = await supabase.auth.getSession();
+        const sessionPromise = supabase.auth.getSession();
+        const timeoutPromise = new Promise<{ data: { session: null } }>((resolve) =>
+          setTimeout(() => resolve({ data: { session: null } }), 1200)
+        );
+        const { data: { session: currentSession } } = await Promise.race([sessionPromise, timeoutPromise]);
         if (!isMounted) return;
 
         setSession(currentSession);
@@ -134,8 +186,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (isMounted) {
             setProfile(prof);
             if (prof?.role) {
-              setActiveRole(prof.role);
+              setRole(prof.role);
             }
+          }
+        } else if (import.meta.env.DEV) {
+          const devSaved = localStorage.getItem(DEV_MOCK_ROLE_KEY);
+          if (devSaved && devSaved in ROLE_DEFINITIONS) {
+            const devRole = devSaved as UserRole;
+            setRole(devRole);
+            setProfile({
+              id: `dev-${devRole}`,
+              email: `${devRole}@factory.local`,
+              display_name: ROLE_DEFINITIONS[devRole].name,
+              role: devRole,
+              is_active: true,
+              created_at: new Date().toISOString(),
+            });
           }
         }
       } catch (err) {
@@ -156,45 +222,107 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (isMounted) {
           setProfile(prof);
           if (prof?.role) {
-            setActiveRole(prof.role);
+            setRole(prof.role);
           }
         }
       } else {
+        if (import.meta.env.DEV) {
+          const devSaved = localStorage.getItem(DEV_MOCK_ROLE_KEY);
+          if (devSaved && devSaved in ROLE_DEFINITIONS) {
+            // Keep dev mock profile in dev mode
+            setLoading(false);
+            return;
+          }
+        }
         setProfile(null);
+        setRole('viewer');
       }
-      setLoading(false);
+      if (isMounted) setLoading(false);
     });
 
     return () => {
       isMounted = false;
+      clearTimeout(safetyTimer);
       subscription.unsubscribe();
     };
   }, [loadProfile]);
 
   const switchRole = useCallback((newRole: UserRole) => {
-    setActiveRole(newRole);
-    localStorage.setItem(STORAGE_ROLE_KEY, newRole);
+    setRole(newRole);
+    if (import.meta.env.DEV) {
+      localStorage.setItem(DEV_MOCK_ROLE_KEY, newRole);
+      setProfile({
+        id: `dev-${newRole}`,
+        email: `${newRole}@factory.local`,
+        display_name: ROLE_DEFINITIONS[newRole].name,
+        role: newRole,
+        is_active: true,
+        created_at: new Date().toISOString(),
+      });
+    }
   }, []);
 
   const signIn = useCallback(async (email: string, password?: string) => {
+    setAuthError(null);
+
+    // In production, password is strictly mandatory
+    if (!import.meta.env.DEV && !password) {
+      const err = new Error('Password is required for workstation authentication.');
+      setAuthError(err.message);
+      throw err;
+    }
+
     if (password) {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) throw error;
-    } else {
-      // Direct workstation assignment switch
-      const syntheticId = `operator-${email.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
-      const matchedRole = Object.keys(ROLE_DEFINITIONS).find((r) => email.toLowerCase().includes(r)) as UserRole || 'admin';
+      try {
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) {
+          // If in DEV mode and remote auth failed, allow graceful dev mock fallback
+          if (import.meta.env.DEV) {
+            console.warn('Dev mode: remote sign in failed, falling back to local dev session', error.message);
+            const matchedRole = (Object.keys(ROLE_DEFINITIONS).find((r) =>
+              email.toLowerCase().includes(r.replace('_', '')) || email.toLowerCase().includes(r)
+            ) as UserRole) || 'admin';
+            switchRole(matchedRole);
+            return;
+          }
+          throw error;
+        }
+        if (data.user) {
+          setUser(data.user);
+          setSession(data.session);
+          const prof = await loadProfile(data.user.id, data.user.email);
+          setProfile(prof);
+          if (prof?.role) {
+            setRole(prof.role);
+          }
+        }
+        return;
+      } catch (err: unknown) {
+        if (!import.meta.env.DEV) {
+          const msg = err instanceof Error ? err.message : 'Authentication failed';
+          setAuthError(msg);
+          throw err;
+        }
+      }
+    }
+
+    // Dev environment 1-click fallback
+    if (import.meta.env.DEV) {
+      const syntheticId = `dev-${email.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+      const matchedRole = (Object.keys(ROLE_DEFINITIONS).find((r) =>
+        email.toLowerCase().includes(r.replace('_', '')) || email.toLowerCase().includes(r)
+      ) as UserRole) || 'admin';
       switchRole(matchedRole);
       setProfile({
         id: syntheticId,
         email,
-        display_name: email.split('@')[0],
+        display_name: ROLE_DEFINITIONS[matchedRole].name,
         role: matchedRole,
         is_active: true,
         created_at: new Date().toISOString(),
       });
     }
-  }, [switchRole]);
+  }, [loadProfile, switchRole]);
 
   const signOut = useCallback(async () => {
     try {
@@ -202,53 +330,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       // Ignored
     }
+    if (import.meta.env.DEV) {
+      localStorage.removeItem(DEV_MOCK_ROLE_KEY);
+    }
     setUser(null);
     setSession(null);
     setProfile(null);
-    switchRole('viewer');
-  }, [switchRole]);
+    setRole('viewer');
+    setAuthError(null);
+  }, []);
 
-  const canPerformAction = useCallback(
-    (action: 'inward' | 'stage_move' | 'dispatch' | 'manage_orders' | 'manage_items' | 'reverse_allocation'): boolean => {
-      if (activeRole === 'admin') return true;
-      if (activeRole === 'viewer') return false;
-
-      switch (action) {
-        case 'inward':
-          return ['admin', 'inward_manager'].includes(activeRole);
-        case 'stage_move':
-          return ['admin', 'coloring_operator', 'printing_operator', 'filling_operator', 'packaging_operator'].includes(activeRole);
-        case 'dispatch':
-          return ['admin', 'dispatch_manager'].includes(activeRole);
-        case 'manage_orders':
-          return ['admin', 'vendor_manager'].includes(activeRole);
-        case 'manage_items':
-          return ['admin', 'stock_manager'].includes(activeRole);
-        case 'reverse_allocation':
-          return ['admin', 'stock_manager'].includes(activeRole);
-        default:
-          return false;
-      }
-    },
-    [activeRole]
-  );
+  const isAuthenticated = useMemo(() => {
+    if (user !== null) return true;
+    if (import.meta.env.DEV && profile !== null && role !== 'viewer') return true;
+    return false;
+  }, [user, profile, role]);
 
   const contextValue = useMemo<AuthContextType>(() => {
+    const operatorName = profile?.display_name || user?.email?.split('@')[0] || ROLE_DEFINITIONS[role].name;
     return {
       user,
       session,
       profile,
-      role: activeRole,
-      roleDefinition: ROLE_DEFINITIONS[activeRole],
+      role,
+      roleDefinition: ROLE_DEFINITIONS[role],
+      operatorName,
       loading,
+      isAuthenticated,
+      isDevMode: Boolean(import.meta.env.DEV),
+      error: authError,
       signIn,
       signOut,
       switchRole,
-      canAccessView: (view: View) => canAccessView(activeRole, view),
-      canTransitionStage: (fromSeq: number, toSeq: number) => isOperatorTransitionAllowed(activeRole, fromSeq, toSeq),
-      canPerform: canPerformAction,
+      canAccessView: (view: View) => canAccessView(role, view),
+      canTransitionStage: (fromSeq: number, toSeq: number) => isOperatorTransitionAllowed(role, fromSeq, toSeq),
+      canPerform: (action: AuthAction) => canPerformAction(role, action),
     };
-  }, [user, session, profile, activeRole, loading, signIn, signOut, switchRole, canPerformAction]);
+  }, [user, session, profile, role, loading, isAuthenticated, authError, signIn, signOut, switchRole]);
 
   return <AuthContext.Provider value={contextValue}>{children}</AuthContext.Provider>;
 }

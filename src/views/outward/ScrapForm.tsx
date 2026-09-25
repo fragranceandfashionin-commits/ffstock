@@ -3,12 +3,18 @@ import { Flame, AlertCircle } from 'lucide-react';
 import { Field, inputClass, Button, ErrorBanner } from '@/components/ui';
 import { SCRAP_REASONS } from '@/lib/supabase';
 import { formatNumber } from '@/lib/utils';
+import {
+  BatchLocationAllocationGrid,
+  type BatchAllocationItem,
+} from './BatchLocationAllocationGrid';
 
 export type ScrapFormProps = {
   activeSourceQty: number;
   fromStageName: string;
   scrapQty: string;
   setScrapQty: (val: string) => void;
+  scrapAllocationItems?: BatchAllocationItem[];
+  onScrapAllocationChange?: (batchId: string, val: string) => void;
   scrapReason: string;
   setScrapReason: (val: string) => void;
   moveDoneBy: string;
@@ -27,6 +33,8 @@ export function ScrapForm({
   fromStageName,
   scrapQty,
   setScrapQty,
+  scrapAllocationItems = [],
+  onScrapAllocationChange,
   scrapReason,
   setScrapReason,
   moveDoneBy,
@@ -40,7 +48,10 @@ export function ScrapForm({
   formError,
 }: ScrapFormProps) {
   const numericQty = Number(scrapQty) || 0;
-  const isOverQty = numericQty > activeSourceQty;
+  const hasScrapCardOverAllocation = scrapAllocationItems && scrapAllocationItems.length > 0
+    ? scrapAllocationItems.some((item) => item.allocatedQty > item.availableQty)
+    : false;
+  const isOverQty = numericQty > activeSourceQty || hasScrapCardOverAllocation;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -63,38 +74,50 @@ export function ScrapForm({
         </p>
       </div>
 
-      <Field label={`Quantity Scrapped / Lost (${unitLabel})`} htmlFor="scrap-qty" required>
-        <div className="relative">
-          <input
-            id="scrap-qty"
-            type="number"
-            inputMode="numeric"
-            min={1}
-            max={activeSourceQty}
-            className={`${inputClass} text-base font-black pr-24 ${isOverQty ? 'border-rose-400 ring-2 ring-rose-100 bg-rose-50/40' : ''}`}
-            value={scrapQty}
-            onChange={(e) => setScrapQty(e.target.value)}
-            placeholder={`1 to ${formatNumber(activeSourceQty)}`}
-            disabled={activeSourceQty === 0 || submitting}
-            autoFocus
-          />
-          {activeSourceQty > 0 && (
-            <button
-              type="button"
-              onClick={() => setScrapQty(String(activeSourceQty))}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg bg-rose-600 px-2.5 py-1.5 text-xs font-bold text-white hover:bg-rose-700 transition shadow-2xs flex items-center gap-1 cursor-pointer"
-            >
-              All ({formatNumber(activeSourceQty)})
-            </button>
-          )}
-        </div>
-        {isOverQty && (
-          <div className="mt-1 flex items-center gap-1 text-xs font-semibold text-rose-600">
-            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-            Exceeds available: Only {formatNumber(activeSourceQty)} {unitLabel} in stage.
+      {/* Allocation Section: Rectangle Cards Grid or Fallback Scalar */}
+      {scrapAllocationItems && scrapAllocationItems.length > 0 && onScrapAllocationChange ? (
+        <BatchLocationAllocationGrid
+          items={scrapAllocationItems}
+          onAllocationChange={onScrapAllocationChange}
+          unitLabel={unitLabel}
+          stageName={fromStageName}
+          theme="rose"
+          disabled={submitting}
+        />
+      ) : (
+        <Field label={`Quantity Scrapped / Lost (${unitLabel})`} htmlFor="scrap-qty" required>
+          <div className="relative">
+            <input
+              id="scrap-qty"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={activeSourceQty}
+              className={`${inputClass} text-base font-black pr-24 ${isOverQty ? 'border-rose-400 ring-2 ring-rose-100 bg-rose-50/40' : ''}`}
+              value={scrapQty}
+              onChange={(e) => setScrapQty(e.target.value)}
+              placeholder={`1 to ${formatNumber(activeSourceQty)}`}
+              disabled={activeSourceQty === 0 || submitting}
+              autoFocus
+            />
+            {activeSourceQty > 0 && (
+              <button
+                type="button"
+                onClick={() => setScrapQty(String(activeSourceQty))}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg bg-rose-600 px-2.5 py-1.5 text-xs font-bold text-white hover:bg-rose-700 transition shadow-2xs flex items-center gap-1 cursor-pointer"
+              >
+                All ({formatNumber(activeSourceQty)})
+              </button>
+            )}
           </div>
-        )}
-      </Field>
+          {isOverQty && (
+            <div className="mt-1 flex items-center gap-1 text-xs font-semibold text-rose-600">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+              Exceeds available: Only {formatNumber(activeSourceQty)} {unitLabel} in stage.
+            </div>
+          )}
+        </Field>
+      )}
 
       <Field label="Defect Reason / Failure Category" required>
         <select
@@ -143,7 +166,7 @@ export function ScrapForm({
         <Button
           variant="danger"
           loading={submitting}
-          disabled={activeSourceQty <= 0 || isOverQty || !scrapQty || submitting}
+          disabled={activeSourceQty <= 0 || isOverQty || !scrapQty || numericQty <= 0 || submitting}
           onClick={onSubmit}
           className="flex-1 font-bold"
         >

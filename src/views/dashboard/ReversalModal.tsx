@@ -5,6 +5,7 @@ import type { MovementWithRelations, BatchWithRelations } from '@/lib/supabase';
 import type { DashboardCalculations } from './dashboardCalculations';
 import { insertReversalMovement } from '@/lib/queries';
 import { formatNumber, getErrorMessage } from '@/lib/utils';
+import { useAuth } from '@/lib/auth';
 
 export type DashboardReversalModalProps = {
   isOpen: boolean;
@@ -21,9 +22,10 @@ export function ReversalModal({
   calculations,
   onSuccess,
 }: DashboardReversalModalProps) {
+  const { operatorName, canPerform, role } = useAuth();
   const [reversalQty, setReversalQty] = useState('');
   const [reversalReason, setReversalReason] = useState('');
-  const [reversalDoneBy, setReversalDoneBy] = useState('');
+  const [reversalDoneBy, setReversalDoneBy] = useState(operatorName || '');
   const [reversalSubmitting, setReversalSubmitting] = useState(false);
   const [reversalError, setReversalError] = useState<string | null>(null);
 
@@ -34,10 +36,10 @@ export function ReversalModal({
       const initialQty = Math.min(reversalTarget.qty_moved, Math.max(0, availableInStage));
       setReversalQty(initialQty > 0 ? String(initialQty) : '');
       setReversalReason('');
-      setReversalDoneBy('');
+      setReversalDoneBy(operatorName || '');
       setReversalError(null);
     }
-  }, [isOpen, reversalTarget, calculations]);
+  }, [isOpen, reversalTarget, calculations, operatorName]);
 
   if (!isOpen || !reversalTarget) return null;
 
@@ -59,6 +61,10 @@ export function ReversalModal({
     }
     if (qtyNum > maxReversible) {
       setReversalError(`Cannot reverse ${formatNumber(qtyNum)} units. Only ${formatNumber(maxReversible)} units are currently available.`);
+      return;
+    }
+    if (role !== 'admin' && !canPerform('reverse_allocation')) {
+      setReversalError('Permission denied: Only administrators and production managers can execute ledger reversals.');
       return;
     }
     if (!reversalReason.trim()) {

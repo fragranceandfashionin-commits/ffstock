@@ -18,6 +18,7 @@ import { fetchSuppliers, insertSuppliers, updateSupplierExtended } from '@/lib/q
 import { supabase } from '@/lib/supabase';
 import type { Supplier, ExtendedSupplier } from '@/lib/supabase';
 import { getErrorMessage, formatDate, downloadCSV, getTodayDateString } from '@/lib/utils';
+import { useAuth } from '@/lib/auth';
 
 export type SuppliersViewProps = {
   initialSupplierId?: string;
@@ -36,6 +37,7 @@ const createEmptySupplierRow = (): MultiSupplierRow => ({
 });
 
 export function SuppliersView({ initialSupplierId }: SuppliersViewProps = {}) {
+  const { canPerform, role } = useAuth();
   const [suppliers, setSuppliers] = useState<Supplier[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -269,6 +271,11 @@ export function SuppliersView({ initialSupplierId }: SuppliersViewProps = {}) {
 
   const executeDelete = async () => {
     if (!deleteModalSupplier) return;
+    if (role !== 'admin') {
+      toast.error('Only Plant General Managers (admin) are authorized to delete suppliers.');
+      setDeleteModalSupplier(null);
+      return;
+    }
     setDeleting(true);
     try {
       const { error: deleteErr } = await supabase.from('suppliers').delete().eq('id', deleteModalSupplier.id);
@@ -374,10 +381,11 @@ export function SuppliersView({ initialSupplierId }: SuppliersViewProps = {}) {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 items-start">
         {/* Add Supplier Form Card */}
-        <Card className="lg:col-span-1 border-slate-200/90 shadow-sm lg:sticky lg:top-20">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-900 text-white shadow-2xs">
+        {canPerform('manage_suppliers') && (
+          <Card className="lg:col-span-1 border-slate-200/90 shadow-sm lg:sticky lg:top-20">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+              <div className="flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-900 text-white shadow-2xs">
                 <Plus className="h-4 w-4" />
               </div>
               <h2 className="text-base font-bold text-slate-900">Add Supplier</h2>
@@ -561,9 +569,10 @@ export function SuppliersView({ initialSupplierId }: SuppliersViewProps = {}) {
             </form>
           )}
         </Card>
+        )}
 
         {/* Suppliers List */}
-        <div className="lg:col-span-2 space-y-4">
+        <div className={canPerform('manage_suppliers') ? "lg:col-span-2 space-y-4" : "lg:col-span-3 space-y-4"}>
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-2xs">
             <SearchInput
               value={searchQuery}
@@ -664,7 +673,9 @@ export function SuppliersView({ initialSupplierId }: SuppliersViewProps = {}) {
                         <th className="px-4 py-3">Supplier Name</th>
                         <th className="px-4 py-3">Contact</th>
                         <th className="px-4 py-3">Added Date</th>
-                        <th className="px-4 py-3 text-right">Action</th>
+                        {(canPerform('manage_suppliers') || role === 'admin') && (
+                          <th className="px-4 py-3 text-right">Action</th>
+                        )}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 bg-white">
@@ -713,25 +724,31 @@ export function SuppliersView({ initialSupplierId }: SuppliersViewProps = {}) {
                           <td className="px-4 py-3.5 text-xs text-slate-500 whitespace-nowrap">
                             {formatDate(s.created_at)}
                           </td>
-                          <td className="px-4 py-3.5 text-right whitespace-nowrap">
-                            <button
-                              type="button"
-                              onClick={() => openEditModal(s as ExtendedSupplier)}
-                              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition cursor-pointer mr-1"
-                              title="Edit supplier"
-                            >
-                              <Edit2 className="h-4 w-4" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setDeleteModalSupplier(s)}
-                              className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition cursor-pointer"
-                              title="Delete supplier"
-                              aria-label={`Delete ${s.name}`}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
-                          </td>
+                          {(canPerform('manage_suppliers') || role === 'admin') && (
+                            <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                              {canPerform('manage_suppliers') && (
+                                <button
+                                  type="button"
+                                  onClick={() => openEditModal(s as ExtendedSupplier)}
+                                  className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition cursor-pointer mr-1"
+                                  title="Edit supplier"
+                                >
+                                  <Edit2 className="h-4 w-4" />
+                                </button>
+                              )}
+                              {role === 'admin' && (
+                                <button
+                                  type="button"
+                                  onClick={() => setDeleteModalSupplier(s)}
+                                  className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition cursor-pointer"
+                                  title="Delete supplier"
+                                  aria-label={`Delete ${s.name}`}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              )}
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>

@@ -440,43 +440,56 @@ export function calculateDashboardMetrics({
     };
   });
 
-  // Stage-wise aggregation and multi-category breakdown for each stage
+  // Stage-wise aggregation and multi-category breakdown for each stage (Single-pass O(N))
   const stageBreakdown = processStages.map((s) => {
-    const batchesAtStage = batchMatrix
-      .filter((item) => (item.stageQuantities[s.id] ?? 0) > 0)
-      .map((item) => ({
+    const batchesAtStage: Array<{
+      batch: BatchWithRelations;
+      qty: number;
+      customerNames: string[];
+      ageInDays: number;
+      resolvedCapName: string | null;
+      resolvedAtomizerName: string | null;
+      resolvedBoxName: string | null;
+      category: string;
+    }> = [];
+
+    let totalStageQty = 0;
+    let bottlesQty = 0;
+    let capsQty = 0;
+    let atomizersQty = 0;
+    let boxesQty = 0;
+
+    for (const item of batchMatrix) {
+      const q = item.stageQuantities[s.id] ?? 0;
+      if (q <= 0) continue;
+
+      const category = item.batch.item?.category || 'Bottle';
+      batchesAtStage.push({
         batch: item.batch,
-        qty: item.stageQuantities[s.id] ?? 0,
+        qty: q,
         customerNames: item.customerNames,
         ageInDays: item.ageInDays,
         resolvedCapName: item.resolvedCapName,
         resolvedAtomizerName: item.resolvedAtomizerName,
         resolvedBoxName: item.resolvedBoxName,
-        category: item.batch.item?.category || 'Bottle',
-      }));
+        category,
+      });
 
-    const totalStageQty = batchesAtStage.reduce((sum, item) => sum + item.qty, 0);
-    const bottlesQty = batchesAtStage
-      .filter((item) => isBottleCategory(item.category))
-      .reduce((sum, item) => sum + item.qty, 0);
-    const capsQty = batchesAtStage
-      .filter((item) => {
-        const cat = (item.category || '').toLowerCase().trim();
-        return cat.includes('cap') || cat.includes('closure');
-      })
-      .reduce((sum, item) => sum + item.qty, 0);
-    const atomizersQty = batchesAtStage
-      .filter((item) => {
-        const cat = (item.category || '').toLowerCase().trim();
-        return cat.includes('atomizer') || cat.includes('pump') || cat.includes('spray');
-      })
-      .reduce((sum, item) => sum + item.qty, 0);
-    const boxesQty = batchesAtStage
-      .filter((item) => {
-        const cat = (item.category || '').toLowerCase().trim();
-        return cat.includes('packaging') || cat.includes('pack') || cat.includes('box') || cat.includes('carton') || cat.includes('mono');
-      })
-      .reduce((sum, item) => sum + item.qty, 0);
+      totalStageQty += q;
+      const cat = category.toLowerCase().trim();
+      if (isBottleCategory(category)) {
+        bottlesQty += q;
+      }
+      if (cat.includes('cap') || cat.includes('closure')) {
+        capsQty += q;
+      }
+      if (cat.includes('atomizer') || cat.includes('pump') || cat.includes('spray')) {
+        atomizersQty += q;
+      }
+      if (cat.includes('packaging') || cat.includes('pack') || cat.includes('box') || cat.includes('carton') || cat.includes('mono')) {
+        boxesQty += q;
+      }
+    }
 
     return {
       stage: s,

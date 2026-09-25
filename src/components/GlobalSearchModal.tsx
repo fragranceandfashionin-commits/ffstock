@@ -32,6 +32,7 @@ import type {
 import { formatDate, formatNumber, classNames } from '@/lib/utils';
 import type { View } from '@/lib/types';
 import type { NavigationContext } from '@/components/AppShell';
+import { useAuth } from '@/lib/auth';
 
 export type GlobalSearchResult =
   | {
@@ -107,6 +108,7 @@ export type GlobalSearchModalProps = {
 type FilterCategory = 'ALL' | 'batch' | 'order' | 'item' | 'client' | 'dispatch' | 'supplier' | 'movement';
 
 export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchModalProps) {
+  const { canAccessView } = useAuth();
   const [query, setQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<FilterCategory>('ALL');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -173,7 +175,7 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
     const res: GlobalSearchResult[] = [];
 
     // 1. Search Production Orders
-    if (activeCategory === 'ALL' || activeCategory === 'order') {
+    if ((activeCategory === 'ALL' || activeCategory === 'order') && (canAccessView('orders') || canAccessView('order-history'))) {
       for (const ord of orders) {
         const matchOrderNo = ord.order_no.toLowerCase().includes(q);
         const matchProd = ord.product_name.toLowerCase().includes(q);
@@ -196,7 +198,7 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
     }
 
     // 2. Search Clients
-    if (activeCategory === 'ALL' || activeCategory === 'client') {
+    if ((activeCategory === 'ALL' || activeCategory === 'client') && canAccessView('clients')) {
       for (const c of clients) {
         const matchName = c.name.toLowerCase().includes(q);
         const matchComp = (c.company_name || '').toLowerCase().includes(q);
@@ -219,7 +221,7 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
     }
 
     // 3. Search Batches
-    if (activeCategory === 'ALL' || activeCategory === 'batch') {
+    if ((activeCategory === 'ALL' || activeCategory === 'batch') && canAccessView('dashboard')) {
       for (const b of batches) {
         const matchBatchNo = b.batch_no.toLowerCase().includes(q);
         const matchBrand = (b.brand_name || '').toLowerCase().includes(q);
@@ -243,7 +245,7 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
     }
 
     // 4. Search Items & BOM Components
-    if (activeCategory === 'ALL' || activeCategory === 'item') {
+    if ((activeCategory === 'ALL' || activeCategory === 'item') && canAccessView('items')) {
       for (const itm of items) {
         const matchName = itm.name.toLowerCase().includes(q);
         const matchCat = (itm.category || '').toLowerCase().includes(q);
@@ -265,7 +267,7 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
     }
 
     // 5. Search Customer Invoices & Dispatches
-    if (activeCategory === 'ALL' || activeCategory === 'dispatch') {
+    if ((activeCategory === 'ALL' || activeCategory === 'dispatch') && (canAccessView('dashboard') || canAccessView('outward'))) {
       for (const d of dispatches) {
         const matchInvoice = (d.invoice_no || '').toLowerCase().includes(q);
         const matchCust = (d.customer_name || '').toLowerCase().includes(q);
@@ -288,7 +290,7 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
     }
 
     // 6. Search Suppliers
-    if (activeCategory === 'ALL' || activeCategory === 'supplier') {
+    if ((activeCategory === 'ALL' || activeCategory === 'supplier') && canAccessView('suppliers')) {
       for (const s of suppliers) {
         const matchName = s.name.toLowerCase().includes(q);
         const matchContact = (s.contact || '').toLowerCase().includes(q);
@@ -308,7 +310,7 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
     }
 
     // 7. Search Movements & Operations
-    if (activeCategory === 'ALL' || activeCategory === 'movement') {
+    if ((activeCategory === 'ALL' || activeCategory === 'movement') && canAccessView('outward')) {
       for (const m of movements) {
         const matchVariant = (m.variant_name || '').toLowerCase().includes(q);
         const matchRemarks = (m.remarks || '').toLowerCase().includes(q);
@@ -332,7 +334,7 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
     }
 
     return res.slice(0, 50); // Cap for clean fast rendering
-  }, [query, activeCategory, orders, clients, batches, items, suppliers, dispatches, movements]);
+  }, [query, activeCategory, orders, clients, batches, items, suppliers, dispatches, movements, canAccessView]);
 
   // Keep selection within bounds
   useEffect(() => {
@@ -342,22 +344,22 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
   // Action Dispatcher
   const handleSelectResult = (item: GlobalSearchResult) => {
     if (item.type === 'order') {
-      if (item.order.status === 'completed') {
+      if (item.order.status === 'completed' && canAccessView('order-history')) {
         onNavigate('order-history', { orderId: item.order.id });
-      } else {
+      } else if (canAccessView('orders')) {
         onNavigate('orders', { orderId: item.order.id });
       }
-    } else if (item.type === 'client') {
+    } else if (item.type === 'client' && canAccessView('clients')) {
       onNavigate('clients', { clientId: item.client.id });
-    } else if (item.type === 'batch') {
+    } else if (item.type === 'batch' && canAccessView('dashboard')) {
       onNavigate('dashboard', { inspectBatch: item.batch, batchId: item.batch.id });
-    } else if (item.type === 'item') {
+    } else if (item.type === 'item' && canAccessView('items')) {
       onNavigate('items', { itemId: item.item.id });
-    } else if (item.type === 'dispatch') {
+    } else if (item.type === 'dispatch' && canAccessView('dashboard')) {
       onNavigate('dashboard', { openChallan: item.dispatch, invoiceNo: item.dispatch.invoice_no });
-    } else if (item.type === 'supplier') {
+    } else if (item.type === 'supplier' && canAccessView('suppliers')) {
       onNavigate('suppliers', { supplierId: item.supplier.id });
-    } else if (item.type === 'movement') {
+    } else if (item.type === 'movement' && canAccessView('outward')) {
       onNavigate('outward', { batchId: item.movement.batch_id, movementId: item.movement.id });
     }
   };
@@ -436,30 +438,32 @@ export function GlobalSearchModal({ isOpen, onClose, onNavigate }: GlobalSearchM
           <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mr-1">Filter:</span>
           {(
             [
-              { id: 'ALL', label: 'All Results' },
-              { id: 'order', label: '📋 Orders' },
-              { id: 'client', label: '👥 Clients' },
-              { id: 'batch', label: '📦 Batches' },
-              { id: 'item', label: '🏷️ Catalog Items' },
-              { id: 'dispatch', label: '📄 Invoices / Dispatches' },
-              { id: 'supplier', label: '🏢 Suppliers' },
-              { id: 'movement', label: '⚡ Movements' },
+              { id: 'ALL', label: 'All Results', visible: true },
+              { id: 'order', label: '📋 Orders', visible: canAccessView('orders') || canAccessView('order-history') },
+              { id: 'client', label: '👥 Clients', visible: canAccessView('clients') },
+              { id: 'batch', label: '📦 Batches', visible: canAccessView('dashboard') },
+              { id: 'item', label: '🏷️ Catalog Items', visible: canAccessView('items') },
+              { id: 'dispatch', label: '📄 Invoices / Dispatches', visible: canAccessView('dashboard') || canAccessView('outward') },
+              { id: 'supplier', label: '🏢 Suppliers', visible: canAccessView('suppliers') },
+              { id: 'movement', label: '⚡ Movements', visible: canAccessView('outward') },
             ] as const
-          ).map((cat) => (
-            <button
-              key={cat.id}
-              type="button"
-              onClick={() => setActiveCategory(cat.id)}
-              className={classNames(
-                'rounded-lg px-2.5 py-1 transition cursor-pointer whitespace-nowrap',
-                activeCategory === cat.id
-                  ? 'bg-slate-900 text-white font-bold shadow-xs'
-                  : 'hover:bg-slate-100 text-slate-600',
-              )}
-            >
-              {cat.label}
-            </button>
-          ))}
+          )
+            .filter((c) => c.visible)
+            .map((cat) => (
+              <button
+                key={cat.id}
+                type="button"
+                onClick={() => setActiveCategory(cat.id as FilterCategory)}
+                className={classNames(
+                  'rounded-lg px-2.5 py-1 transition cursor-pointer whitespace-nowrap',
+                  activeCategory === cat.id
+                    ? 'bg-slate-900 text-white font-bold shadow-xs'
+                    : 'hover:bg-slate-100 text-slate-600',
+                )}
+              >
+                {cat.label}
+              </button>
+            ))}
         </div>
 
         {/* Results Container */}
