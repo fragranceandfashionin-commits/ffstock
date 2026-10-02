@@ -15,6 +15,11 @@ import type { ItemGroup } from '@/views/outward/types';
 import type { Stage } from '@/lib/supabase';
 import type { BatchStock } from '@/lib/types';
 import { formatNumber, formatDate } from '@/lib/utils';
+import {
+  buildItemGroupIndex,
+  searchAndScoreItemGroups,
+  getMatchRanges,
+} from '@/lib/search';
 
 export type ItemGroupedPickerProps = {
   itemGroups: ItemGroup[];
@@ -28,26 +33,40 @@ export type ItemGroupedPickerProps = {
 
 type SortOption = 'fifo' | 'newest' | 'batch_asc' | 'stock_desc' | 'name_asc';
 
-/** Helper to highlight matching text substrings */
+type EnrichedItemGroup = ItemGroup & {
+  searchScore: number;
+  matchingBatchIds: Set<string>;
+  topMatchingBatchId?: string;
+};
+
+/** Helper to highlight matching text spans */
 function HighlightMatch({ text, query }: { text?: string | null; query: string }) {
   if (!text) return null;
   if (!query || !query.trim()) return <span>{text}</span>;
 
-  const q = query.trim().toLowerCase();
-  const index = text.toLowerCase().indexOf(q);
-  if (index === -1) return <span>{text}</span>;
+  const ranges = getMatchRanges(text, query);
+  if (!ranges.length) return <span>{text}</span>;
 
-  const before = text.substring(0, index);
-  const match = text.substring(index, index + q.length);
-  const after = text.substring(index + q.length);
+  const elements: React.ReactNode[] = [];
+  let lastIndex = 0;
 
-  return (
-    <span>
-      {before}
-      <mark className="bg-amber-200 text-amber-950 font-bold px-0.5 rounded-xs">{match}</mark>
-      {after}
-    </span>
-  );
+  ranges.forEach((range, idx) => {
+    if (range.start > lastIndex) {
+      elements.push(text.slice(lastIndex, range.start));
+    }
+    elements.push(
+      <mark key={idx} className="bg-amber-200 text-amber-950 font-bold px-0.5 rounded-xs">
+        {text.slice(range.start, range.end)}
+      </mark>
+    );
+    lastIndex = range.end;
+  });
+
+  if (lastIndex < text.length) {
+    elements.push(text.slice(lastIndex));
+  }
+
+  return <span>{elements}</span>;
 }
 
 export function ItemGroupedPicker({
@@ -114,61 +133,61 @@ export function ItemGroupedPicker({
     return [...defaultCats, ...otherCats];
   }, [categoryCounts]);
 
+  // Precompute search index for each ItemGroup
+  const groupIndexes = useMemo(() => {
+    return itemGroups.map(buildItemGroupIndex);
+  }, [itemGroups]);
+
+  // Compute search scoring map when searchQuery is non-empty
+  const searchResults = useMemo(() => {
+    const trimmed = searchQuery.trim();
+    if (!trimmed) return null;
+    return searchAndScoreItemGroups(groupIndexes, trimmed);
+  }, [groupIndexes, searchQuery]);
+
   // Full-text search and faceted filtering
-  const filteredGroups = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-
-    return itemGroups.filter((grp) => {
-      // 1. Category Filter
-      if (selectedCategory !== 'ALL' && grp.item.category !== selectedCategory) {
-        return false;
-      }
-
-      // 2. Location Filter
-      if (selectedLocation !== 'ALL') {
-        const hasLocation = grp.batches.some(
-          (b) => b.location && b.location.toLowerCase() === selectedLocation.toLowerCase()
-        );
-        if (!hasLocation) return false;
-      }
-
-      // 3. Search Query Matching across item name, category, and child batch metadata
-      if (q) {
-        const itemNameMatch = grp.item.name.toLowerCase().includes(q);
-        const itemCatMatch = (grp.item.category || '').toLowerCase().includes(q);
-
-        const childBatchMatch = grp.batches.some((b) => {
-          const bNo = b.batch_no.toLowerCase();
-          const bLoc = (b.location || '').toLowerCase();
-          const bDateRaw = (b.received_on || '').toLowerCase();
-          const bDateFmt = formatDate(b.received_on).toLowerCase();
-          const bSup = (b.supplier?.name || '').toLowerCase();
-          const bBrand = (b.brand_name || '').toLowerCase();
-          const bColor = (b.color || '').toLowerCase();
-
-          return (
-            bNo.includes(q) ||
-            bLoc.includes(q) ||
-            bDateRaw.includes(q) ||
-            bDateFmt.includes(q) ||
-            bSup.includes(q) ||
-            bBrand.includes(q) ||
-            bColor.includes(q)
-          );
-        });
-
-        if (!itemNameMatch && !itemCatMatch && !childBatchMatch) {
+  const filteredGroups = useMemo<EnrichedItemGroup[]>(() => {
+    return itemGroups
+      .filter((grp) => {
+        // 1. Category Filter
+        if (selectedCategory !== 'ALL' && grp.item.category !== selectedCategory) {
           return false;
         }
-      }
 
-      return true;
-    });
-  }, [itemGroups, searchQuery, selectedCategory, selectedLocation]);
+        // 2. Location Filter
+        if (selectedLocation !== 'ALL') {
+          const hasLocation = grp.batches.some(
+            (b) => b.location && b.location.toLowerCase() === selectedLocation.toLowerCase()
+          );
+          if (!hasLocation) return false;
+        }
+
+        // 3. Search Query Filter (multi-entity AND matching)
+        if (searchResults !== null) {
+          return searchResults.has(grp.item_id);
+        }
+
+        return true;
+      })
+      .map((grp) => {
+        const match = searchResults?.get(grp.item_id);
+        return {
+          ...grp,
+          searchScore: match?.score ?? 0,
+          matchingBatchIds: match?.matchingBatchIds ?? new Set<string>(),
+          topMatchingBatchId: match?.topMatchingBatchId,
+        };
+      });
+  }, [itemGroups, selectedCategory, selectedLocation, searchResults]);
 
   // Sorting
   const sortedGroups = useMemo(() => {
     return [...filteredGroups].sort((a, b) => {
+      // If user is actively searching, primary sort by search score descending
+      if (searchQuery.trim() && a.searchScore !== b.searchScore) {
+        return b.searchScore - a.searchScore;
+      }
+
       if (sortBy === 'fifo') {
         // Oldest earliest batch date first
         const dateA = a.batches[0]?.received_on
@@ -201,12 +220,22 @@ export function ItemGroupedPicker({
       }
       return 0;
     });
-  }, [filteredGroups, sortBy]);
+  }, [filteredGroups, sortBy, searchQuery]);
 
   // Adjust keyboard navigation index
   useEffect(() => {
     setHighlightedIndex(0);
   }, [searchQuery, selectedCategory, selectedLocation, sortBy]);
+
+  // Scroll active item into view during keyboard navigation
+  useEffect(() => {
+    if (listRef.current) {
+      const activeEl = listRef.current.querySelector<HTMLElement>(`[data-group-index="${highlightedIndex}"]`);
+      if (activeEl) {
+        activeEl.scrollIntoView({ block: 'nearest' });
+      }
+    }
+  }, [highlightedIndex]);
 
   const handleSelectGroup = useCallback(
     (groupId: string, batchId?: string) => {
@@ -232,7 +261,8 @@ export function ItemGroupedPicker({
       } else if (e.key === 'Enter') {
         e.preventDefault();
         if (sortedGroups[highlightedIndex]) {
-          handleSelectGroup(sortedGroups[highlightedIndex].item_id);
+          const target = sortedGroups[highlightedIndex];
+          handleSelectGroup(target.item_id, target.topMatchingBatchId);
         }
       }
     },
@@ -293,7 +323,10 @@ export function ItemGroupedPicker({
             {searchQuery && (
               <button
                 type="button"
-                onClick={() => setSearchQuery('')}
+                onClick={() => {
+                  setSearchQuery('');
+                  searchInputRef.current?.focus();
+                }}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 rounded-full hover:bg-slate-100 transition"
               >
                 <X className="h-3.5 w-3.5" />
@@ -405,12 +438,13 @@ export function ItemGroupedPicker({
               return (
                 <div
                   key={grp.item_id}
-                  onClick={() => handleSelectGroup(grp.item_id)}
+                  data-group-index={idx}
+                  onClick={() => handleSelectGroup(grp.item_id, grp.topMatchingBatchId)}
                   className={`rounded-xl border transition cursor-pointer p-3.5 sm:p-4 text-left ${
                     isSelected
                       ? 'border-indigo-500 bg-indigo-50/40 ring-2 ring-indigo-500/20'
                       : isHighlighted
-                      ? 'border-slate-300 bg-slate-50'
+                      ? 'border-indigo-400 bg-indigo-50/20 ring-2 ring-indigo-400/25'
                       : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/70 shadow-2xs'
                   }`}
                 >
@@ -449,75 +483,95 @@ export function ItemGroupedPicker({
                       Date-Wise Batches &amp; Storage Locations
                     </span>
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                      {grp.batches.map((b, bIdx) => (
-                        <div
-                          key={b.id}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleSelectGroup(grp.item_id, b.id);
-                          }}
-                          className="p-2 rounded-lg bg-slate-50 hover:bg-indigo-50/80 border border-slate-200/80 hover:border-indigo-300 transition text-[11px] group"
-                        >
-                          <div className="flex items-center justify-between gap-1 mb-1">
-                            <span className="font-mono font-bold text-slate-900 flex items-center gap-1">
-                              <HighlightMatch text={b.batch_no} query={searchQuery} />
-                              <button
-                                type="button"
-                                onClick={(e) => handleCopy(e, b.batch_no)}
-                                className="opacity-0 group-hover:opacity-100 hover:text-indigo-600 transition"
-                                title="Copy batch number"
-                              >
-                                {copiedBatchNo === b.batch_no ? (
-                                  <CheckCheck className="h-2.5 w-2.5 text-emerald-600" />
-                                ) : (
-                                  <Copy className="h-2.5 w-2.5" />
-                                )}
-                              </button>
-                            </span>
-                            <span
-                              className={`text-[9px] font-black px-1.5 py-0.2 rounded-full ${
-                                bIdx === 0
-                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                  : 'bg-indigo-100 text-indigo-800'
+                      {(() => {
+                        const displayBatches = searchQuery.trim()
+                          ? [...grp.batches].sort((b1, b2) => {
+                              const m1 = grp.matchingBatchIds.has(b1.id) ? 1 : 0;
+                              const m2 = grp.matchingBatchIds.has(b2.id) ? 1 : 0;
+                              return m2 - m1;
+                            })
+                          : grp.batches;
+
+                        return displayBatches.map((b, bIdx) => {
+                          const isBatchMatch = grp.matchingBatchIds.has(b.id);
+
+                          return (
+                            <div
+                              key={b.id}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleSelectGroup(grp.item_id, b.id);
+                              }}
+                              className={`p-2 rounded-lg transition text-[11px] group ${
+                                isBatchMatch
+                                  ? 'bg-indigo-50/80 border border-indigo-400 shadow-2xs ring-1 ring-indigo-400/30'
+                                  : 'bg-slate-50 hover:bg-indigo-50/80 border border-slate-200/80 hover:border-indigo-300'
                               }`}
                             >
-                              {bIdx === 0 ? '⚡ FIFO #1' : `#${bIdx + 1}`}
-                            </span>
-                          </div>
+                              <div className="flex items-center justify-between gap-1 mb-1">
+                                <span className="font-mono font-bold text-slate-900 flex items-center gap-1">
+                                  <HighlightMatch text={b.batch_no} query={searchQuery} />
+                                  <button
+                                    type="button"
+                                    onClick={(e) => handleCopy(e, b.batch_no)}
+                                    className="opacity-0 group-hover:opacity-100 hover:text-indigo-600 transition"
+                                    title="Copy batch number"
+                                  >
+                                    {copiedBatchNo === b.batch_no ? (
+                                      <CheckCheck className="h-2.5 w-2.5 text-emerald-600" />
+                                    ) : (
+                                      <Copy className="h-2.5 w-2.5" />
+                                    )}
+                                  </button>
+                                </span>
+                                <span
+                                  className={`text-[9px] font-black px-1.5 py-0.2 rounded-full ${
+                                    isBatchMatch
+                                      ? 'bg-indigo-200 text-indigo-900 border border-indigo-300'
+                                      : bIdx === 0
+                                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                      : 'bg-indigo-100 text-indigo-800'
+                                  }`}
+                                >
+                                  {isBatchMatch ? '⚡ Match' : bIdx === 0 ? '⚡ FIFO #1' : `#${bIdx + 1}`}
+                                </span>
+                              </div>
 
-                          <div className="space-y-0.5 text-[10px] text-slate-500">
-                            {/* Date */}
-                            <div className="flex items-center gap-1">
-                              <Calendar className="h-2.5 w-2.5 text-slate-400" />
-                              <span>
-                                <HighlightMatch
-                                  text={formatDate(b.received_on)}
-                                  query={searchQuery}
-                                />
-                              </span>
-                            </div>
+                              <div className="space-y-0.5 text-[10px] text-slate-500">
+                                {/* Date */}
+                                <div className="flex items-center gap-1">
+                                  <Calendar className="h-2.5 w-2.5 text-slate-400" />
+                                  <span>
+                                    <HighlightMatch
+                                      text={formatDate(b.received_on)}
+                                      query={searchQuery}
+                                    />
+                                  </span>
+                                </div>
 
-                            {/* Storage Location */}
-                            <div className="flex items-center gap-1">
-                              <MapPin className="h-2.5 w-2.5 text-indigo-500" />
-                              <span className="font-semibold text-slate-700">
-                                <HighlightMatch
-                                  text={b.location || 'Unknown Bay'}
-                                  query={searchQuery}
-                                />
-                              </span>
-                            </div>
+                                {/* Storage Location */}
+                                <div className="flex items-center gap-1">
+                                  <MapPin className="h-2.5 w-2.5 text-indigo-500" />
+                                  <span className="font-semibold text-slate-700">
+                                    <HighlightMatch
+                                      text={b.location || 'Unknown Bay'}
+                                      query={searchQuery}
+                                    />
+                                  </span>
+                                </div>
 
-                            {/* Intake Quantity */}
-                            <div className="flex items-center justify-between pt-1 border-t border-slate-200/60 font-medium">
-                              <span>Intake:</span>
-                              <span className="font-bold text-slate-800">
-                                {formatNumber(b.qty_received)} {grp.item.unit}
-                              </span>
+                                {/* Intake Quantity */}
+                                <div className="flex items-center justify-between pt-1 border-t border-slate-200/60 font-medium">
+                                  <span>Intake:</span>
+                                  <span className="font-bold text-slate-800">
+                                    {formatNumber(b.qty_received)} {grp.item.unit}
+                                  </span>
+                                </div>
+                              </div>
                             </div>
-                          </div>
-                        </div>
-                      ))}
+                          );
+                        });
+                      })()}
                     </div>
                   </div>
                 </div>
