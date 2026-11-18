@@ -9,6 +9,7 @@ import {
   normalizeItemName,
   levenshteinDistance,
   findSimilarItems,
+  normalizePhoneForWhatsApp,
 } from '../utils';
 
 describe('utils.ts', () => {
@@ -129,6 +130,54 @@ describe('utils.ts', () => {
 
     it('returns empty when input is too short', () => {
       expect(findSimilarItems('a', 'Bottle', existing)).toEqual([]);
+    });
+  });
+
+  describe('normalizePhoneForWhatsApp', () => {
+    it('normalizes standard 10-digit Indian mobile number', () => {
+      expect(normalizePhoneForWhatsApp('9876543210')).toBe('919876543210');
+      expect(normalizePhoneForWhatsApp(' 8765432109 ')).toBe('918765432109');
+    });
+
+    it('normalizes 11-digit Indian number with leading zero', () => {
+      expect(normalizePhoneForWhatsApp('09876543210')).toBe('919876543210');
+    });
+
+    it('normalizes 12-digit Indian number with 91 prefix', () => {
+      expect(normalizePhoneForWhatsApp('+91 9876543210')).toBe('919876543210');
+      expect(normalizePhoneForWhatsApp('919876543210')).toBe('919876543210');
+    });
+
+    it('skips invalid Indian landline and picks valid mobile in delimiter string', () => {
+      // 022-28475555 is an Indian landline starting with STD 022 (not a mobile 6-9).
+      // The second segment 9820012345 is a valid mobile.
+      expect(normalizePhoneForWhatsApp('022-28475555, 9820012345')).toBe('919820012345');
+    });
+
+    it('picks the first valid mobile in a delimiter string with slashes, pipes, or words', () => {
+      expect(normalizePhoneForWhatsApp('9876543210 / 9876543211')).toBe('919876543210');
+      expect(normalizePhoneForWhatsApp('02212345678 or 9876543210')).toBe('919876543210');
+      expect(normalizePhoneForWhatsApp('invalid | 9876543210 and 9123456789')).toBe('919876543210');
+    });
+
+    it('normalizes valid international numbers without leading zero', () => {
+      expect(normalizePhoneForWhatsApp('+1 (415) 555-2671')).toBe('14155552671');
+      expect(normalizePhoneForWhatsApp('+44 7911 123456')).toBe('447911123456');
+      expect(normalizePhoneForWhatsApp('+971 50 123 4567')).toBe('971501234567');
+    });
+
+    it('returns null for pure landlines or invalid numbers', () => {
+      expect(normalizePhoneForWhatsApp('022-28475555')).toBeNull();
+      expect(normalizePhoneForWhatsApp('011-23456789')).toBeNull();
+      expect(normalizePhoneForWhatsApp('12345')).toBeNull();
+      expect(normalizePhoneForWhatsApp('abcdefg')).toBeNull();
+    });
+
+    it('returns null for null, undefined, or empty string', () => {
+      expect(normalizePhoneForWhatsApp(null)).toBeNull();
+      expect(normalizePhoneForWhatsApp(undefined)).toBeNull();
+      expect(normalizePhoneForWhatsApp('')).toBeNull();
+      expect(normalizePhoneForWhatsApp('   ')).toBeNull();
     });
   });
 });

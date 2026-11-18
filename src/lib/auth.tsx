@@ -127,7 +127,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async (
       userId: string,
       email?: string,
-      userMetadata?: Record<string, any>
+      userMetadata?: Record<string, unknown>
     ): Promise<UserProfile | null> => {
       try {
         const queryPromise = supabase
@@ -152,7 +152,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         // Determine fallback role from user metadata or known email patterns
         let derivedRole: UserRole = 'viewer';
-        if (userMetadata?.role && userMetadata.role in ROLE_DEFINITIONS) {
+        if (typeof userMetadata?.role === 'string' && userMetadata.role in ROLE_DEFINITIONS) {
           derivedRole = userMetadata.role as UserRole;
         } else if (email?.toLowerCase().startsWith('admin@')) {
           derivedRole = 'admin';
@@ -164,7 +164,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         const derivedName =
-          userMetadata?.display_name ||
+          (typeof userMetadata?.display_name === 'string' ? userMetadata.display_name : null) ||
           (derivedRole in ROLE_DEFINITIONS ? ROLE_DEFINITIONS[derivedRole].name : null) ||
           (email ? email.split('@')[0] : 'Factory Operator');
 

@@ -15,6 +15,7 @@ import {
   UserPlus,
   RefreshCw,
   X,
+  Copy,
 } from 'lucide-react';
 import {
   Card,
@@ -31,7 +32,7 @@ import {
 import { useToast } from '@/components/Toast';
 import {
   fetchProductionOrders,
-  createProductionOrder,
+  createMultipleProductionOrders,
   completeProductionOrder,
   deleteProductionOrder,
   updateMaterialAllocation,
@@ -46,7 +47,6 @@ import {
 } from '@/lib/queries';
 import { supabase } from '@/lib/supabase';
 import type {
-  ProductionOrder,
   ProductionOrderWithRelations,
   MaterialAllocation,
   Client,
@@ -58,6 +58,20 @@ import type { NavigationContext } from '@/components/AppShell';
 import { getErrorMessage, formatDate } from '@/lib/utils';
 import { useAuth } from '@/lib/auth';
 
+export type OrderBatchItem = {
+  tempId: string;
+  product_name: string;
+  total_qty: number | '';
+  variants: string[];
+  variantInput: string;
+  due_date: string;
+  notes: string;
+  status: 'idle' | 'creating' | 'success' | 'error';
+  error?: string;
+};
+
+const PRESET_SIZES = ['30ml', '50ml', '100ml', '200ml'];
+
 export type OrdersViewProps = {
   initialOrderId?: string;
   initialClientId?: string;
@@ -65,7 +79,7 @@ export type OrdersViewProps = {
 };
 
 export function OrdersView({ initialOrderId, initialClientId, onViewChange }: OrdersViewProps) {
-  const { canPerform, role } = useAuth();
+  const { canPerform, canAccessView } = useAuth();
   const [orders, setOrders] = useState<ProductionOrderWithRelations[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -79,24 +93,41 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
   const [selectedClientId, setSelectedClientId] = useState<string>(initialClientId || 'all');
   const [expandedOrderIds, setExpandedOrderIds] = useState<Set<string>>(new Set());
 
+  // Keep client filter and batch client in sync if initialClientId changes
+  useEffect(() => {
+    if (initialClientId && initialClientId !== 'all') {
+      setSelectedClientId(initialClientId);
+      setBatchClientId(initialClientId);
+    }
+  }, [initialClientId]);
+
   // Modal States
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showQuickClientModal, setShowQuickClientModal] = useState(false);
-  const [deleteModalOrder, setDeleteModalOrder] = useState<ProductionOrder | null>(null);
+  const [deleteModalOrder, setDeleteModalOrder] = useState<ProductionOrderWithRelations | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [completeModalOrder, setCompleteModalOrder] = useState<ProductionOrderWithRelations | null>(null);
   const [completing, setCompleting] = useState(false);
   const [printOrder, setPrintOrder] = useState<ProductionOrderWithRelations | null>(null);
 
-  // New Order Form State
-  const [newClientId, setNewClientId] = useState('');
-  const [newProductName, setNewProductName] = useState('');
-  const [newTotalQty, setNewTotalQty] = useState<number | ''>('');
-  const [newDueDate, setNewDueDate] = useState('');
-  const [newNotes, setNewNotes] = useState('');
-  const [variantInput, setVariantInput] = useState('');
-  const [variantsList, setVariantsList] = useState<string[]>([]);
-  const [creatingOrder, setCreatingOrder] = useState(false);
+  // Multi-Order Batch Entry State
+  const [batchClientId, setBatchClientId] = useState<string>(
+    initialClientId && initialClientId !== 'all' ? initialClientId : ''
+  );
+  const [batchItems, setBatchItems] = useState<OrderBatchItem[]>([
+    {
+      tempId: crypto.randomUUID(),
+      product_name: '',
+      total_qty: '',
+      variants: [],
+      variantInput: '',
+      due_date: '',
+      notes: '',
+      status: 'idle',
+    },
+  ]);
+  const [creatingBatch, setCreatingBatch] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null);
 
   // Quick Client Form State
   const [quickClientName, setQuickClientName] = useState('');
@@ -205,17 +236,118 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
     setExpandedOrderIds(new Set());
   };
 
-  // Add Variant Tag
-  const handleAddVariant = () => {
-    const val = variantInput.trim();
-    if (val && !variantsList.includes(val)) {
-      setVariantsList([...variantsList, val]);
-      setVariantInput('');
+  // Batch Modal Opener with preselected client
+  const handleOpenCreateModal = () => {
+    if (!batchClientId) {
+      if (selectedClientId && selectedClientId !== 'all') {
+        setBatchClientId(selectedClientId);
+      } else if (initialClientId && initialClientId !== 'all') {
+        setBatchClientId(initialClientId);
+      }
     }
+    if (batchItems.length === 0) {
+      setBatchItems([
+        {
+          tempId: crypto.randomUUID(),
+          product_name: '',
+          total_qty: '',
+          variants: [],
+          variantInput: '',
+          due_date: '',
+          notes: '',
+          status: 'idle',
+        },
+      ]);
+    }
+    setShowCreateModal(true);
   };
 
-  const handleRemoveVariant = (variant: string) => {
-    setVariantsList(variantsList.filter((v) => v !== variant));
+  // Batch Item Modifiers
+  const handleAddBatchItem = () => {
+    setBatchItems((prev) => [
+      ...prev,
+      {
+        tempId: crypto.randomUUID(),
+        product_name: '',
+        total_qty: '',
+        variants: [],
+        variantInput: '',
+        due_date: '',
+        notes: '',
+        status: 'idle',
+      },
+    ]);
+  };
+
+  const handleDuplicateBatchItem = (idx: number) => {
+    const source = batchItems[idx];
+    const duplicated: OrderBatchItem = {
+      tempId: crypto.randomUUID(),
+      product_name: source.product_name,
+      total_qty: source.total_qty,
+      variants: [...source.variants],
+      variantInput: '',
+      due_date: source.due_date,
+      notes: source.notes,
+      status: 'idle',
+    };
+    const next = [...batchItems];
+    next.splice(idx + 1, 0, duplicated);
+    setBatchItems(next);
+  };
+
+  const handleRemoveBatchItem = (idx: number) => {
+    if (batchItems.length <= 1) return;
+    setBatchItems(batchItems.filter((_, i) => i !== idx));
+  };
+
+  const handleBatchItemChange = (
+    idx: number,
+    field: keyof Omit<OrderBatchItem, 'tempId' | 'variants' | 'status' | 'error'>,
+    value: string | number
+  ) => {
+    setBatchItems((prev) =>
+      prev.map((item, i) => {
+        if (i !== idx) return item;
+        return { ...item, [field]: value };
+      })
+    );
+  };
+
+  const handleBatchAddPresetVariant = (idx: number, size: string) => {
+    setBatchItems((prev) =>
+      prev.map((item, i) => {
+        if (i !== idx) return item;
+        if (item.variants.includes(size)) return item;
+        return { ...item, variants: [...item.variants, size] };
+      })
+    );
+  };
+
+  const handleBatchAddCustomVariant = (idx: number) => {
+    setBatchItems((prev) =>
+      prev.map((item, i) => {
+        if (i !== idx) return item;
+        const val = item.variantInput.trim().replace(/^,+|,+$/g, '');
+        if (!val) return item;
+        const tokens = val.split(',').map((t) => t.trim()).filter(Boolean);
+        const unique = tokens.filter((t) => !item.variants.includes(t));
+        return {
+          ...item,
+          variants: [...item.variants, ...unique],
+          variantInput: '',
+        };
+      })
+    );
+  };
+
+  const handleBatchRemoveVariant = (idx: number, variantToRemove: string) => {
+    setBatchItems((prev) =>
+      prev.map((item, i) => {
+        if (i !== idx) return item;
+        return { ...item, variants: item.variants.filter((v) => v !== variantToRemove) };
+      })
+    );
   };
 
   // Quick Client Creation
@@ -236,7 +368,7 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
       });
 
       setClients((prev) => [...prev, newClient].sort((a, b) => a.name.localeCompare(b.name)));
-      setNewClientId(newClient.id);
+      setBatchClientId(newClient.id);
       setShowQuickClientModal(false);
       setQuickClientName('');
       setQuickClientCompany('');
@@ -251,46 +383,98 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
     }
   };
 
-  // Create Production Order
-  const handleCreateOrder = async (e: React.FormEvent) => {
+  // Create Production Orders Batch
+  const handleCreateBatchOrder = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newClientId) {
-      toast.error('Please select a client');
-      return;
-    }
-    if (!newProductName.trim()) {
-      toast.error('Product name is required');
+    if (!batchClientId) {
+      toast.error('Please select a client for this batch');
       return;
     }
 
-    setCreatingOrder(true);
+    for (let i = 0; i < batchItems.length; i++) {
+      const item = batchItems[i];
+      if (!item.product_name.trim()) {
+        toast.error(`Order Line #${i + 1}: Product name is required`);
+        return;
+      }
+    }
+
+    setCreatingBatch(true);
+    setBatchProgress({ current: 0, total: batchItems.length });
+
+    const payloads = batchItems.map((item) => ({
+      client_id: batchClientId,
+      product_name: item.product_name.trim(),
+      variants: item.variants,
+      total_qty: typeof item.total_qty === 'number' ? item.total_qty : 0,
+      due_date: item.due_date || null,
+      notes: item.notes.trim() || null,
+    }));
+
     try {
-      const created = await createProductionOrder({
-        client_id: newClientId,
-        product_name: newProductName.trim(),
-        variants: variantsList,
-        total_qty: typeof newTotalQty === 'number' ? newTotalQty : 0,
-        due_date: newDueDate || null,
-        notes: newNotes.trim() || null,
-      });
+      const { succeeded, failed } = await createMultipleProductionOrders(
+        payloads,
+        (current, total) => {
+          setBatchProgress({ current: current + 1, total });
+        }
+      );
 
-      toast.success(`Production Order ${created.order_no} created with 10 BOM components!`);
-      setShowCreateModal(false);
-      // Reset form
-      setNewClientId('');
-      setNewProductName('');
-      setNewTotalQty('');
-      setNewDueDate('');
-      setNewNotes('');
-      setVariantsList([]);
-      setVariantInput('');
+      if (succeeded.length > 0) {
+        await loadData();
+        if (succeeded.length === 1) {
+          setExpandedOrderIds(new Set([succeeded[0].id]));
+        } else {
+          setExpandedOrderIds((prev) => new Set([...prev, ...succeeded.map((s) => s.id)]));
+        }
+      }
 
-      await loadData();
-      setExpandedOrderIds(new Set([created.id]));
+      if (failed.length === 0) {
+        toast.success(
+          succeeded.length === 1
+            ? `Production Order ${succeeded[0].order_no} created with 10 BOM components!`
+            : `Created ${succeeded.length} production orders with 10 BOM components each!`
+        );
+        setShowCreateModal(false);
+        setBatchItems([
+          {
+            tempId: crypto.randomUUID(),
+            product_name: '',
+            total_qty: '',
+            variants: [],
+            variantInput: '',
+            due_date: '',
+            notes: '',
+            status: 'idle',
+          },
+        ]);
+      } else {
+        const failedIndices = new Set(failed.map((f) => f.index));
+        const remainingItems = batchItems
+          .filter((_, idx) => failedIndices.has(idx))
+          .map((item) => {
+            const failure = failed.find((f) => f.payload.product_name === item.product_name.trim());
+            return {
+              ...item,
+              status: 'error' as const,
+              error: failure?.error || 'Failed to create order',
+            };
+          });
+
+        setBatchItems(remainingItems);
+
+        if (succeeded.length > 0) {
+          toast.error(
+            `Created ${succeeded.length} order(s). ${failed.length} order(s) failed: ${failed[0].error}. Please review and retry.`
+          );
+        } else {
+          toast.error(`Failed to create orders: ${failed[0].error}`);
+        }
+      }
     } catch (err) {
-      toast.error(getErrorMessage(err, 'Failed to create production order'));
+      toast.error(getErrorMessage(err, 'Failed to create production batch'));
     } finally {
-      setCreatingOrder(false);
+      setCreatingBatch(false);
+      setBatchProgress(null);
     }
   };
 
@@ -313,8 +497,8 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
   // Delete Order
   const handleConfirmDelete = async () => {
     if (!deleteModalOrder) return;
-    if (role !== 'admin') {
-      toast.error('Only Plant General Managers (admin) are authorized to delete production orders.');
+    if (!canPerform('manage_orders')) {
+      toast.error('Permission denied: You do not have permission to delete production orders.');
       setDeleteModalOrder(null);
       return;
     }
@@ -335,7 +519,7 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
   const handleAllocationFieldChange = async (
     allocationId: string,
     field: keyof MaterialAllocation,
-    value: string | null
+    value: string | number | null
   ) => {
     if (!canPerform('manage_orders')) {
       toast.error('Permission denied: You do not have permission to modify order allocations.');
@@ -369,26 +553,50 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
       toast.error('Permission denied: You do not have permission to mark components received.');
       return;
     }
+
+    // Pre-flight SKU guard for physical items
+    const isService = /printing|coating|stamping|metalliz|emboss/i.test(allocation.component_name);
+    if (isPending && !allocation.stock_item_id && !isService) {
+      const hasMatch = items.some(
+        (i) => i.name.toLowerCase() === (allocation.description || allocation.component_name).toLowerCase()
+      );
+      if (!hasMatch) {
+        toast.error(`Please select a Warehouse SKU for "${allocation.component_name}" before marking received.`);
+        return;
+      }
+    }
+
     try {
+      let resultOrderStatus: string | undefined;
       if (isPending) {
-        await markAllocationReceived(allocation.id);
+        const res = await markAllocationReceived(allocation.id);
+        resultOrderStatus = res.order_status;
         toast.success(`Component "${allocation.component_name}" received!`);
+        if (res.stock_warning) {
+          toast.warning(res.stock_warning);
+        }
       } else {
-        await revertAllocationToPending(allocation.id);
+        const res = await revertAllocationToPending(allocation.id);
+        resultOrderStatus = res.order_status;
         toast.info(`Component "${allocation.component_name}" reverted to pending`);
       }
-      // Optimistic update
+
       const newStatus = isPending ? 'received' : 'pending';
       const newReceivedAt = isPending ? new Date().toISOString() : null;
       setOrders((prev) =>
-        prev.map((ord) => ({
-          ...ord,
-          material_allocations: ord.material_allocations?.map((alloc) =>
+        prev.map((ord) => {
+          if (ord.id !== allocation.order_id) return ord;
+          const updatedAllocations = ord.material_allocations?.map((alloc) =>
             alloc.id === allocation.id
-              ? { ...alloc, status: newStatus, received_at: newReceivedAt }
+              ? { ...alloc, status: newStatus as 'pending' | 'received', received_at: newReceivedAt }
               : alloc
-          ),
-        }))
+          );
+          return {
+            ...ord,
+            status: (resultOrderStatus as ProductionOrderWithRelations['status']) || ord.status,
+            material_allocations: updatedAllocations,
+          };
+        })
       );
     } catch (err) {
       toast.error(getErrorMessage(err, 'Failed to update component status'));
@@ -530,14 +738,16 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
           </h2>
           <table className="w-full text-left text-xs border border-slate-300 mb-8 border-collapse">
             <thead>
-              <tr className="bg-slate-200 text-slate-900 font-bold border-b border-slate-300">
-                <th className="p-2 border-r border-slate-300 w-12 text-center">#</th>
-                <th className="p-2 border-r border-slate-300 w-36">Component</th>
-                <th className="p-2 border-r border-slate-300 w-24">Source</th>
-                <th className="p-2 border-r border-slate-300">Specification / Assigned</th>
-                <th className="p-2 border-r border-slate-300 w-28 text-center">Expected</th>
-                <th className="p-2 border-r border-slate-300 w-24 text-center">Status</th>
-                <th className="p-2 w-32">Remarks</th>
+              <tr className="bg-slate-200 border-b border-slate-300 font-bold uppercase text-[10px] text-slate-800">
+                <th className="p-2 border-r border-slate-300 w-10 text-center">#</th>
+                <th className="p-2 border-r border-slate-300 w-32">Component</th>
+                <th className="p-2 border-r border-slate-300 w-20">Source</th>
+                <th className="p-2 border-r border-slate-300 w-24 text-center">Planned Qty</th>
+                <th className="p-2 border-r border-slate-300 w-24 text-center">Received Qty</th>
+                <th className="p-2 border-r border-slate-300">Warehouse SKU &amp; Specs</th>
+                <th className="p-2 border-r border-slate-300 w-28">Assigned Party</th>
+                <th className="p-2 border-r border-slate-300 w-24">Location</th>
+                <th className="p-2 w-24 text-center">Status</th>
               </tr>
             </thead>
             <tbody>
@@ -550,29 +760,30 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                     <tr key={alloc.id} className="border-b border-slate-200">
                       <td className="p-2 border-r border-slate-200 text-center font-mono">{idx + 1}</td>
                       <td className="p-2 border-r border-slate-200 font-semibold">{alloc.component_name}</td>
-                      <td className="p-2 border-r border-slate-200 uppercase text-[10px] font-bold">
-                        {alloc.source}
+                      <td className="p-2 border-r border-slate-200 uppercase text-[10px] font-bold">{alloc.source}</td>
+                      <td className="p-2 border-r border-slate-200 text-center font-mono">
+                        {(alloc.qty || printOrder.total_qty || 0).toLocaleString()}
+                      </td>
+                      <td className="p-2 border-r border-slate-200 text-center font-mono font-bold">
+                        {alloc.qty_received ? alloc.qty_received.toLocaleString() : '-'}
                       </td>
                       <td className="p-2 border-r border-slate-200">
-                        {alloc.description && <span className="block">{alloc.description}</span>}
-                        {alloc.source === 'vendor' && assignedVendor && (
-                          <span className="text-[11px] text-slate-600 block">
-                            Vendor: {assignedVendor.name}
+                        {assignedItem ? (
+                          <span className="font-semibold block">
+                            {assignedItem.name} {assignedItem.color ? `[${assignedItem.color}]` : ''}
                           </span>
-                        )}
-                        {alloc.source === 'stock' && assignedItem && (
-                          <span className="text-[11px] text-slate-600 block">
-                            Stock: {assignedItem.name}
-                          </span>
-                        )}
+                        ) : null}
+                        {alloc.description && <span className="text-slate-600 text-[11px] block">{alloc.description}</span>}
                       </td>
-                      <td className="p-2 border-r border-slate-200 text-center font-mono text-[11px]">
-                        {alloc.timeline ? formatDate(alloc.timeline) : '-'}
+                      <td className="p-2 border-r border-slate-200">
+                        {alloc.source === 'vendor' ? assignedVendor?.name || 'External Vendor' : 'In-House Warehouse'}
                       </td>
-                      <td className="p-2 border-r border-slate-200 text-center uppercase font-bold text-[10px]">
+                      <td className="p-2 border-r border-slate-200 font-mono text-[11px]">
+                        {alloc.location || 'Raw Stock Bay A'}
+                      </td>
+                      <td className="p-2 text-center uppercase font-bold text-[10px]">
                         {alloc.status === 'received' ? '✓ Received' : 'Pending'}
                       </td>
-                      <td className="p-2 text-[11px] italic text-slate-600">{alloc.remarks || '-'}</td>
                     </tr>
                   );
                 })}
@@ -614,7 +825,7 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
             {canPerform('manage_orders') && (
               <Button
                 variant="primary"
-                onClick={() => setShowCreateModal(true)}
+                onClick={handleOpenCreateModal}
               >
                 <Plus className="h-4 w-4" />
                 New Order
@@ -727,7 +938,7 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
           action={
             <Button
               variant="primary"
-              onClick={() => setShowCreateModal(true)}
+              onClick={handleOpenCreateModal}
             >
               <Plus className="h-4 w-4" />
               Create Production Order
@@ -750,6 +961,59 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                 key={order.id}
                 className="overflow-hidden border border-slate-200/90 shadow-sm rounded-2xl bg-white transition-all hover:border-slate-300"
               >
+                {/* Top Brand Header Banner */}
+                <div className="bg-gradient-to-r from-indigo-50/90 via-indigo-50/40 to-slate-50 border-b border-indigo-100/80 px-4 sm:px-5 py-3 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-1.5 bg-indigo-600 text-white rounded-lg shadow-xs">
+                      <Building2 className="h-4 w-4" />
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {canAccessView('clients') ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (onViewChange && order.client_id) {
+                              onViewChange('clients', { clientId: order.client_id });
+                            }
+                          }}
+                          className="text-base sm:text-lg font-black tracking-tight text-indigo-950 hover:text-indigo-700 hover:underline cursor-pointer transition-colors text-left"
+                          title="View client profile and order history"
+                        >
+                          {order.client?.name || 'Direct / Internal Order'}
+                        </button>
+                      ) : (
+                        <span className="text-base sm:text-lg font-black tracking-tight text-indigo-950 cursor-default">
+                          {order.client?.name || 'Direct / Internal Order'}
+                        </span>
+                      )}
+                      {order.client?.company_name && (
+                        <span className="text-xs font-semibold text-indigo-700 bg-indigo-100/80 border border-indigo-200/80 px-2 py-0.5 rounded-md">
+                          {order.client.company_name}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* BOM Completion Progress Pill */}
+                  <div className="flex items-center gap-2.5 bg-white/80 px-3 py-1.5 rounded-xl border border-indigo-100 shadow-2xs">
+                    <div className="text-right">
+                      <div className="text-xs font-bold text-slate-800">
+                        {receivedComponents}/{totalComponents} Received
+                      </div>
+                      <div className="text-[10px] text-slate-500">{percentReceived}% complete</div>
+                    </div>
+                    <div className="w-16 bg-slate-200 rounded-full h-2 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${
+                          allReceived ? 'bg-emerald-500' : 'bg-indigo-600'
+                        }`}
+                        style={{ width: `${percentReceived}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
                 {/* Order Summary Header */}
                 <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-50/70 via-white to-slate-50/40 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                   <div className="flex items-start sm:items-center gap-3.5">
@@ -786,24 +1050,6 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                       </div>
 
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1.5 text-xs text-slate-600">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (onViewChange && order.client_id) {
-                              onViewChange('clients', { clientId: order.client_id });
-                            }
-                          }}
-                          className="flex items-center gap-1 font-medium text-slate-800 hover:text-indigo-600 hover:underline transition cursor-pointer text-left"
-                          title="View client profile and details"
-                        >
-                          <Building2 className="h-3.5 w-3.5 text-slate-400" />
-                          {order.client?.name || 'Unknown Client'}
-                          {order.client?.company_name && (
-                            <span className="text-slate-400">({order.client.company_name})</span>
-                          )}
-                        </button>
-
                         <span className="flex items-center gap-1">
                           <Package className="h-3.5 w-3.5 text-slate-400" />
                           <span className="font-semibold text-slate-800 font-mono">
@@ -841,26 +1087,8 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                     </div>
                   </div>
 
-                  {/* Progress & Actions */}
+                  {/* Actions */}
                   <div className="flex flex-wrap items-center gap-3 lg:justify-end">
-                    {/* BOM Completion Progress Pill */}
-                    <div className="flex items-center gap-2.5 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200/80">
-                      <div className="text-right">
-                        <div className="text-xs font-bold text-slate-800">
-                          {receivedComponents}/{totalComponents} Received
-                        </div>
-                        <div className="text-[10px] text-slate-500">{percentReceived}% complete</div>
-                      </div>
-                      <div className="w-16 bg-slate-200 rounded-full h-2 overflow-hidden">
-                        <div
-                          className={`h-full rounded-full transition-all duration-500 ${
-                            allReceived ? 'bg-emerald-500' : 'bg-indigo-500'
-                          }`}
-                          style={{ width: `${percentReceived}%` }}
-                        />
-                      </div>
-                    </div>
-
                     {/* Print Job Card Button */}
                     <Button
                       variant="secondary"
@@ -890,14 +1118,18 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                     </Button>
 
                     {/* Delete Button */}
-                    <button
-                      type="button"
-                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
-                      onClick={() => setDeleteModalOrder(order)}
-                      title="Delete order"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+                    {canPerform('manage_orders') && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="!border-rose-200 !text-rose-600 hover:!bg-rose-50 hover:!border-rose-300 transition-colors"
+                        onClick={() => setDeleteModalOrder(order)}
+                        title="Delete production order and associated BOM allocations"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        Delete Order
+                      </Button>
+                    )}
                   </div>
                 </div>
 
@@ -923,7 +1155,7 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                       ) : (
                         <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg">
                           <CheckCircle2 className="h-3.5 w-3.5" />
-                          All 10 Received
+                          All {allocations.length} Received
                         </span>
                       )}
                     </div>
@@ -935,11 +1167,13 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                             <th className="py-2.5 px-3 w-10 text-center text-slate-400">#</th>
                             <th className="py-2.5 px-3 w-36">Component</th>
                             <th className="py-2.5 px-3 w-28">Source</th>
-                            <th className="py-2.5 px-3 min-w-[160px]">Specification / Details</th>
-                            <th className="py-2.5 px-3 min-w-[200px]">Assigned Vendor / Stock Item</th>
-                            <th className="py-2.5 px-3 w-32 text-center">Expected Date</th>
+                            <th className="py-2.5 px-3 w-28 text-center">Planned Qty</th>
+                            <th className="py-2.5 px-3 min-w-[160px]">Specification</th>
+                            <th className="py-2.5 px-3 min-w-[200px]">Warehouse SKU</th>
+                            <th className="py-2.5 px-3 min-w-[180px]">Assigned Supplier</th>
+                            <th className="py-2.5 px-3 w-28 text-center">Expected Due</th>
+                            <th className="py-2.5 px-3 w-28">Location</th>
                             <th className="py-2.5 px-3 w-32 text-center">Status</th>
-                            <th className="py-2.5 px-3 min-w-[140px]">Remarks</th>
                             <th className="py-2.5 px-2 w-10 text-center"></th>
                           </tr>
                         </thead>
@@ -948,6 +1182,8 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                             .sort((a, b) => a.sort_order - b.sort_order)
                             .map((alloc, idx) => {
                               const isReceived = alloc.status === 'received';
+                              const isService = /printing|coating|stamping|metalliz|emboss/i.test(alloc.component_name);
+
                               return (
                                 <tr
                                   key={alloc.id}
@@ -955,26 +1191,27 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                                     isReceived ? 'bg-emerald-50/30' : 'hover:bg-slate-50/80'
                                   }`}
                                 >
-                                  {/* # */}
+                                  {/* 1. # */}
                                   <td className="py-2 px-3 text-center text-slate-400 font-mono">
                                     {idx + 1}
                                   </td>
 
-                                  {/* Component Name */}
+                                  {/* 2. Component Name */}
                                   <td className="py-2 px-3 font-semibold text-slate-900">
                                     {alloc.component_name}
                                   </td>
 
-                                  {/* Source Toggle (Vendor vs Stock) */}
+                                  {/* 3. Source Toggle (Vendor vs Stock) */}
                                   <td className="py-2 px-3">
                                     <div className="inline-flex rounded-lg border border-slate-200 p-0.5 bg-slate-50 text-[11px] font-semibold">
                                       <button
                                         type="button"
+                                        disabled={isReceived || !canPerform('manage_orders')}
                                         className={`px-2 py-0.5 rounded-md transition ${
                                           alloc.source === 'vendor'
                                             ? 'bg-indigo-600 text-white shadow-2xs'
                                             : 'text-slate-600 hover:text-slate-900'
-                                        }`}
+                                        } ${isReceived ? 'cursor-not-allowed opacity-75' : ''}`}
                                         onClick={() =>
                                           handleAllocationFieldChange(alloc.id, 'source', 'vendor')
                                         }
@@ -983,11 +1220,12 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                                       </button>
                                       <button
                                         type="button"
+                                        disabled={isReceived || !canPerform('manage_orders')}
                                         className={`px-2 py-0.5 rounded-md transition ${
                                           alloc.source === 'stock'
                                             ? 'bg-emerald-600 text-white shadow-2xs'
                                             : 'text-slate-600 hover:text-slate-900'
-                                        }`}
+                                        } ${isReceived ? 'cursor-not-allowed opacity-75' : ''}`}
                                         onClick={() =>
                                           handleAllocationFieldChange(alloc.id, 'source', 'stock')
                                         }
@@ -997,12 +1235,33 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                                     </div>
                                   </td>
 
-                                  {/* Description / Specification */}
+                                  {/* 4. Reactive Keyed Planned Quantity */}
+                                  <td className="py-2 px-3 text-center">
+                                    <input
+                                      key={`${alloc.id}-${alloc.qty ?? order.total_qty}`}
+                                      type="number"
+                                      min="1"
+                                      disabled={isReceived || !canPerform('manage_orders')}
+                                      defaultValue={alloc.qty || order.total_qty || 1}
+                                      className={`w-20 text-xs px-2 py-1 rounded border border-slate-200 bg-white font-mono text-center focus:border-indigo-500 ${
+                                        isReceived ? 'bg-slate-50 text-slate-500 cursor-not-allowed' : ''
+                                      }`}
+                                      onBlur={(e) => {
+                                        const val = parseInt(e.target.value, 10);
+                                        if (val > 0 && val !== alloc.qty) {
+                                          handleAllocationFieldChange(alloc.id, 'qty', val);
+                                        }
+                                      }}
+                                    />
+                                  </td>
+
+                                  {/* 5. Specification / Details */}
                                   <td className="py-2 px-3">
                                     <input
                                       type="text"
                                       defaultValue={alloc.description || ''}
                                       placeholder="e.g. Amber 100ml bottle"
+                                      disabled={!canPerform('manage_orders')}
                                       className="w-full text-xs px-2 py-1 rounded border border-slate-200 bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                                       onBlur={(e) => {
                                         if (e.target.value !== (alloc.description || '')) {
@@ -1012,46 +1271,58 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                                     />
                                   </td>
 
-                                  {/* Assigned Vendor or Stock Item */}
+                                  {/* 6. Dedicated Warehouse SKU Selector */}
                                   <td className="py-2 px-3">
-                                    {alloc.source === 'vendor' ? (
-                                      <select
-                                        className="w-full text-xs px-2 py-1 rounded border border-slate-200 bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-slate-800"
-                                        value={alloc.vendor_id || ''}
-                                        onChange={(e) =>
-                                          handleAllocationFieldChange(alloc.id, 'vendor_id', e.target.value || null)
-                                        }
-                                      >
-                                        <option value="">-- Select Vendor --</option>
-                                        {suppliers.map((s) => (
-                                          <option key={s.id} value={s.id}>
-                                            {s.name} {s.contact ? `(${s.contact})` : ''}
-                                          </option>
-                                        ))}
-                                      </select>
+                                    {isService ? (
+                                      <span className="text-[11px] text-emerald-700 font-medium">
+                                        ✓ Service Milestone
+                                      </span>
                                     ) : (
                                       <select
-                                        className="w-full text-xs px-2 py-1 rounded border border-slate-200 bg-white focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 text-slate-800"
+                                        className="w-full text-xs px-2 py-1 rounded border border-slate-200 bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-slate-800"
                                         value={alloc.stock_item_id || ''}
+                                        disabled={isReceived || !canPerform('manage_orders')}
                                         onChange={(e) =>
                                           handleAllocationFieldChange(alloc.id, 'stock_item_id', e.target.value || null)
                                         }
                                       >
-                                        <option value="">-- Select Stock Item --</option>
+                                        <option value="">-- Select Catalog SKU --</option>
                                         {items.map((i) => (
                                           <option key={i.id} value={i.id}>
-                                            {i.name} {i.color ? `[${i.color}]` : ''}
+                                            {i.name} {i.color ? `[${i.color}]` : ''} ({i.category || 'General'})
                                           </option>
                                         ))}
                                       </select>
                                     )}
                                   </td>
 
-                                  {/* Timeline / Expected Date */}
+                                  {/* 7. Dedicated Supplier Selector */}
+                                  <td className="py-2 px-3">
+                                    <select
+                                      className={`w-full text-xs px-2 py-1 rounded border border-slate-200 bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-slate-800 ${
+                                        alloc.source === 'stock' ? 'opacity-60 bg-slate-50 cursor-not-allowed' : ''
+                                      }`}
+                                      value={alloc.vendor_id || ''}
+                                      disabled={alloc.source === 'stock' || isReceived || !canPerform('manage_orders')}
+                                      onChange={(e) =>
+                                        handleAllocationFieldChange(alloc.id, 'vendor_id', e.target.value || null)
+                                      }
+                                    >
+                                      <option value="">-- Select Supplier --</option>
+                                      {suppliers.map((s) => (
+                                        <option key={s.id} value={s.id}>
+                                          {s.name} {s.contact ? `(${s.contact})` : ''}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </td>
+
+                                  {/* 8. Expected Due Date */}
                                   <td className="py-2 px-3 text-center">
                                     <input
                                       type="date"
                                       defaultValue={alloc.timeline || ''}
+                                      disabled={!canPerform('manage_orders')}
                                       className="text-xs px-2 py-1 rounded border border-slate-200 bg-white focus:border-indigo-500 font-mono text-slate-800"
                                       onBlur={(e) => {
                                         if (e.target.value !== (alloc.timeline || '')) {
@@ -1061,7 +1332,23 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                                     />
                                   </td>
 
-                                  {/* Status 1-Click Toggle */}
+                                  {/* 9. Location */}
+                                  <td className="py-2 px-3">
+                                    <input
+                                      type="text"
+                                      defaultValue={alloc.location || 'Raw Stock Bay A'}
+                                      disabled={isReceived || !canPerform('manage_orders')}
+                                      placeholder="Raw Stock Bay A"
+                                      className="w-full text-xs px-2 py-1 rounded border border-slate-200 bg-white focus:border-indigo-500"
+                                      onBlur={(e) => {
+                                        if (e.target.value !== (alloc.location || '')) {
+                                          handleAllocationFieldChange(alloc.id, 'location', e.target.value.trim() || null);
+                                        }
+                                      }}
+                                    />
+                                  </td>
+
+                                  {/* 10. Status 1-Click Toggle */}
                                   <td className="py-2 px-3 text-center">
                                     {(!isReceived && !canPerform('manage_orders')) || (isReceived && !canPerform('reverse_allocation')) ? (
                                       <span
@@ -1110,32 +1397,17 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                                     )}
                                   </td>
 
-                                  {/* Remarks */}
-                                  <td className="py-2 px-3">
-                                    <input
-                                      type="text"
-                                      defaultValue={alloc.remarks || ''}
-                                      placeholder="Operator remarks"
-                                      disabled={!canPerform('manage_orders')}
-                                      className={`w-full text-xs px-2 py-1 rounded border border-slate-200 bg-white focus:border-indigo-500 ${
-                                        !canPerform('manage_orders') ? 'opacity-60 cursor-not-allowed bg-slate-50' : ''
-                                      }`}
-                                      onBlur={(e) => {
-                                        if (e.target.value !== (alloc.remarks || '')) {
-                                          handleAllocationFieldChange(alloc.id, 'remarks', e.target.value.trim() || null);
-                                        }
-                                      }}
-                                    />
-                                  </td>
-
-                                  {/* Delete Custom Row */}
+                                  {/* 11. Delete Custom Row */}
                                   <td className="py-2 px-2 text-center">
                                     {alloc.sort_order > 10 && canPerform('manage_orders') && (
                                       <button
                                         type="button"
-                                        className="text-slate-400 hover:text-rose-600 p-1 rounded"
+                                        disabled={isReceived}
                                         onClick={() => handleDeleteAllocationRow(alloc.id, alloc.component_name)}
-                                        title="Remove custom component row"
+                                        className={`p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition ${
+                                          isReceived ? 'opacity-30 cursor-not-allowed' : ''
+                                        }`}
+                                        title={isReceived ? 'Cannot delete received allocation' : 'Delete component row'}
                                       >
                                         <Trash2 className="h-3.5 w-3.5" />
                                       </button>
@@ -1187,15 +1459,18 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
         </div>
       )}
 
-      {/* CREATE ORDER MODAL */}
+      {/* CREATE MULTI-ORDER BATCH MODAL */}
       {showCreateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl shadow-xl max-w-xl w-full max-h-[90vh] overflow-y-auto border border-slate-200 animate-in fade-in zoom-in-95">
-            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+          <div className="bg-white rounded-2xl shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col border border-slate-200 animate-in fade-in zoom-in-95 overflow-hidden">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
               <div>
-                <h3 className="text-lg font-bold text-slate-900">Create Production Order</h3>
+                <h3 className="text-lg font-bold text-slate-900">
+                  Create Production Orders (Multi-Order Batch Builder)
+                </h3>
                 <p className="text-xs text-slate-500">
-                  Initializes order and automatically seeds the 10 standard BOM component matrix
+                  Configure multiple product orders under one client in a single batch. Each order automatically seeds 10 BOM allocations.
                 </p>
               </div>
               <button
@@ -1207,12 +1482,12 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
               </button>
             </div>
 
-            <form onSubmit={handleCreateOrder} className="p-5 space-y-4">
-              {/* Client Selector + Quick Add Client */}
-              <div>
+            <form onSubmit={handleCreateBatchOrder} className="flex flex-col flex-1 overflow-hidden">
+              {/* Client Selector (Sticky Top) */}
+              <div className="p-5 border-b border-slate-100 bg-white">
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                    Client <span className="text-rose-500">*</span>
+                    Select Client <span className="text-rose-500">*</span>
                   </label>
                   <button
                     type="button"
@@ -1232,8 +1507,8 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                 </div>
                 <select
                   className={inputClass}
-                  value={newClientId}
-                  onChange={(e) => setNewClientId(e.target.value)}
+                  value={batchClientId}
+                  onChange={(e) => setBatchClientId(e.target.value)}
                   required
                 >
                   <option value="">-- Choose Client --</option>
@@ -1245,119 +1520,234 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                 </select>
               </div>
 
-              {/* Product Name */}
-              <Field label="Product Name" required>
-                <input
-                  type="text"
-                  className={inputClass}
-                  placeholder="e.g. Royal Oud Extrait de Parfum"
-                  value={newProductName}
-                  onChange={(e) => setNewProductName(e.target.value)}
-                  required
-                />
-              </Field>
+              {/* Scrollable Order Batch Lines */}
+              <div className="p-5 overflow-y-auto space-y-4 flex-1 bg-slate-50/40">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                    Order Batch Lines ({batchItems.length})
+                  </h4>
+                  <span className="text-xs text-slate-500">
+                    Sequential advisory lock ensures contiguous order numbering
+                  </span>
+                </div>
 
-              {/* Variants Input */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Bottle Sizes / Variants
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    className={inputClass}
-                    placeholder="e.g. 50ml, 100ml"
-                    value={variantInput}
-                    onChange={(e) => setVariantInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        handleAddVariant();
-                      }
-                    }}
-                  />
+                {batchItems.map((item, idx) => (
+                  <div
+                    key={item.tempId}
+                    className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-2xs space-y-3 transition-all hover:border-slate-300"
+                  >
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 px-2.5 py-0.5 rounded-lg">
+                          Line #{idx + 1}
+                        </span>
+                        {item.error && (
+                          <span className="text-xs text-rose-600 font-semibold bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-md">
+                            ⚠️ {item.error}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="text-slate-600 hover:text-slate-900"
+                          onClick={() => handleDuplicateBatchItem(idx)}
+                          title="Duplicate this order line"
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                          Duplicate
+                        </Button>
+                        {batchItems.length > 1 && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="text-rose-600 hover:text-rose-700 hover:bg-rose-50"
+                            onClick={() => handleRemoveBatchItem(idx)}
+                            title="Remove this order line"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Remove
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div className="md:col-span-2">
+                        <Field label="Product Name" required>
+                          <input
+                            type="text"
+                            className={inputClass}
+                            placeholder="e.g. Royal Oud Extrait de Parfum"
+                            value={item.product_name}
+                            onChange={(e) => handleBatchItemChange(idx, 'product_name', e.target.value)}
+                            required
+                          />
+                        </Field>
+                      </div>
+
+                      <div>
+                        <Field label="Total Units" required>
+                          <input
+                            type="number"
+                            min="1"
+                            className={inputClass}
+                            placeholder="e.g. 5000"
+                            value={item.total_qty}
+                            onChange={(e) =>
+                              handleBatchItemChange(
+                                idx,
+                                'total_qty',
+                                e.target.value ? parseInt(e.target.value, 10) : ''
+                              )
+                            }
+                            required
+                          />
+                        </Field>
+                      </div>
+                    </div>
+
+                    {/* Bottle Sizes / Variants */}
+                    <div>
+                      <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
+                        <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                          Bottle Sizes / Variants
+                        </label>
+                        <div className="flex items-center gap-1">
+                          <span className="text-[11px] text-slate-400">Quick Add:</span>
+                          {PRESET_SIZES.map((sz) => (
+                            <button
+                              key={sz}
+                              type="button"
+                              onClick={() => handleBatchAddPresetVariant(idx, sz)}
+                              className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 text-slate-600 border border-slate-200 transition cursor-pointer"
+                            >
+                              + {sz}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          className={inputClass}
+                          placeholder="Type variant and press Enter or comma (e.g. 30ml, 50ml)"
+                          value={item.variantInput}
+                          onChange={(e) => handleBatchItemChange(idx, 'variantInput', e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ',') {
+                              e.preventDefault();
+                              handleBatchAddCustomVariant(idx);
+                            }
+                          }}
+                        />
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => handleBatchAddCustomVariant(idx)}
+                        >
+                          Add
+                        </Button>
+                      </div>
+
+                      {item.variants.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mt-2">
+                          {item.variants.map((v) => (
+                            <span
+                              key={v}
+                              className="inline-flex items-center gap-1 text-xs font-semibold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-lg border border-indigo-200"
+                            >
+                              {v}
+                              <button
+                                type="button"
+                                onClick={() => handleBatchRemoveVariant(idx, v)}
+                                className="hover:text-rose-600 cursor-pointer"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <Field label="Target Due Date">
+                        <input
+                          type="date"
+                          className={inputClass}
+                          value={item.due_date}
+                          onChange={(e) => handleBatchItemChange(idx, 'due_date', e.target.value)}
+                        />
+                      </Field>
+
+                      <Field label="Production Notes">
+                        <input
+                          type="text"
+                          className={inputClass}
+                          placeholder="Packaging guidelines, special bottling..."
+                          value={item.notes}
+                          onChange={(e) => handleBatchItemChange(idx, 'notes', e.target.value)}
+                        />
+                      </Field>
+                    </div>
+                  </div>
+                ))}
+
+                {/* Add Another Line Button */}
+                <button
+                  type="button"
+                  onClick={handleAddBatchItem}
+                  className="w-full py-3 border-2 border-dashed border-indigo-200 hover:border-indigo-400 bg-white hover:bg-indigo-50/50 text-indigo-700 font-semibold rounded-xl text-sm flex items-center justify-center gap-2 transition cursor-pointer"
+                >
+                  <Plus className="h-4 w-4" />
+                  + Add Another Order Line
+                </button>
+              </div>
+
+              {/* Modal Footer (Sticky Bottom) */}
+              <div className="p-4 border-t border-slate-100 bg-white flex flex-col sm:flex-row items-center justify-between gap-3">
+                <div className="text-xs text-slate-600">
+                  <span className="font-bold text-slate-800">
+                    {batchItems.length} Order{batchItems.length > 1 ? 's' : ''}
+                  </span>{' '}
+                  to Create • Total Volume:{' '}
+                  <span className="font-mono font-bold text-slate-900">
+                    {batchItems
+                      .reduce(
+                        (acc, itm) => acc + (typeof itm.total_qty === 'number' ? itm.total_qty : 0),
+                        0
+                      )
+                      .toLocaleString()}
+                  </span>{' '}
+                  Units • {batchItems.length * 10} BOM Material Allocations
+                </div>
+
+                <div className="flex items-center gap-2.5">
                   <Button
                     type="button"
                     variant="secondary"
-                    onClick={handleAddVariant}
+                    onClick={() => setShowCreateModal(false)}
+                    disabled={creatingBatch}
                   >
-                    Add Size
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    loading={creatingBatch}
+                  >
+                    {creatingBatch && batchProgress
+                      ? `Creating Order ${batchProgress.current} of ${batchProgress.total}...`
+                      : `Create ${batchItems.length} Production Order${batchItems.length > 1 ? 's' : ''}`}
                   </Button>
                 </div>
-
-                {variantsList.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mt-2">
-                    {variantsList.map((v) => (
-                      <span
-                        key={v}
-                        className="inline-flex items-center gap-1 text-xs font-semibold bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-lg border border-indigo-200"
-                      >
-                        {v}
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveVariant(v)}
-                          className="hover:text-rose-600"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Qty & Due Date */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Field label="Total Order Quantity" required>
-                  <input
-                    type="number"
-                    min="1"
-                    className={inputClass}
-                    placeholder="e.g. 1000"
-                    value={newTotalQty}
-                    onChange={(e) =>
-                      setNewTotalQty(e.target.value ? parseInt(e.target.value, 10) : '')
-                    }
-                    required
-                  />
-                </Field>
-
-                <Field label="Target Due Date">
-                  <input
-                    type="date"
-                    className={inputClass}
-                    value={newDueDate}
-                    onChange={(e) => setNewDueDate(e.target.value)}
-                  />
-                </Field>
-              </div>
-
-              {/* Notes */}
-              <Field label="Production Notes">
-                <textarea
-                  className={inputClass}
-                  rows={2}
-                  placeholder="Special bottling instructions, labeling requirements, packaging guidelines..."
-                  value={newNotes}
-                  onChange={(e) => setNewNotes(e.target.value)}
-                />
-              </Field>
-
-              <div className="pt-4 border-t border-slate-100 flex justify-end gap-2.5">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => setShowCreateModal(false)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  variant="primary"
-                  loading={creatingOrder}
-                >
-                  Create Order &amp; Seed 10 BOM
-                </Button>
               </div>
             </form>
           </div>
@@ -1489,9 +1879,12 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
       {deleteModalOrder && (
         <ConfirmModal
           isOpen={!!deleteModalOrder}
-          title={`Delete Order ${deleteModalOrder.order_no}?`}
-          message={`Are you sure you want to delete order "${deleteModalOrder.product_name}"? All associated BOM allocations will also be permanently deleted. This cannot be undone.`}
+          title={`Delete Production Order ${deleteModalOrder.order_no}?`}
+          message={`Are you sure you want to permanently delete order "${deleteModalOrder.product_name}" for client "${deleteModalOrder.client?.name || 'Client'}" (${deleteModalOrder.total_qty.toLocaleString()} units)?
+
+${(deleteModalOrder.material_allocations?.filter((a) => a.status === 'received').length ?? 0) > 0 ? `⚠️ ATTENTION: ${deleteModalOrder.material_allocations?.filter((a) => a.status === 'received').length} BOM components have already been marked as RECEIVED for this order.\n\n` : ''}⚠️ Warning: All associated Bill of Materials (BOM) allocation rows and procurement tracking records will be permanently deleted via database cascade. This action cannot be undone.`}
           confirmText={deleting ? 'Deleting...' : 'Delete Order'}
+          loading={deleting}
           variant="danger"
           onConfirm={handleConfirmDelete}
           onClose={() => setDeleteModalOrder(null)}

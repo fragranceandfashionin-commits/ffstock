@@ -215,4 +215,46 @@ export function findSimilarItems(
   return matches.sort((a, b) => b.confidence - a.confidence);
 }
 
+/**
+ * Normalizes a phone number for direct WhatsApp web/app deep links (wa.me/NUMBER).
+ * Parses multi-number strings with delimiters (commas, slashes, semicolons, pipes, 'or', 'and'),
+ * correctly handles Indian mobile numbers (10 digits starting with 6-9, with or without +91 or leading 0),
+ * supports international numbers (11-15 digits not starting with 0),
+ * and safely skips invalid numbers or landlines starting with STD 0.
+ */
+export function normalizePhoneForWhatsApp(phoneStr: string | null | undefined): string | null {
+  if (!phoneStr) return null;
+
+  // Split multi-number entries by common delimiters
+  const segments = phoneStr.split(/[/,;|]|\bor\b|\band\b/i).map((s) => s.trim()).filter(Boolean);
+  if (segments.length === 0) return null;
+
+  for (const segment of segments) {
+    const digits = segment.replace(/\D/g, '');
+    if (!digits) continue;
+
+    // 1. Standard 10-digit Indian mobile number (starts with 6-9)
+    if (digits.length === 10 && /^[6-9]/.test(digits)) {
+      return '91' + digits;
+    }
+
+    // 2. 11-digit Indian number with leading 0 (e.g. 09876543210 -> 919876543210)
+    if (digits.length === 11 && digits.startsWith('0') && /^[6-9]/.test(digits.slice(1))) {
+      return '91' + digits.slice(1);
+    }
+
+    // 3. 12-digit Indian number with 91 prefix (starts with 91 + 6-9)
+    if (digits.length === 12 && digits.startsWith('91') && /^[6-9]/.test(digits.slice(2))) {
+      return digits;
+    }
+
+    // 4. Valid international mobile numbers (11-15 digits, must NOT start with '0')
+    if (digits.length >= 11 && digits.length <= 15 && !digits.startsWith('0')) {
+      return digits;
+    }
+  }
+
+  return null;
+}
+
 

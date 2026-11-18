@@ -2,16 +2,15 @@ export type Supplier = {
   id: string;
   name: string;
   contact: string | null;
-  created_at: string;
-};
-
-export type ExtendedSupplier = Supplier & {
   phone?: string | null;
   email?: string | null;
   contact_person?: string | null;
   categories_supplied?: string[] | null;
   specific_materials?: string | null;
+  created_at: string;
 };
+
+export type ExtendedSupplier = Supplier;
 
 export type Client = {
   id: string;
@@ -59,6 +58,12 @@ export type MaterialAllocation = {
   received_at: string | null;
   remarks: string | null;
   created_at: string;
+  // Extended fields
+  qty?: number;
+  qty_received?: number | null;
+  inward_batch_id?: string | null;
+  receipt_id?: string | null;
+  location?: string | null;
 };
 
 export type Item = {
@@ -77,10 +82,12 @@ export type ProductionOrderWithRelations = ProductionOrder & {
 };
 
 export type MaterialAllocationWithVendorRelations = MaterialAllocation & {
-  order?: ProductionOrder | null;
+  order?: (ProductionOrder & { client?: Client | null }) | null;
   client?: Client | null;
   vendor?: Supplier | null;
   stock_item?: Item | null;
+  inward_batch?: InwardBatch | null;
+  receipt?: ItemStockReceipt | null;
 };
 
 export type Stage = {
@@ -108,6 +115,9 @@ export type InwardBatch = {
   atomizer_qty?: number | null;
   box_qty?: number | null;
   created_at: string;
+  // Extended fields
+  order_id?: string | null;
+  allocation_id?: string | null;
 };
 
 export type StageMovement = {
@@ -202,6 +212,9 @@ export type ItemStockReceipt = {
   created_at: string;
   item?: Item | null;
   supplier?: Supplier | null;
+  // Extended fields
+  order_id?: string | null;
+  allocation_id?: string | null;
 };
 
 export type BatchAllocation = {

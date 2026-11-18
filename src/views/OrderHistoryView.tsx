@@ -9,6 +9,8 @@ import {
   Package,
   Building2,
   FileCheck,
+  CheckCircle2,
+  Trash2,
 } from 'lucide-react';
 import {
   Card,
@@ -25,6 +27,7 @@ import {
   fetchCompletedOrders,
   repeatOrder,
   reopenProductionOrder,
+  deleteProductionOrder,
   fetchClients,
 } from '@/lib/queries';
 import { supabase } from '@/lib/supabase';
@@ -38,11 +41,12 @@ import { getErrorMessage, formatDate } from '@/lib/utils';
 import { useAuth } from '@/lib/auth';
 
 export type OrderHistoryViewProps = {
+  initialClientId?: string;
   onViewChange?: (view: View, context?: NavigationContext) => void;
 };
 
-export function OrderHistoryView({ onViewChange }: OrderHistoryViewProps) {
-  const { canPerform, role } = useAuth();
+export function OrderHistoryView({ initialClientId, onViewChange }: OrderHistoryViewProps) {
+  const { canPerform, role, canAccessView } = useAuth();
   const [orders, setOrders] = useState<ProductionOrderWithRelations[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
@@ -50,14 +54,23 @@ export function OrderHistoryView({ onViewChange }: OrderHistoryViewProps) {
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedClientId, setSelectedClientId] = useState<string>('all');
+  const [selectedClientId, setSelectedClientId] = useState<string>(initialClientId || 'all');
   const [expandedOrderIds, setExpandedOrderIds] = useState<Set<string>>(new Set());
+
+  // Keep filter in sync if initialClientId prop changes
+  useEffect(() => {
+    if (initialClientId) {
+      setSelectedClientId(initialClientId);
+    }
+  }, [initialClientId]);
 
   // Modal Action States
   const [repeatModalOrder, setRepeatModalOrder] = useState<ProductionOrderWithRelations | null>(null);
   const [repeating, setRepeating] = useState(false);
   const [reopenModalOrder, setReopenModalOrder] = useState<ProductionOrderWithRelations | null>(null);
   const [reopening, setReopening] = useState(false);
+  const [deleteModalOrder, setDeleteModalOrder] = useState<ProductionOrderWithRelations | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [printOrder, setPrintOrder] = useState<ProductionOrderWithRelations | null>(null);
 
   const toast = useToast();
@@ -163,6 +176,27 @@ export function OrderHistoryView({ onViewChange }: OrderHistoryViewProps) {
       toast.error(getErrorMessage(err, 'Failed to reopen order'));
     } finally {
       setReopening(false);
+    }
+  };
+
+  // Delete Completed Order
+  const handleConfirmDelete = async () => {
+    if (!deleteModalOrder) return;
+    if (!canPerform('manage_orders')) {
+      toast.error('Permission denied: You do not have permission to delete production orders.');
+      setDeleteModalOrder(null);
+      return;
+    }
+    setDeleting(true);
+    try {
+      await deleteProductionOrder(deleteModalOrder.id);
+      toast.success(`Order ${deleteModalOrder.order_no} deleted from history`);
+      setDeleteModalOrder(null);
+      await loadData();
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Failed to delete order'));
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -375,6 +409,47 @@ export function OrderHistoryView({ onViewChange }: OrderHistoryViewProps) {
                 key={order.id}
                 className="overflow-hidden border border-slate-200 shadow-xs rounded-2xl bg-white"
               >
+                {/* Top Brand Header Banner */}
+                <div className="bg-gradient-to-r from-indigo-50/90 via-indigo-50/40 to-slate-50 border-b border-indigo-100/80 px-4 sm:px-5 py-3 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-1.5 bg-indigo-600 text-white rounded-lg shadow-xs">
+                      <Building2 className="h-4 w-4" />
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {canAccessView('clients') ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (onViewChange && order.client_id) {
+                              onViewChange('clients', { clientId: order.client_id });
+                            }
+                          }}
+                          className="text-base sm:text-lg font-black tracking-tight text-indigo-950 hover:text-indigo-700 hover:underline cursor-pointer transition-colors text-left"
+                          title="View client profile and order history"
+                        >
+                          {order.client?.name || 'Direct / Internal Order'}
+                        </button>
+                      ) : (
+                        <span className="text-base sm:text-lg font-black tracking-tight text-indigo-950 cursor-default">
+                          {order.client?.name || 'Direct / Internal Order'}
+                        </span>
+                      )}
+                      {order.client?.company_name && (
+                        <span className="text-xs font-semibold text-indigo-700 bg-indigo-100/80 border border-indigo-200/80 px-2 py-0.5 rounded-md">
+                          {order.client.company_name}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Archive Completion Pill */}
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                    Archived Batch {order.completed_at ? `• ${formatDate(order.completed_at)}` : ''}
+                  </span>
+                </div>
+
                 {/* Header */}
                 <div className="p-4 sm:p-5 bg-slate-50/70 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                   <div className="flex items-start sm:items-center gap-3.5">
@@ -402,14 +477,6 @@ export function OrderHistoryView({ onViewChange }: OrderHistoryViewProps) {
                       </div>
 
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs text-slate-600">
-                        <span className="font-semibold text-slate-800 flex items-center gap-1">
-                          <Building2 className="h-3.5 w-3.5 text-slate-400" />
-                          {order.client?.name}
-                          {order.client?.company_name && (
-                            <span className="text-slate-400">({order.client.company_name})</span>
-                          )}
-                        </span>
-
                         <span className="flex items-center gap-1 font-mono font-bold text-slate-800">
                           <Package className="h-3.5 w-3.5 text-slate-400" />
                           {order.total_qty.toLocaleString()} units
@@ -481,6 +548,20 @@ export function OrderHistoryView({ onViewChange }: OrderHistoryViewProps) {
                       >
                         <Repeat className="h-4 w-4" />
                         Repeat Order
+                      </Button>
+                    )}
+
+                    {/* Delete Order Button */}
+                    {canPerform('manage_orders') && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="!border-rose-200 !text-rose-600 hover:!bg-rose-50 hover:!border-rose-300 transition-colors"
+                        onClick={() => setDeleteModalOrder(order)}
+                        title="Delete order permanently from history"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        Delete Order
                       </Button>
                     )}
                   </div>
@@ -557,6 +638,22 @@ export function OrderHistoryView({ onViewChange }: OrderHistoryViewProps) {
           variant="warning"
           onConfirm={handleConfirmReopen}
           onClose={() => setReopenModalOrder(null)}
+        />
+      )}
+
+      {/* DELETE ORDER CONFIRMATION MODAL */}
+      {deleteModalOrder && (
+        <ConfirmModal
+          isOpen={!!deleteModalOrder}
+          title={`Delete Production Order ${deleteModalOrder.order_no}?`}
+          message={`Are you sure you want to permanently delete completed order "${deleteModalOrder.product_name}" for client "${deleteModalOrder.client?.name || 'Client'}" (${deleteModalOrder.total_qty.toLocaleString()} units)?
+
+⚠️ Warning: All associated Bill of Materials (BOM) allocation rows and procurement tracking records will be permanently deleted via database cascade. This action cannot be undone.`}
+          confirmText={deleting ? 'Deleting...' : 'Delete Order'}
+          loading={deleting}
+          variant="danger"
+          onConfirm={handleConfirmDelete}
+          onClose={() => setDeleteModalOrder(null)}
         />
       )}
     </div>

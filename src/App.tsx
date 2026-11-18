@@ -132,6 +132,7 @@ function App() {
             )}
             {view === 'vendor-pending' && (
               <VendorPendingView
+                initialClientId={navContext?.clientId}
                 onViewChange={handleViewChange}
               />
             )}
@@ -163,6 +164,7 @@ function App() {
             )}
             {view === 'order-history' && (
               <OrderHistoryView
+                initialClientId={navContext?.clientId}
                 onViewChange={handleViewChange}
               />
             )}

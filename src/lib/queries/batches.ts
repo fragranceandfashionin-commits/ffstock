@@ -224,6 +224,7 @@ export async function fetchUsedBatchIds(preloaded?: {
   movements?: Pick<StageMovement, 'batch_id'>[];
   dispatches?: Pick<Dispatch, 'batch_id'>[];
   allocations?: { source_batch_id?: string; destination_batch_id?: string }[];
+  orderAllocations?: { inward_batch_id?: string }[];
 }): Promise<Set<string>> {
   if (preloaded?.movements && preloaded?.dispatches) {
     const used = new Set<string>();
@@ -235,24 +236,37 @@ export async function fetchUsedBatchIds(preloaded?: {
         if (a.destination_batch_id) used.add(a.destination_batch_id);
       }
     }
+    if (preloaded.orderAllocations) {
+      for (const oa of preloaded.orderAllocations) {
+        if (oa.inward_batch_id) used.add(oa.inward_batch_id);
+      }
+    }
     return used;
   }
 
-  const [moves, disps, allocs] = await Promise.all([
+  const [moves, disps, allocs, orderAllocs] = await Promise.all([
     supabase.from('stage_movements').select('batch_id'),
     supabase.from('dispatches').select('batch_id'),
     Promise.resolve(
       supabase.from('batch_allocations').select('source_batch_id, destination_batch_id')
     ).catch(() => ({ data: [] as { source_batch_id?: string; destination_batch_id?: string }[], error: null })),
+    Promise.resolve(
+      supabase.from('material_allocations').select('inward_batch_id').not('inward_batch_id', 'is', null)
+    ).catch(() => ({ data: [] as { inward_batch_id?: string }[], error: null })),
   ]);
+
   if (moves.error) throw moves.error;
   if (disps.error) throw disps.error;
+
   const used = new Set<string>();
   for (const m of (moves.data ?? []) as Pick<StageMovement, 'batch_id'>[]) used.add(m.batch_id);
   for (const d of (disps.data ?? []) as Pick<Dispatch, 'batch_id'>[]) used.add(d.batch_id);
   for (const a of (allocs.data ?? []) as { source_batch_id?: string; destination_batch_id?: string }[]) {
     if (a.source_batch_id) used.add(a.source_batch_id);
     if (a.destination_batch_id) used.add(a.destination_batch_id);
+  }
+  for (const oa of (orderAllocs.data ?? []) as { inward_batch_id?: string }[]) {
+    if (oa.inward_batch_id) used.add(oa.inward_batch_id);
   }
   return used;
 }

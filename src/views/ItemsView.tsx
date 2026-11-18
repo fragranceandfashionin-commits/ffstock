@@ -131,6 +131,12 @@ export function ItemsView({
   }, [load]);
 
   useEffect(() => {
+    if (initialBatchId) {
+      setSearchQuery(initialBatchId);
+    }
+  }, [initialBatchId]);
+
+  useEffect(() => {
     if (initialActiveTab) {
       setActiveTab(initialActiveTab);
     }
@@ -160,6 +166,7 @@ export function ItemsView({
       .on('postgres_changes', { event: '*', schema: 'public', table: 'inward_batches' }, debouncedReload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'batch_allocations' }, debouncedReload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'item_stock_receipts' }, debouncedReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'material_allocations' }, debouncedReload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'stage_movements' }, debouncedReload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'dispatches' }, debouncedReload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'suppliers' }, debouncedReload)

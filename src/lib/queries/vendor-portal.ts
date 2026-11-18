@@ -1,5 +1,6 @@
 import { supabase } from '../supabase';
 import { fetchWithCache, invalidateCache, CACHE_TTL } from '../cache';
+import { getErrorMessage } from '../utils';
 import type {
   Client,
   BomCategory,
@@ -121,6 +122,34 @@ export async function createProductionOrder(payload: {
   return data as ProductionOrder;
 }
 
+export async function createMultipleProductionOrders(
+  payloads: Array<Parameters<typeof createProductionOrder>[0]>,
+  onProgress?: (index: number, total: number, item: Parameters<typeof createProductionOrder>[0]) => void
+): Promise<{
+  succeeded: ProductionOrder[];
+  failed: Array<{ payload: Parameters<typeof createProductionOrder>[0]; error: string; index: number }>;
+}> {
+  const succeeded: ProductionOrder[] = [];
+  const failed: Array<{ payload: Parameters<typeof createProductionOrder>[0]; error: string; index: number }> = [];
+
+  for (let i = 0; i < payloads.length; i++) {
+    const payload = payloads[i];
+    onProgress?.(i, payloads.length, payload);
+    try {
+      const order = await createProductionOrder(payload);
+      succeeded.push(order);
+    } catch (err) {
+      failed.push({
+        payload,
+        error: getErrorMessage(err, 'Failed to create order'),
+        index: i,
+      });
+    }
+  }
+
+  return { succeeded, failed };
+}
+
 export async function updateProductionOrder(
   id: string,
   payload: Partial<Omit<ProductionOrder, 'id' | 'order_no' | 'created_at'>>
@@ -178,26 +207,130 @@ export async function updateMaterialAllocation(
   return data as MaterialAllocation;
 }
 
-export async function markAllocationReceived(id: string): Promise<MaterialAllocation> {
-  const { data, error } = await supabase
-    .from('material_allocations')
-    .update({ status: 'received', received_at: new Date().toISOString() })
-    .eq('id', id)
-    .select()
-    .single();
+export async function markAllocationReceived(
+  id: string,
+  options?: {
+    stockItemId?: string | null;
+    qtyReceived?: number | null;
+    vendorId?: string | null;
+    location?: string;
+    inwardBatchId?: string | null;
+  }
+): Promise<{
+  success: boolean;
+  batch_no?: string;
+  inward_batch_id?: string;
+  receipt_id?: string;
+  stock_warning?: string | null;
+  order_status?: string;
+}> {
+  const { data, error } = await supabase.rpc('receive_material_allocation_rpc', {
+    p_allocation_id: id,
+    p_stock_item_id: options?.stockItemId || null,
+    p_qty_received: options?.qtyReceived || null,
+    p_vendor_id: options?.vendorId || null,
+    p_location: options?.location || null,
+    p_inward_batch_id: options?.inwardBatchId || null,
+  });
   if (error) throw error;
-  return data as MaterialAllocation;
+
+  invalidateCache('batches');
+  invalidateCache('clients');
+  return data;
 }
 
-export async function revertAllocationToPending(id: string): Promise<MaterialAllocation> {
-  const { data, error } = await supabase
-    .from('material_allocations')
-    .update({ status: 'pending', received_at: null })
-    .eq('id', id)
-    .select()
-    .single();
+export async function revertAllocationToPending(id: string): Promise<{
+  success: boolean;
+  allocation_id: string;
+  status: string;
+  order_status?: string;
+}> {
+  const { data, error } = await supabase.rpc('revert_material_allocation_rpc', {
+    p_allocation_id: id,
+  });
   if (error) throw error;
-  return data as MaterialAllocation;
+
+  invalidateCache('batches');
+  invalidateCache('clients');
+  return data;
+}
+
+export async function batchMarkAllocationsReceived(
+  allocationIds: string[],
+  location?: string
+): Promise<{
+  success: boolean;
+  received_count: number;
+  batch_numbers: string[];
+  allocations: Array<{
+    allocation_id: string;
+    inward_batch_id?: string;
+    batch_no?: string;
+    receipt_id?: string;
+    component_name?: string;
+    order_status?: string;
+  }>;
+}> {
+  if (!allocationIds || allocationIds.length === 0) {
+    return { success: true, received_count: 0, batch_numbers: [], allocations: [] };
+  }
+  const { data, error } = await supabase.rpc('batch_receive_material_allocations_rpc', {
+    p_allocation_ids: allocationIds,
+    p_location: location || null,
+  });
+  if (error) throw error;
+
+  invalidateCache('batches');
+  invalidateCache('clients');
+  return data;
+}
+
+export async function batchRevertAllocationsToPending(
+  allocationIds: string[]
+): Promise<{ success: boolean; reverted_count: number }> {
+  if (!allocationIds || allocationIds.length === 0) {
+    return { success: true, reverted_count: 0 };
+  }
+  const { data, error } = await supabase.rpc('batch_revert_material_allocations_rpc', {
+    p_allocation_ids: allocationIds,
+  });
+  if (error) throw error;
+
+  invalidateCache('batches');
+  invalidateCache('clients');
+  return data;
+}
+
+export async function fetchRecentlyReceivedAllocations(
+  sourceFilter: 'vendor' | 'stock' | 'all' = 'vendor',
+  limit = 50
+): Promise<MaterialAllocationWithVendorRelations[]> {
+  // Plan v14 Fix: Filters are applied BEFORE order and limit chaining
+  let query = supabase
+    .from('material_allocations')
+    .select(`
+      *,
+      order:production_orders(*, client:clients(*)),
+      vendor:suppliers(*),
+      stock_item:items(*),
+      inward_batch:inward_batches!inward_batch_id(id, batch_no, location)
+    `)
+    .eq('status', 'received');
+
+  if (sourceFilter !== 'all') {
+    query = query.eq('source', sourceFilter);
+  }
+
+  const { data, error } = await query
+    .order('received_at', { ascending: false })
+    .limit(limit);
+
+  if (error) throw error;
+
+  return (data ?? []).map((row: Record<string, unknown>) => ({
+    ...row,
+    client: (row.order as { client?: Client | null } | undefined)?.client || null,
+  })) as MaterialAllocationWithVendorRelations[];
 }
 
 export async function deleteAllocation(id: string): Promise<void> {
@@ -233,7 +366,7 @@ export async function fetchVendorPendingList(): Promise<MaterialAllocationWithVe
     .from('material_allocations')
     .select(`
       *,
-      order:production_orders(*),
+      order:production_orders(*, client:clients(*)),
       vendor:suppliers(*),
       stock_item:items(*)
     `)
@@ -242,13 +375,10 @@ export async function fetchVendorPendingList(): Promise<MaterialAllocationWithVe
     .order('sort_order');
   if (error) throw error;
 
-  // Enrich with client data from orders
-  const enriched = (data ?? []).map((row: Record<string, unknown>) => {
-    return {
-      ...row,
-      client: null, // Client fetched separately if needed
-    } as MaterialAllocationWithVendorRelations;
-  });
+  const enriched = (data ?? []).map((row: Record<string, unknown>) => ({
+    ...row,
+    client: (row.order as { client?: Client | null } | undefined)?.client || null,
+  })) as MaterialAllocationWithVendorRelations[];
 
   return enriched;
 }

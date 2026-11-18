@@ -98,6 +98,7 @@ export function InwardBatchesTab({
       const q = searchQuery.toLowerCase().trim();
       if (!q) return true;
       return (
+        b.id.toLowerCase() === q ||
         b.batch_no.toLowerCase().includes(q) ||
         (b.brand_name ?? '').toLowerCase().includes(q) ||
         (b.supplier?.name ?? '').toLowerCase().includes(q) ||

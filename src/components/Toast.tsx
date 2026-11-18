@@ -3,18 +3,24 @@ import { CheckCircle2, AlertTriangle, AlertCircle, Info, X } from 'lucide-react'
 
 export type ToastType = 'success' | 'error' | 'info' | 'warning';
 
+export type ToastAction = {
+  label: string;
+  onClick: () => void;
+};
+
 export type ToastMessage = {
   id: string;
   type: ToastType;
   title?: string;
   message: string;
   duration?: number;
+  action?: ToastAction;
 };
 
 type ToastContextValue = {
   toasts: ToastMessage[];
-  showToast: (message: string, type?: ToastType, title?: string, duration?: number) => void;
-  success: (message: string, title?: string) => void;
+  showToast: (message: string, type?: ToastType, title?: string, duration?: number, action?: ToastAction) => void;
+  success: (message: string, titleOrAction?: string | { action?: ToastAction }, action?: ToastAction) => void;
   error: (message: string, title?: string) => void;
   info: (message: string, title?: string) => void;
   warning: (message: string, title?: string) => void;
@@ -31,9 +37,9 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const showToast = useCallback(
-    (message: string, type: ToastType = 'info', title?: string, duration = 6000) => {
+    (message: string, type: ToastType = 'info', title?: string, duration = 6000, action?: ToastAction) => {
       const id = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-      const newToast: ToastMessage = { id, type, title, message, duration };
+      const newToast: ToastMessage = { id, type, title, message, duration, action };
 
       setToasts((prev) => [...prev, newToast]);
 
@@ -46,7 +52,16 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     [removeToast]
   );
 
-  const success = useCallback((msg: string, title?: string) => showToast(msg, 'success', title), [showToast]);
+  const success = useCallback(
+    (msg: string, titleOrAction?: string | { action?: ToastAction }, maybeAction?: ToastAction) => {
+      if (typeof titleOrAction === 'object' && titleOrAction !== null) {
+        showToast(msg, 'success', undefined, 8000, titleOrAction.action);
+      } else {
+        showToast(msg, 'success', titleOrAction, 6000, maybeAction);
+      }
+    },
+    [showToast]
+  );
   const error = useCallback((msg: string, title?: string) => showToast(msg, 'error', title, 8000), [showToast]);
   const info = useCallback((msg: string, title?: string) => showToast(msg, 'info', title), [showToast]);
   const warning = useCallback((msg: string, title?: string) => showToast(msg, 'warning', title, 7000), [showToast]);
@@ -108,6 +123,20 @@ function ToastContainer({ toasts, onRemove }: { toasts: ToastMessage[]; onRemove
             <div className="flex-1 min-w-0">
               {t.title && <p className="text-xs font-bold uppercase tracking-wider text-slate-800 mb-0.5">{t.title}</p>}
               <p className="text-sm font-medium text-slate-700 leading-snug break-words">{t.message}</p>
+              {t.action && (
+                <div className="mt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      t.action?.onClick();
+                      onRemove(t.id);
+                    }}
+                    className="inline-flex items-center text-xs font-bold uppercase tracking-wider px-2.5 py-1 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition cursor-pointer shadow-xs"
+                  >
+                    {t.action.label}
+                  </button>
+                </div>
+              )}
             </div>
             <button
               type="button"
