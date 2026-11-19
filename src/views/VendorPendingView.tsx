@@ -14,6 +14,10 @@ import {
   Check,
   MessageSquare,
   X,
+  ChevronDown,
+  ChevronUp,
+  Calendar,
+  Layers,
 } from 'lucide-react';
 import {
   Card,
@@ -43,19 +47,35 @@ import type {
   Supplier,
   Client,
   Item,
+  ProductionOrder,
 } from '@/lib/supabase';
 import type { View } from '@/lib/types';
 import type { NavigationContext } from '@/components/AppShell';
 import { getErrorMessage, formatDate, getTodayDateString, normalizePhoneForWhatsApp } from '@/lib/utils';
 import { useAuth } from '@/lib/auth';
+import {
+  groupVendorPendingAllocations,
+  getVendorOrderGroupKey,
+  type VendorOrderGroup,
+  type VendorPendingGroup,
+} from './vendor-pending/vendorPendingGrouping';
+
+export type { VendorOrderGroup, VendorPendingGroup };
 
 export type VendorPendingViewProps = {
   initialClientId?: string;
+  initialVendorId?: string;
+  initialOrderId?: string;
   onViewChange?: (view: View, context?: NavigationContext) => void;
 };
 
-export function VendorPendingView({ initialClientId, onViewChange }: VendorPendingViewProps) {
-  const { canPerform } = useAuth();
+export function VendorPendingView({
+  initialClientId,
+  initialVendorId,
+  initialOrderId,
+  onViewChange,
+}: VendorPendingViewProps) {
+  const { canPerform, canAccessView } = useAuth();
   const [items, setItems] = useState<MaterialAllocationWithVendorRelations[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -65,7 +85,7 @@ export function VendorPendingView({ initialClientId, onViewChange }: VendorPendi
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedVendorId, setSelectedVendorId] = useState<string>('all');
+  const [selectedVendorId, setSelectedVendorId] = useState<string>(initialVendorId || 'all');
   const [selectedClientId, setSelectedClientId] = useState<string>(initialClientId || 'all');
   const [urgencyFilter, setUrgencyFilter] = useState<'all' | 'overdue' | 'upcoming' | 'no_timeline'>('all');
 
@@ -74,6 +94,12 @@ export function VendorPendingView({ initialClientId, onViewChange }: VendorPendi
       setSelectedClientId(initialClientId);
     }
   }, [initialClientId]);
+
+  useEffect(() => {
+    if (initialVendorId) {
+      setSelectedVendorId(initialVendorId);
+    }
+  }, [initialVendorId]);
 
   // Modals & Active Tabs
   const [quickReceiveAlloc, setQuickReceiveAlloc] = useState<MaterialAllocationWithVendorRelations | null>(null);
@@ -92,6 +118,10 @@ export function VendorPendingView({ initialClientId, onViewChange }: VendorPendi
   const [reassignItem, setReassignItem] = useState<MaterialAllocationWithVendorRelations | null>(null);
   const [newVendorId, setNewVendorId] = useState<string>('');
   const [reassigning, setReassigning] = useState(false);
+
+  // Accordion Expand/Collapse State (keyed by `${vendorId}_${orderId}`)
+  const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<string>>(new Set());
+  const [hasInitializedExpansion, setHasInitializedExpansion] = useState(false);
 
   // Persistent Recently Received Items
   const [recentlyReceived, setRecentlyReceived] = useState<MaterialAllocationWithVendorRelations[]>([]);
@@ -543,26 +573,96 @@ export function VendorPendingView({ initialClientId, onViewChange }: VendorPendi
     });
   }, [items, selectedVendorId, selectedClientId, urgencyFilter, searchQuery, today]);
 
-  // Group items by Vendor
-  const groupedByVendor = useMemo(() => {
-    const groups: { [vendorId: string]: { vendor: Supplier; items: MaterialAllocationWithVendorRelations[] } } = {};
+  // Group items by Vendor, and sub-group by Production Order
+  const groupedByVendor = useMemo((): VendorPendingGroup[] => {
+    return groupVendorPendingAllocations(filteredItems, today);
+  }, [filteredItems, today]);
 
-    filteredItems.forEach((item) => {
-      const vId = item.vendor_id || 'unassigned';
-      if (!groups[vId]) {
-        const vendorObj: Supplier = item.vendor || {
-          id: vId,
-          name: 'Unassigned Vendor',
-          contact: null,
-          created_at: '',
-        };
-        groups[vId] = { vendor: vendorObj, items: [] };
+  // Auto-expand first order group or targeted order on initial load (matching OrdersView behavior)
+  useEffect(() => {
+    if (!hasInitializedExpansion && groupedByVendor.length > 0) {
+      const initialKeys = new Set<string>();
+
+      if (initialOrderId) {
+        // Find and expand the specific targeted order across vendors
+        for (const vg of groupedByVendor) {
+          const matchedOg = vg.orderGroups.find((og) => og.orderId === initialOrderId);
+          if (matchedOg) {
+            initialKeys.add(getVendorOrderGroupKey(vg.vendor.id, matchedOg.orderId));
+          }
+        }
       }
-      groups[vId].items.push(item);
-    });
 
-    return Object.values(groups).sort((a, b) => b.items.length - a.items.length);
-  }, [filteredItems]);
+      // If no targeted order key was matched, expand the first priority order (overdue first, or first active)
+      if (initialKeys.size === 0) {
+        const firstVendor = groupedByVendor[0];
+        if (firstVendor && firstVendor.orderGroups.length > 0) {
+          const priorityOrder = firstVendor.orderGroups.find((og) => og.hasOverdue) || firstVendor.orderGroups[0];
+          initialKeys.add(getVendorOrderGroupKey(firstVendor.vendor.id, priorityOrder.orderId));
+        }
+      }
+
+      setExpandedGroupKeys(initialKeys);
+      setHasInitializedExpansion(true);
+    }
+  }, [groupedByVendor, hasInitializedExpansion, initialOrderId]);
+
+  // When searching, auto-expand all matching order groups so results are immediately visible
+  useEffect(() => {
+    if (searchQuery.trim()) {
+      const searchKeys = new Set<string>();
+      groupedByVendor.forEach((vg) => {
+        vg.orderGroups.forEach((og) => {
+          searchKeys.add(getVendorOrderGroupKey(vg.vendor.id, og.orderId));
+        });
+      });
+      setExpandedGroupKeys(searchKeys);
+    }
+  }, [searchQuery, groupedByVendor]);
+
+  // Accordion Expand/Collapse Handlers
+  const toggleGroupExpand = (groupKey: string) => {
+    setExpandedGroupKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupKey)) {
+        next.delete(groupKey);
+      } else {
+        next.add(groupKey);
+      }
+      return next;
+    });
+  };
+
+  const toggleAllForVendor = (vendorId: string) => {
+    const vg = groupedByVendor.find((g) => g.vendor.id === vendorId);
+    if (!vg) return;
+    const vendorKeys = vg.orderGroups.map((og) => getVendorOrderGroupKey(vendorId, og.orderId));
+    const allExpanded = vendorKeys.length > 0 && vendorKeys.every((k) => expandedGroupKeys.has(k));
+
+    setExpandedGroupKeys((prev) => {
+      const next = new Set(prev);
+      if (allExpanded) {
+        vendorKeys.forEach((k) => next.delete(k));
+      } else {
+        vendorKeys.forEach((k) => next.add(k));
+      }
+      return next;
+    });
+  };
+
+  const expandAll = () => {
+    const allKeys = new Set<string>();
+    groupedByVendor.forEach((vg) => {
+      vg.orderGroups.forEach((og) => {
+        allKeys.add(getVendorOrderGroupKey(vg.vendor.id, og.orderId));
+      });
+    });
+    setExpandedGroupKeys(allKeys);
+  };
+
+  const collapseAll = () => {
+    setExpandedGroupKeys(new Set());
+  };
 
   // KPI Metrics
   const totalPending = items.length;
@@ -818,48 +918,61 @@ export function VendorPendingView({ initialClientId, onViewChange }: VendorPendi
           </div>
         </div>
 
-        {groupedByVendor.map(({ vendor, items: vItems }) => (
+        {groupedByVendor.map(({ vendor, items: vItems, orderGroups }) => (
           <div key={vendor.id} className="mb-6 break-inside-avoid">
-            <div className="bg-slate-100 p-2 rounded font-bold text-sm text-slate-900 border-l-4 border-slate-900 flex justify-between">
+            <div className="bg-slate-900 text-white p-2.5 rounded font-bold text-sm flex justify-between items-center">
               <span>{vendor.name} {vendor.contact ? `(Contact: ${vendor.contact})` : ''}</span>
-              <span className="font-mono text-xs">{vItems.length} Pending</span>
+              <span className="font-mono text-xs">{vItems.length} Pending ({orderGroups.length} Orders)</span>
             </div>
-            <table className="w-full text-left text-xs border border-slate-300 mt-2 border-collapse">
-              <thead>
-                <tr className="bg-slate-200 text-slate-900 font-bold border-b border-slate-300">
-                  <th className="p-1.5 border-r border-slate-300 w-28">Order #</th>
-                  <th className="p-1.5 border-r border-slate-300 w-44">Product</th>
-                  <th className="p-1.5 border-r border-slate-300 w-32">Component</th>
-                  <th className="p-1.5 border-r border-slate-300">Description / Spec</th>
-                  <th className="p-1.5 w-24 text-center">Expected Due</th>
-                </tr>
-              </thead>
-              <tbody>
-                {vItems.map((item) => (
-                  <tr key={item.id} className="border-b border-slate-200">
-                    <td className="p-1.5 border-r border-slate-200 font-mono font-bold">
-                      {item.order?.order_no}
-                      {(item.client?.name || item.order?.client?.name) && (
-                        <div className="text-[10px] font-normal text-slate-600 font-sans">
-                          {item.client?.name || item.order?.client?.name}
-                        </div>
+
+            <div className="space-y-4 mt-3">
+              {orderGroups.map((og) => (
+                <div key={og.orderId} className="border border-slate-300 rounded p-2.5 break-inside-avoid">
+                  <div className="flex justify-between items-center bg-slate-100 p-1.5 rounded mb-2 text-xs font-bold text-slate-900">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono bg-slate-800 text-white px-2 py-0.5 rounded text-[11px]">
+                        {og.order?.order_no || 'General / Direct'}
+                      </span>
+                      <span>{og.order?.product_name || 'Stock Replenishment'}</span>
+                      {og.client?.name && (
+                        <span className="text-slate-600 font-normal">
+                          &bull; Client: {og.client.name} {og.client.company_name ? `(${og.client.company_name})` : ''}
+                        </span>
                       )}
-                    </td>
-                    <td className="p-1.5 border-r border-slate-200">
-                      <div>{item.order?.product_name}</div>
-                      {item.order?.total_qty ? (
-                        <div className="text-[10px] text-slate-500 font-mono">
-                          {item.order.total_qty.toLocaleString()} units
-                        </div>
-                      ) : null}
-                    </td>
-                    <td className="p-1.5 border-r border-slate-200 font-semibold">{item.component_name}</td>
-                    <td className="p-1.5 border-r border-slate-200">{item.description || '-'}</td>
-                    <td className="p-1.5 text-center font-mono">{item.timeline ? formatDate(item.timeline) : '-'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </div>
+                    <div className="text-right font-mono text-[11px]">
+                      {og.order?.total_qty ? `${og.order.total_qty.toLocaleString()} batch units | ` : ''}
+                      {og.items.length} pending
+                    </div>
+                  </div>
+
+                  <table className="w-full text-left text-xs border border-slate-300 border-collapse">
+                    <thead>
+                      <tr className="bg-slate-200 text-slate-900 font-bold border-b border-slate-300">
+                        <th className="p-1.5 border-r border-slate-300 w-10 text-center">#</th>
+                        <th className="p-1.5 border-r border-slate-300 w-40">Component</th>
+                        <th className="p-1.5 border-r border-slate-300">Description / Specification</th>
+                        <th className="p-1.5 border-r border-slate-300 w-24 text-center">Planned Qty</th>
+                        <th className="p-1.5 w-28 text-center">Expected Due</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {og.items.map((item, idx) => (
+                        <tr key={item.id} className="border-b border-slate-200">
+                          <td className="p-1.5 border-r border-slate-200 text-center font-mono">{idx + 1}</td>
+                          <td className="p-1.5 border-r border-slate-200 font-semibold">{item.component_name}</td>
+                          <td className="p-1.5 border-r border-slate-200 text-slate-700">{item.description || item.remarks || '-'}</td>
+                          <td className="p-1.5 border-r border-slate-200 text-center font-mono font-bold">
+                            {(item.qty || og.order?.total_qty || 1).toLocaleString()}
+                          </td>
+                          <td className="p-1.5 text-center font-mono">{item.timeline ? formatDate(item.timeline) : '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+            </div>
           </div>
         ))}
       </div>
@@ -1156,6 +1269,26 @@ export function VendorPendingView({ initialClientId, onViewChange }: VendorPendi
                     </option>
                   ))}
                 </select>
+
+                {/* Accordion Controls (matching OrdersView) */}
+                <div className="flex items-center gap-1 border-l border-slate-200 pl-2">
+                  <button
+                    type="button"
+                    className="text-xs text-slate-500 hover:text-slate-900 px-2 py-1 rounded hover:bg-slate-100 transition cursor-pointer font-medium"
+                    onClick={expandAll}
+                    title="Expand all order groups"
+                  >
+                    Expand All
+                  </button>
+                  <button
+                    type="button"
+                    className="text-xs text-slate-500 hover:text-slate-900 px-2 py-1 rounded hover:bg-slate-100 transition cursor-pointer font-medium"
+                    onClick={collapseAll}
+                    title="Collapse all order groups"
+                  >
+                    Collapse
+                  </button>
+                </div>
               </div>
             </div>
           </Card>
@@ -1175,7 +1308,7 @@ export function VendorPendingView({ initialClientId, onViewChange }: VendorPendi
             />
           ) : (
             <div className="space-y-6">
-              {groupedByVendor.map(({ vendor, items: vItems }) => {
+              {groupedByVendor.map(({ vendor, items: vItems, orderGroups }) => {
                 const vendorOverdue = vItems.filter((i) => i.timeline && i.timeline < today).length;
                 const isUnassigned = vendor.id === 'unassigned';
                 const rawPhone = vendor.phone || vendor.contact;
@@ -1211,7 +1344,7 @@ export function VendorPendingView({ initialClientId, onViewChange }: VendorPendi
                           )}
                         </div>
 
-                        {/* Contact details */}
+                        {/* Contact details & Sub-Group Count */}
                         <div className="flex flex-wrap items-center gap-4 mt-1 text-xs text-slate-500">
                           {rawPhone && (
                             <span className="flex items-center gap-1">
@@ -1219,6 +1352,23 @@ export function VendorPendingView({ initialClientId, onViewChange }: VendorPendi
                               {rawPhone}
                             </span>
                           )}
+                          <span className="flex items-center gap-1.5 font-medium text-slate-600">
+                            <Layers className="h-3.5 w-3.5 text-slate-400" />
+                            <span>
+                              {orderGroups.length} {orderGroups.length === 1 ? 'Order Sub-Group' : 'Order Sub-Groups'}
+                            </span>
+                            {orderGroups.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => toggleAllForVendor(vendor.id)}
+                                className="ml-1 text-xs font-semibold text-indigo-600 hover:text-indigo-800 hover:underline cursor-pointer"
+                              >
+                                {orderGroups.every((og) => expandedGroupKeys.has(getVendorOrderGroupKey(vendor.id, og.orderId)))
+                                  ? 'Collapse Orders'
+                                  : 'Expand Orders'}
+                              </button>
+                            )}
+                          </span>
                         </div>
                       </div>
 
@@ -1273,161 +1423,314 @@ export function VendorPendingView({ initialClientId, onViewChange }: VendorPendi
                       )}
                     </div>
 
-                    {/* Table of pending items for this vendor */}
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left text-xs border-collapse">
-                        <thead>
-                          <tr className="bg-slate-100/50 text-slate-600 font-semibold border-b border-slate-200/80">
-                            <th className="py-2.5 px-4 w-36">Order #</th>
-                            <th className="py-2.5 px-4 min-w-[170px]">Product &amp; Volume</th>
-                            <th className="py-2.5 px-4 w-36">Component</th>
-                            <th className="py-2.5 px-4 min-w-[200px]">Specification / Details</th>
-                            <th className="py-2.5 px-4 w-32 text-center">Expected Due</th>
-                            <th className="py-2.5 px-4 w-44 text-right">Quick Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {vItems.map((item) => {
-                            const isOverdue = item.timeline && item.timeline < today;
+                    {/* Sub-Grouped by Production Orders */}
+                    <div className="p-4 sm:p-5 space-y-3.5 bg-slate-50/50">
+                      {orderGroups.map((og) => {
+                        const groupKey = getVendorOrderGroupKey(vendor.id, og.orderId);
+                        const isExpanded = expandedGroupKeys.has(groupKey);
+                        const orderAllocations = og.items;
 
-                            return (
-                              <tr key={item.id} className="hover:bg-slate-50/80 transition">
-                                {/* Order No with drilldown + Client Brand Pill */}
-                                <td className="py-2.5 px-4">
-                                  <button
-                                    type="button"
-                                    className="font-mono text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 hover:underline cursor-pointer"
-                                    onClick={() => {
-                                      if (onViewChange && item.order_id) {
-                                        onViewChange('orders', { orderId: item.order_id });
-                                      }
-                                    }}
-                                    title="View order details in Orders view"
-                                  >
-                                    {item.order?.order_no || 'PO-XXXX'}
-                                    <ExternalLink className="h-3 w-3" />
-                                  </button>
-
-                                  {/* Client Brand Pill with 1-click filter */}
-                                  <div className="mt-1">
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setSelectedClientId(item.client?.id || item.order?.client_id || 'all')
-                                      }
-                                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200/80 hover:bg-indigo-100 transition cursor-pointer text-left"
-                                      title="Filter board by this client"
-                                    >
-                                      <Building2 className="h-3 w-3" />
-                                      {item.client?.name || item.order?.client?.name || 'Unknown Client'}
-                                    </button>
-                                  </div>
-                                </td>
-
-                                {/* Product & Batch Volume */}
-                                <td className="py-2.5 px-4">
-                                  <div className="font-medium text-slate-800">
-                                    {item.order?.product_name || 'N/A'}
-                                  </div>
-                                  <div className="text-[11px] text-slate-500 font-mono mt-0.5">
-                                    {item.order?.total_qty
-                                      ? `${item.order.total_qty.toLocaleString()} units expected`
-                                      : 'Volume unspecified'}
-                                  </div>
-                                </td>
-
-                                {/* Component */}
-                                <td className="py-2.5 px-4 font-bold text-slate-900">
-                                  {item.component_name}
-                                </td>
-
-                                {/* Specification */}
-                                <td className="py-2.5 px-4 text-slate-600">
-                                  {item.description || (
-                                    <span className="italic text-slate-400">No details specified</span>
-                                  )}
-                                  {item.remarks && (
-                                    <div className="text-[11px] text-amber-700 italic mt-0.5">
-                                      Note: {item.remarks}
-                                    </div>
-                                  )}
-                                </td>
-
-                                {/* Timeline */}
-                                <td className="py-2.5 px-4 text-center">
-                                  {item.timeline ? (
-                                    <span
-                                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[11px] font-semibold ${
-                                        isOverdue
-                                          ? 'bg-rose-100 text-rose-800 border border-rose-200'
-                                          : 'bg-slate-100 text-slate-700'
-                                      }`}
-                                    >
-                                      {isOverdue && <AlertTriangle className="h-3 w-3 text-rose-600" />}
-                                      {formatDate(item.timeline)}
-                                    </span>
+                        return (
+                          <div
+                            key={groupKey}
+                            className={`rounded-2xl border bg-white overflow-hidden shadow-2xs transition-all ${
+                              isExpanded ? 'border-indigo-200/90 shadow-xs' : 'border-slate-200/90 hover:border-slate-300'
+                            }`}
+                          >
+                            {/* Order Sub-Group Header Banner */}
+                            <div
+                              className={`p-3.5 sm:p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 cursor-pointer select-none transition-colors ${
+                                isExpanded
+                                  ? 'bg-gradient-to-r from-indigo-50/70 via-white to-indigo-50/30 border-b border-indigo-100/80'
+                                  : 'bg-white hover:bg-slate-50/90'
+                              }`}
+                              onClick={() => toggleGroupExpand(groupKey)}
+                              onKeyDown={(e) => {
+                                if (e.target !== e.currentTarget) return;
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  toggleGroupExpand(groupKey);
+                                }
+                              }}
+                              role="button"
+                              tabIndex={0}
+                              aria-expanded={isExpanded}
+                              aria-label={`Order ${og.order?.order_no || 'Direct'}, ${orderAllocations.length} pending components. Click to ${isExpanded ? 'collapse' : 'expand'}.`}
+                            >
+                              <div className="flex items-start sm:items-center gap-3">
+                                {/* Accordion Arrow Toggle */}
+                                <button
+                                  type="button"
+                                  className="mt-0.5 sm:mt-0 p-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 shadow-2xs hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-700 transition cursor-pointer"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleGroupExpand(groupKey);
+                                  }}
+                                  title={isExpanded ? 'Collapse order components' : 'Expand order components'}
+                                  aria-label={isExpanded ? `Collapse components for ${og.order?.order_no || 'order'}` : `Expand components for ${og.order?.order_no || 'order'}`}
+                                  aria-expanded={isExpanded}
+                                >
+                                  {isExpanded ? (
+                                    <ChevronUp className="h-5 w-5 text-indigo-700 transition-transform duration-200" />
                                   ) : (
-                                    <span className="text-slate-400">-</span>
+                                    <ChevronDown className="h-5 w-5 text-slate-600 transition-transform duration-200" />
                                   )}
-                                </td>
+                                </button>
 
-                                {/* Actions */}
-                                <td className="py-2.5 px-4 text-right">
-                                  <div className="flex items-center justify-end gap-1.5">
-                                    {isUnassigned ? (
-                                      canPerform('manage_orders') ? (
-                                        <Button
-                                          variant="secondary"
-                                          size="sm"
-                                          className="bg-amber-100 text-amber-900 hover:bg-amber-200 border-amber-300"
-                                          onClick={() => {
-                                            setReassignItem(item);
-                                            setNewVendorId('');
-                                          }}
-                                          title="Assign a supplier for this component"
-                                        >
-                                          <ArrowRightLeft className="h-4 w-4" />
-                                          Assign Supplier
-                                        </Button>
-                                      ) : (
-                                        <span className="text-slate-400 text-xs italic">Unassigned</span>
-                                      )
-                                    ) : canPerform('manage_orders') ? (
-                                      <>
-                                        {/* Reassign Button */}
+                                <div>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    {/* Order No Badge */}
+                                    <span className="font-mono text-xs font-bold bg-slate-900 text-white px-2.5 py-0.5 rounded-lg tracking-wide shadow-2xs">
+                                      {og.order?.order_no || 'Direct / General'}
+                                    </span>
+
+                                    {/* Product Title */}
+                                    <h4 className="text-sm font-bold text-slate-900">
+                                      {og.order?.product_name || 'General Inventory Allocation'}
+                                    </h4>
+
+                                    {/* Client Pill */}
+                                    {og.client && (
+                                      canAccessView('clients') ? (
                                         <button
                                           type="button"
-                                          className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition cursor-pointer"
-                                          onClick={() => {
-                                            setReassignItem(item);
-                                            setNewVendorId(item.vendor_id || '');
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (onViewChange && og.client?.id) {
+                                              onViewChange('clients', { clientId: og.client.id });
+                                            }
                                           }}
-                                          title="Reassign to another vendor"
+                                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200/80 px-2 py-0.5 rounded-md hover:bg-indigo-100 hover:border-indigo-300 transition cursor-pointer"
+                                          title="View client profile and order history"
                                         >
-                                          <ArrowRightLeft className="h-4 w-4" />
+                                          <Building2 className="h-3 w-3" />
+                                          {og.client.name} {og.client.company_name ? `(${og.client.company_name})` : ''}
                                         </button>
+                                      ) : (
+                                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200/80 px-2 py-0.5 rounded-md">
+                                          <Building2 className="h-3 w-3" />
+                                          {og.client.name} {og.client.company_name ? `(${og.client.company_name})` : ''}
+                                        </span>
+                                      )
+                                    )}
 
-                                        {/* Mark Received Button */}
-                                        <Button
-                                          variant="primary"
-                                          size="sm"
-                                          className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                                          onClick={() => handleInitiateReceive(item)}
-                                        >
-                                          <Check className="h-4 w-4" />
-                                          Received
-                                        </Button>
-                                      </>
-                                    ) : (
-                                      <span className="text-slate-400 text-xs italic">Pending</span>
+                                    {/* Order Status Badge */}
+                                    {og.order?.status && (
+                                      <span
+                                        className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
+                                          og.order.status === 'in_progress'
+                                            ? 'bg-emerald-100 text-emerald-800'
+                                            : 'bg-amber-100 text-amber-800'
+                                        }`}
+                                      >
+                                        {og.order.status === 'in_progress' ? 'In Progress' : 'Planning'}
+                                      </span>
                                     )}
                                   </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+
+                                  {/* Sub-meta: Units, Timeline, Pending Count */}
+                                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs text-slate-600">
+                                    {og.order?.total_qty ? (
+                                      <span className="flex items-center gap-1">
+                                        <Package className="h-3.5 w-3.5 text-slate-400" />
+                                        <span className="font-semibold text-slate-800 font-mono">
+                                          {og.order.total_qty.toLocaleString()}
+                                        </span>{' '}
+                                        batch units
+                                      </span>
+                                    ) : null}
+
+                                    {og.order?.due_date && (
+                                      <span className="flex items-center gap-1">
+                                        <Calendar className="h-3.5 w-3.5 text-slate-400" />
+                                        Target: <span className="font-medium text-slate-800">{formatDate(og.order.due_date)}</span>
+                                      </span>
+                                    )}
+
+                                    <span className="font-medium text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded text-[11px]">
+                                      {orderAllocations.length} pending component{orderAllocations.length > 1 ? 's' : ''}
+                                    </span>
+
+                                    {og.overdueCount > 0 && (
+                                      <span className="font-medium text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded text-[11px] flex items-center gap-1">
+                                        <AlertTriangle className="h-3 w-3 text-rose-600" />
+                                        {og.overdueCount} overdue
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Right Actions */}
+                              <div className="flex items-center gap-2 self-end md:self-center" onClick={(e) => e.stopPropagation()}>
+                                {og.order && onViewChange && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onViewChange('orders', { orderId: og.orderId })}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold text-indigo-700 bg-white border border-slate-200 hover:bg-indigo-50 hover:border-indigo-200 transition cursor-pointer shadow-2xs"
+                                    title="Open order in Orders view"
+                                  >
+                                    View Order
+                                    <ExternalLink className="h-3 w-3" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Expanded Order Component Table */}
+                            {isExpanded && (
+                              <div className="overflow-x-auto border-t border-slate-100 bg-white">
+                                <table className="w-full text-left text-xs border-collapse">
+                                  <thead>
+                                    <tr className="bg-slate-100/50 text-slate-600 font-semibold border-b border-slate-200/80">
+                                      <th className="py-2.5 px-3 w-10 text-center text-slate-400">#</th>
+                                      <th className="py-2.5 px-4 w-44">Component</th>
+                                      <th className="py-2.5 px-4 min-w-[200px]">Specification / Details</th>
+                                      <th className="py-2.5 px-4 min-w-[180px]">Warehouse SKU</th>
+                                      <th className="py-2.5 px-4 w-24 text-center">Planned Qty</th>
+                                      <th className="py-2.5 px-4 w-32 text-center">Expected Due</th>
+                                      <th className="py-2.5 px-4 w-44 text-right">Quick Actions</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100">
+                                    {orderAllocations.map((item, idx) => {
+                                      const isOverdue = item.timeline && item.timeline < today;
+                                      const isService = /printing|coating|stamping|metalliz|emboss/i.test(item.component_name);
+                                      const matchedSku = item.stock_item || itemsCatalog.find((cat) => cat.id === item.stock_item_id);
+
+                                      return (
+                                        <tr key={item.id} className="hover:bg-slate-50/80 transition">
+                                          {/* # Index */}
+                                          <td className="py-2.5 px-3 text-center text-slate-400 font-mono">
+                                            {idx + 1}
+                                          </td>
+
+                                          {/* Component */}
+                                          <td className="py-2.5 px-4 font-bold text-slate-900">
+                                            {item.component_name}
+                                          </td>
+
+                                          {/* Specification */}
+                                          <td className="py-2.5 px-4 text-slate-600">
+                                            {item.description || (
+                                              <span className="italic text-slate-400">No details specified</span>
+                                            )}
+                                            {item.remarks && (
+                                              <div className="text-[11px] text-amber-700 italic mt-0.5">
+                                                Note: {item.remarks}
+                                              </div>
+                                            )}
+                                          </td>
+
+                                          {/* Warehouse SKU */}
+                                          <td className="py-2.5 px-4">
+                                            {isService ? (
+                                              <span className="text-[11px] text-emerald-700 font-medium bg-emerald-50 border border-emerald-200/80 px-2 py-0.5 rounded">
+                                                Service / Milestone
+                                              </span>
+                                            ) : matchedSku ? (
+                                              <div className="text-slate-800">
+                                                <span className="font-semibold">{matchedSku.name}</span>
+                                                {matchedSku.color && (
+                                                  <span className="text-[10px] text-slate-500 ml-1">[{matchedSku.color}]</span>
+                                                )}
+                                              </div>
+                                            ) : item.stock_item_id ? (
+                                              <span className="font-mono text-[11px] text-slate-600">
+                                                SKU #{item.stock_item_id.slice(0, 8)}
+                                              </span>
+                                            ) : (
+                                              <span className="text-[11px] text-amber-700 font-semibold bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">
+                                                Not Linked (Prompt on Receive)
+                                              </span>
+                                            )}
+                                          </td>
+
+                                          {/* Planned Qty */}
+                                          <td className="py-2.5 px-4 text-center font-mono font-semibold text-slate-700">
+                                            {(item.qty || og.order?.total_qty || 1).toLocaleString()}
+                                          </td>
+
+                                          {/* Expected Due */}
+                                          <td className="py-2.5 px-4 text-center">
+                                            {item.timeline ? (
+                                              <span
+                                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[11px] font-semibold ${
+                                                  isOverdue
+                                                    ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                                                    : 'bg-slate-100 text-slate-700'
+                                                }`}
+                                              >
+                                                {isOverdue && <AlertTriangle className="h-3 w-3 text-rose-600" />}
+                                                {formatDate(item.timeline)}
+                                              </span>
+                                            ) : (
+                                              <span className="text-slate-400">-</span>
+                                            )}
+                                          </td>
+
+                                          {/* Quick Actions */}
+                                          <td className="py-2.5 px-4 text-right">
+                                            <div className="flex items-center justify-end gap-1.5">
+                                              {isUnassigned ? (
+                                                canPerform('manage_orders') ? (
+                                                  <Button
+                                                    variant="secondary"
+                                                    size="sm"
+                                                    className="bg-amber-100 text-amber-900 hover:bg-amber-200 border-amber-300"
+                                                    onClick={() => {
+                                                      setReassignItem(item);
+                                                      setNewVendorId('');
+                                                    }}
+                                                    title="Assign a supplier for this component"
+                                                  >
+                                                    <ArrowRightLeft className="h-4 w-4" />
+                                                    Assign Supplier
+                                                  </Button>
+                                                ) : (
+                                                  <span className="text-slate-400 text-xs italic">Unassigned</span>
+                                                )
+                                              ) : canPerform('manage_orders') ? (
+                                                <>
+                                                  {/* Reassign Button */}
+                                                  <button
+                                                    type="button"
+                                                    className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition cursor-pointer"
+                                                    onClick={() => {
+                                                      setReassignItem(item);
+                                                      setNewVendorId(item.vendor_id || '');
+                                                    }}
+                                                    title="Reassign to another vendor"
+                                                  >
+                                                    <ArrowRightLeft className="h-4 w-4" />
+                                                  </button>
+
+                                                  {/* Mark Received Button */}
+                                                  <Button
+                                                    variant="primary"
+                                                    size="sm"
+                                                    className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                                                    onClick={() => handleInitiateReceive(item)}
+                                                  >
+                                                    <Check className="h-4 w-4" />
+                                                    Received
+                                                  </Button>
+                                                </>
+                                              ) : (
+                                                <span className="text-slate-400 text-xs italic">Pending</span>
+                                              )}
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </Card>
                 );

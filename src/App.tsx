@@ -133,6 +133,8 @@ function App() {
             {view === 'vendor-pending' && (
               <VendorPendingView
                 initialClientId={navContext?.clientId}
+                initialVendorId={navContext?.supplierId}
+                initialOrderId={navContext?.orderId}
                 onViewChange={handleViewChange}
               />
             )}

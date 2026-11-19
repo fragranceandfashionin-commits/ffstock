@@ -10,9 +10,14 @@ import { COMMON_UNITS } from './types';
 export type AddItemModalProps = {
   isOpen: boolean;
   onClose: () => void;
-  onItemCreated?: (newItem?: Item) => void;
+  onItemCreated?: (newItem?: Item, allCreated?: Item[]) => void;
   existingItems?: Item[];
   initialCategory?: string;
+  initialName?: string;
+  disableSuccessToast?: boolean;
+  title?: string;
+  submitButtonText?: string;
+  hideAddAnother?: boolean;
 };
 
 export type MultiItemRow = {
@@ -39,14 +44,21 @@ export function AddItemModal({
   onItemCreated,
   existingItems = [],
   initialCategory = 'Bottle',
+  initialName = '',
+  disableSuccessToast = false,
+  title,
+  submitButtonText,
+  hideAddAnother = false,
 }: AddItemModalProps) {
   // Mode: 'single' or 'multi'
   const [entryMode, setEntryMode] = useState<'single' | 'multi'>('single');
 
   // Single Item State
   const [category, setCategory] = useState(initialCategory);
-  const [name, setName] = useState('');
+  const [name, setName] = useState(initialName);
   const [unit, setUnit] = useState('pcs');
+  const [isCustomUnit, setIsCustomUnit] = useState(false);
+  const [customUnit, setCustomUnit] = useState('');
   const [color, setColor] = useState('');
   const [description, setDescription] = useState('');
   const [allowDuplicate, setAllowDuplicate] = useState(false);
@@ -57,13 +69,13 @@ export function AddItemModal({
 
   // Multi Items State
   const [rows, setRows] = useState<MultiItemRow[]>([
-    createEmptyRow('Bottle'),
+    createEmptyRow(initialCategory || 'Bottle'),
     createEmptyRow('Cap'),
     createEmptyRow('Atomizer'),
   ]);
   const [showPasteBox, setShowPasteBox] = useState(false);
   const [rawPastedText, setRawPastedText] = useState('');
-  const [defaultBatchCategory, setDefaultBatchCategory] = useState('Bottle');
+  const [defaultBatchCategory, setDefaultBatchCategory] = useState(initialCategory || 'Bottle');
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,12 +87,28 @@ export function AddItemModal({
       setSessionAddedCount(0);
       setLastAddedName(null);
       setError(null);
-      if (initialCategory) setCategory(initialCategory);
+      setIsCustomUnit(false);
+      setCustomUnit('');
+      if (initialCategory) {
+        setCategory(initialCategory);
+        setDefaultBatchCategory(initialCategory);
+      }
+      setName(initialName || '');
+      setRows([
+        createEmptyRow(initialCategory || 'Bottle'),
+        createEmptyRow('Cap'),
+        createEmptyRow('Atomizer'),
+      ]);
       setTimeout(() => {
-        nameInputRef.current?.focus();
+        if (nameInputRef.current) {
+          nameInputRef.current.focus();
+          if (initialName) {
+            nameInputRef.current.select();
+          }
+        }
       }, 50);
     }
-  }, [isOpen, initialCategory]);
+  }, [isOpen, initialCategory, initialName]);
 
   // Single item similarity detection
   const similarMatches: SimilarItemMatch[] = useMemo(() => {
@@ -207,22 +235,25 @@ export function AddItemModal({
 
     setSubmitting(true);
     try {
+      const finalUnit = (isCustomUnit ? customUnit.trim() : unit.trim()) || 'pcs';
       const newItem = await insertItem({
         name: trimmedName,
         category: category.trim() || 'Bottle',
-        unit: unit.trim() || 'pcs',
+        unit: finalUnit,
         description: description.trim() || null,
         color: color.trim() || null,
       });
 
-      toast.success(
-        `Registered SKU "${trimmedName}" (${category}).${shouldClose ? '' : ' Ready for next SKU.'}`,
-        'SKU Added'
-      );
+      if (!disableSuccessToast) {
+        toast.success(
+          `Registered SKU "${trimmedName}" (${category}).${shouldClose ? '' : ' Ready for next SKU.'}`,
+          'SKU Added'
+        );
+      }
 
       setSessionAddedCount((prev) => prev + 1);
       setLastAddedName(trimmedName);
-      onItemCreated?.(newItem);
+      onItemCreated?.(newItem, [newItem]);
 
       if (shouldClose) {
         setName('');
@@ -285,7 +316,9 @@ export function AddItemModal({
       }));
 
       const created = await insertItems(payloads);
-      toast.success(`Successfully registered ${created.length} new SKUs in Master Catalogue.`, 'Batch Items Saved');
+      if (!disableSuccessToast) {
+        toast.success(`Successfully registered ${created.length} new SKUs in Master Catalogue.`, 'Batch Items Saved');
+      }
 
       setRows([
         createEmptyRow('Bottle'),
@@ -293,7 +326,7 @@ export function AddItemModal({
         createEmptyRow('Atomizer'),
       ]);
       if (created.length > 0) {
-        onItemCreated?.(created[0]);
+        onItemCreated?.(created[0], created);
       } else {
         onItemCreated?.();
       }
@@ -311,7 +344,7 @@ export function AddItemModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Register Master Component SKUs"
+      title={title || "Register Master Component SKUs"}
       maxWidthClass={entryMode === 'multi' ? 'max-w-4xl' : 'max-w-lg'}
     >
       <div className="space-y-4">
@@ -478,19 +511,56 @@ export function AddItemModal({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Unit of Measure" htmlFor="sku-unit" required>
-                <select
-                  id="sku-unit"
-                  className={`${inputClass} font-semibold`}
-                  value={unit}
-                  onChange={(e) => setUnit(e.target.value)}
-                  required
-                >
-                  {COMMON_UNITS.map((u) => (
-                    <option key={u} value={u}>
-                      {u}
+                {isCustomUnit ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      id="sku-unit"
+                      className={`${inputClass} font-semibold`}
+                      value={customUnit}
+                      onChange={(e) => setCustomUnit(e.target.value)}
+                      placeholder="e.g. rolls, grams, meters"
+                      required
+                      autoFocus
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        setIsCustomUnit(false);
+                        setUnit('pcs');
+                      }}
+                      className="shrink-0 text-xs"
+                      title="Return to standard unit presets"
+                    >
+                      Presets
+                    </Button>
+                  </div>
+                ) : (
+                  <select
+                    id="sku-unit"
+                    className={`${inputClass} font-semibold`}
+                    value={unit}
+                    onChange={(e) => {
+                      if (e.target.value === '__custom__') {
+                        setIsCustomUnit(true);
+                        setCustomUnit('');
+                      } else {
+                        setUnit(e.target.value);
+                      }
+                    }}
+                    required
+                  >
+                    {COMMON_UNITS.map((u) => (
+                      <option key={u} value={u}>
+                        {u}
+                      </option>
+                    ))}
+                    <option value="__custom__" className="text-indigo-600 font-semibold bg-indigo-50/50">
+                      + Custom Unit...
                     </option>
-                  ))}
-                </select>
+                  </select>
+                )}
               </Field>
 
               <Field label="Default Color / Finish (Optional)" htmlFor="sku-color">
@@ -522,17 +592,19 @@ export function AddItemModal({
               </Button>
 
               <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  loading={submitting}
-                  onClick={() => handleSaveSingle(false)}
-                  className="font-bold text-emerald-700 bg-emerald-50 border-emerald-300 hover:bg-emerald-100 cursor-pointer shadow-2xs"
-                  title="Save this SKU and keep the form open to add more"
-                >
-                  <Plus className="h-4 w-4 mr-1 text-emerald-600" />
-                  <span>Save & Add Another SKU (+)</span>
-                </Button>
+                {!hideAddAnother && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    loading={submitting}
+                    onClick={() => handleSaveSingle(false)}
+                    className="font-bold text-emerald-700 bg-emerald-50 border-emerald-300 hover:bg-emerald-100 cursor-pointer shadow-2xs"
+                    title="Save this SKU and keep the form open to add more"
+                  >
+                    <Plus className="h-4 w-4 mr-1 text-emerald-600" />
+                    <span>Save & Add Another SKU (+)</span>
+                  </Button>
+                )}
 
                 <Button
                   type="button"
@@ -542,7 +614,7 @@ export function AddItemModal({
                   className="font-bold bg-slate-900 hover:bg-slate-800 text-white cursor-pointer"
                 >
                   <Save className="h-4 w-4 mr-1 text-emerald-400" />
-                  <span>Save & Close</span>
+                  <span>{submitButtonText || 'Save & Close'}</span>
                 </Button>
               </div>
             </div>

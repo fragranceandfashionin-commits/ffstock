@@ -58,6 +58,9 @@ import type { NavigationContext } from '@/components/AppShell';
 import { getErrorMessage, formatDate } from '@/lib/utils';
 import { useAuth } from '@/lib/auth';
 
+import { AddItemModal } from './items/AddItemModal';
+import { getCategoryForComponent, getSpecificationText } from './orders/orderBomUtils';
+
 export type OrderBatchItem = {
   tempId: string;
   product_name: string;
@@ -109,6 +112,14 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
   const [completeModalOrder, setCompleteModalOrder] = useState<ProductionOrderWithRelations | null>(null);
   const [completing, setCompleting] = useState(false);
   const [printOrder, setPrintOrder] = useState<ProductionOrderWithRelations | null>(null);
+
+  // New SKU Creation Modal Target (from Orders BOM table)
+  const [skuTargetAllocation, setSkuTargetAllocation] = useState<{
+    id: string;
+    component_name: string;
+    initialCategory: string;
+    initialName: string;
+  } | null>(null);
 
   // Multi-Order Batch Entry State
   const [batchClientId, setBatchClientId] = useState<string>(
@@ -540,6 +551,53 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
       toast.error(getErrorMessage(err, 'Failed to update allocation'));
       loadData(true);
     }
+  };
+
+  // Open AddItemModal with prefilled category & specification
+  const handleOpenNewSkuModal = (alloc: MaterialAllocation) => {
+    if (!canPerform('manage_orders') || alloc.status === 'received') {
+      return;
+    }
+    const specText = getSpecificationText(alloc);
+    const cat = getCategoryForComponent(alloc.component_name);
+
+    // If user typed in specification box but hasn't blurred yet, persist it
+    if (specText && specText !== (alloc.description || '')) {
+      handleAllocationFieldChange(alloc.id, 'description', specText);
+    }
+
+    setSkuTargetAllocation({
+      id: alloc.id,
+      component_name: alloc.component_name,
+      initialCategory: cat,
+      initialName: specText,
+    });
+  };
+
+  // Callback when new SKU is saved from AddItemModal
+  const handleSkuCreated = (newItem?: Item, allCreated?: Item[]) => {
+    if (!newItem || !skuTargetAllocation) {
+      setSkuTargetAllocation(null);
+      return;
+    }
+
+    const targetAlloc = skuTargetAllocation;
+    const itemsToAdd = allCreated && allCreated.length > 0 ? allCreated : [newItem];
+
+    // 1. Add newly created item(s) into the local items state
+    setItems((prev) => {
+      const newItems = itemsToAdd.filter((item) => !prev.some((i) => i.id === item.id));
+      return [...newItems, ...prev];
+    });
+
+    // 2. Automatically set this new item's id as stock_item_id for the BOM component row
+    handleAllocationFieldChange(targetAlloc.id, 'stock_item_id', newItem.id);
+
+    // 3. Close the modal
+    setSkuTargetAllocation(null);
+
+    // 4. Show success toast
+    toast.success(`New SKU created and linked to ${targetAlloc.component_name}`);
   };
 
   // Toggle Allocation Status (Pending <-> Received)
@@ -1183,6 +1241,7 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                             .map((alloc, idx) => {
                               const isReceived = alloc.status === 'received';
                               const isService = /printing|coating|stamping|metalliz|emboss/i.test(alloc.component_name);
+                              const assignedItem = items.find((i) => i.id === alloc.stock_item_id);
 
                               return (
                                 <tr
@@ -1237,27 +1296,35 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
 
                                   {/* 4. Reactive Keyed Planned Quantity */}
                                   <td className="py-2 px-3 text-center">
-                                    <input
-                                      key={`${alloc.id}-${alloc.qty ?? order.total_qty}`}
-                                      type="number"
-                                      min="1"
-                                      disabled={isReceived || !canPerform('manage_orders')}
-                                      defaultValue={alloc.qty || order.total_qty || 1}
-                                      className={`w-20 text-xs px-2 py-1 rounded border border-slate-200 bg-white font-mono text-center focus:border-indigo-500 ${
-                                        isReceived ? 'bg-slate-50 text-slate-500 cursor-not-allowed' : ''
-                                      }`}
-                                      onBlur={(e) => {
-                                        const val = parseInt(e.target.value, 10);
-                                        if (val > 0 && val !== alloc.qty) {
-                                          handleAllocationFieldChange(alloc.id, 'qty', val);
-                                        }
-                                      }}
-                                    />
+                                    <div className="inline-flex items-center justify-center gap-1">
+                                      <input
+                                        key={`${alloc.id}-${alloc.qty ?? order.total_qty}`}
+                                        type="number"
+                                        min="1"
+                                        disabled={isReceived || !canPerform('manage_orders')}
+                                        defaultValue={alloc.qty || order.total_qty || 1}
+                                        className={`w-20 text-xs px-2 py-1 rounded border border-slate-200 bg-white font-mono text-center focus:border-indigo-500 ${
+                                          isReceived ? 'bg-slate-50 text-slate-500 cursor-not-allowed' : ''
+                                        }`}
+                                        onBlur={(e) => {
+                                          const val = parseInt(e.target.value, 10);
+                                          if (val > 0 && val !== alloc.qty) {
+                                            handleAllocationFieldChange(alloc.id, 'qty', val);
+                                          }
+                                        }}
+                                      />
+                                      {assignedItem?.unit && (
+                                        <span className="text-[10px] text-slate-400 font-mono" title={`Unit: ${assignedItem.unit}`}>
+                                          {assignedItem.unit}
+                                        </span>
+                                      )}
+                                    </div>
                                   </td>
 
                                   {/* 5. Specification / Details */}
                                   <td className="py-2 px-3">
                                     <input
+                                      id={`alloc-spec-${alloc.id}`}
                                       type="text"
                                       defaultValue={alloc.description || ''}
                                       placeholder="e.g. Amber 100ml bottle"
@@ -1278,21 +1345,43 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                                         ✓ Service Milestone
                                       </span>
                                     ) : (
-                                      <select
-                                        className="w-full text-xs px-2 py-1 rounded border border-slate-200 bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-slate-800"
-                                        value={alloc.stock_item_id || ''}
-                                        disabled={isReceived || !canPerform('manage_orders')}
-                                        onChange={(e) =>
-                                          handleAllocationFieldChange(alloc.id, 'stock_item_id', e.target.value || null)
-                                        }
-                                      >
-                                        <option value="">-- Select Catalog SKU --</option>
-                                        {items.map((i) => (
-                                          <option key={i.id} value={i.id}>
-                                            {i.name} {i.color ? `[${i.color}]` : ''} ({i.category || 'General'})
-                                          </option>
-                                        ))}
-                                      </select>
+                                      <div className="flex items-center gap-1.5">
+                                        <select
+                                          className="w-full text-xs px-2 py-1 rounded border border-slate-200 bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-slate-800"
+                                          value={alloc.stock_item_id || ''}
+                                          disabled={isReceived || !canPerform('manage_orders')}
+                                          onChange={(e) => {
+                                            if (e.target.value === '__CREATE_NEW_SKU__') {
+                                              handleOpenNewSkuModal(alloc);
+                                            } else {
+                                              handleAllocationFieldChange(alloc.id, 'stock_item_id', e.target.value || null);
+                                            }
+                                          }}
+                                        >
+                                          <option value="">-- Select Catalog SKU --</option>
+                                          {canPerform('manage_orders') && !isReceived && (
+                                            <option value="__CREATE_NEW_SKU__" className="text-indigo-600 font-semibold bg-indigo-50/50">
+                                              + Create New SKU...
+                                            </option>
+                                          )}
+                                          {items.map((i) => (
+                                            <option key={i.id} value={i.id}>
+                                              {i.name} {i.color ? `[${i.color}]` : ''} ({i.category || 'General'})
+                                            </option>
+                                          ))}
+                                        </select>
+                                        {canPerform('manage_orders') && !isReceived && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleOpenNewSkuModal(alloc)}
+                                            className="shrink-0 p-1.5 rounded border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 transition-colors shadow-2xs cursor-pointer"
+                                            title={`Create and link new SKU for ${alloc.component_name}`}
+                                            aria-label={`Create new SKU for ${alloc.component_name}`}
+                                          >
+                                            <Plus className="h-3.5 w-3.5" />
+                                          </button>
+                                        )}
+                                      </div>
                                     )}
                                   </td>
 
@@ -1888,6 +1977,22 @@ ${(deleteModalOrder.material_allocations?.filter((a) => a.status === 'received')
           variant="danger"
           onConfirm={handleConfirmDelete}
           onClose={() => setDeleteModalOrder(null)}
+        />
+      )}
+
+      {/* ADD NEW SKU DIRECTLY FROM BOM TABLE MODAL */}
+      {skuTargetAllocation && (
+        <AddItemModal
+          isOpen={!!skuTargetAllocation}
+          onClose={() => setSkuTargetAllocation(null)}
+          onItemCreated={handleSkuCreated}
+          existingItems={items}
+          initialCategory={skuTargetAllocation.initialCategory}
+          initialName={skuTargetAllocation.initialName}
+          disableSuccessToast={true}
+          title={`Create & Link SKU for ${skuTargetAllocation.component_name}`}
+          submitButtonText="Save & Link SKU"
+          hideAddAnother={true}
         />
       )}
     </div>
