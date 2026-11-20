@@ -59,7 +59,12 @@ import { getErrorMessage, formatDate } from '@/lib/utils';
 import { useAuth } from '@/lib/auth';
 
 import { AddItemModal } from './items/AddItemModal';
-import { getCategoryForComponent, getSpecificationText } from './orders/orderBomUtils';
+import {
+  getCategoryForComponent,
+  getSpecificationText,
+  sortAllocations,
+  isAllocationDeletable,
+} from './orders/orderBomUtils';
 
 export type OrderBatchItem = {
   tempId: string;
@@ -120,6 +125,7 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
     initialCategory: string;
     initialName: string;
   } | null>(null);
+  const [duplicatingAllocId, setDuplicatingAllocId] = useState<string | null>(null);
 
   // Multi-Order Batch Entry State
   const [batchClientId, setBatchClientId] = useState<string>(
@@ -672,15 +678,74 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
     if (!compName) return;
 
     try {
-      await addAllocationRow({
+      const created = await addAllocationRow({
         order_id: orderId,
         component_name: compName,
       });
       toast.success(`Added component "${compName}"`);
       setNewRowComponent((prev) => ({ ...prev, [orderId]: '' }));
+
+      // Optimistic local state update
+      setOrders((prev) =>
+        prev.map((ord) => {
+          if (ord.id !== orderId) return ord;
+          const currentAllocs = ord.material_allocations ?? [];
+          return {
+            ...ord,
+            material_allocations: sortAllocations([...currentAllocs, created]),
+          };
+        })
+      );
+
       loadData(true);
     } catch (err) {
       toast.error(getErrorMessage(err, 'Failed to add component'));
+    }
+  };
+
+  // Duplicate a specific BOM component row (+ button)
+  const handleDuplicateComponentRow = async (orderId: string, sourceAlloc: MaterialAllocation) => {
+    if (duplicatingAllocId) return;
+    if (!canPerform('manage_orders')) {
+      toast.error('Permission denied: You do not have permission to add component rows.');
+      return;
+    }
+
+    setDuplicatingAllocId(sourceAlloc.id);
+    const order = orders.find((o) => o.id === orderId);
+    const inheritedQty = sourceAlloc.qty || order?.total_qty || 0;
+    const inheritedLocation = sourceAlloc.location || 'Raw Stock Bay A';
+
+    try {
+      const created = await addAllocationRow({
+        order_id: orderId,
+        component_name: sourceAlloc.component_name,
+        sort_order: sourceAlloc.sort_order,
+        source: sourceAlloc.source,
+        qty: inheritedQty,
+        description: null,
+        location: inheritedLocation,
+      });
+
+      toast.success(`Added another line for "${sourceAlloc.component_name}"`);
+
+      // Optimistic local state update
+      setOrders((prev) =>
+        prev.map((ord) => {
+          if (ord.id !== orderId) return ord;
+          const currentAllocs = ord.material_allocations ?? [];
+          return {
+            ...ord,
+            material_allocations: sortAllocations([...currentAllocs, created]),
+          };
+        })
+      );
+
+      loadData(true);
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Failed to add component line'));
+    } finally {
+      setDuplicatingAllocId(null);
     }
   };
 
@@ -809,8 +874,7 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
               </tr>
             </thead>
             <tbody>
-              {printOrder.material_allocations
-                ?.sort((a, b) => a.sort_order - b.sort_order)
+              {sortAllocations(printOrder.material_allocations ?? [])
                 .map((alloc, idx) => {
                   const assignedVendor = suppliers.find((s) => s.id === alloc.vendor_id);
                   const assignedItem = items.find((i) => i.id === alloc.stock_item_id);
@@ -1198,7 +1262,7 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                       <div>
                         <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
                           <Layers className="h-3.5 w-3.5 text-indigo-600" />
-                          10-Component Bill of Materials (BOM)
+                          {allocations.length}-Component Bill of Materials (BOM)
                         </h4>
                         <p className="text-xs text-slate-500">
                           Configure vendor assignments or stock allocation. Click status pill to toggle received.
@@ -1236,9 +1300,7 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {allocations
-                            .sort((a, b) => a.sort_order - b.sort_order)
-                            .map((alloc, idx) => {
+                          {sortAllocations(allocations).map((alloc, idx) => {
                               const isReceived = alloc.status === 'received';
                               const isService = /printing|coating|stamping|metalliz|emboss/i.test(alloc.component_name);
                               const assignedItem = items.find((i) => i.id === alloc.stock_item_id);
@@ -1255,9 +1317,29 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                                     {idx + 1}
                                   </td>
 
-                                  {/* 2. Component Name */}
-                                  <td className="py-2 px-3 font-semibold text-slate-900">
-                                    {alloc.component_name}
+                                  {/* 2. Component Name with In-Row '+' Duplicate Button */}
+                                  <td className="py-2 px-3">
+                                    <div className="flex items-center justify-between gap-1.5">
+                                      <span className="font-semibold text-slate-900">{alloc.component_name}</span>
+                                      {canPerform('manage_orders') && order.status !== 'completed' && (
+                                        <button
+                                          type="button"
+                                          disabled={duplicatingAllocId === alloc.id}
+                                          onClick={() => handleDuplicateComponentRow(order.id, alloc)}
+                                          className={`shrink-0 p-1 rounded-md text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 border border-transparent hover:border-indigo-200 transition-colors shadow-2xs cursor-pointer group ${
+                                            duplicatingAllocId === alloc.id ? 'opacity-50 cursor-wait' : ''
+                                          }`}
+                                          title={`Add another ${alloc.component_name} line`}
+                                          aria-label={`Add another ${alloc.component_name} line`}
+                                        >
+                                          <Plus
+                                            className={`h-3.5 w-3.5 transition-transform ${
+                                              duplicatingAllocId === alloc.id ? 'animate-spin' : 'group-hover:scale-110'
+                                            }`}
+                                          />
+                                        </button>
+                                      )}
+                                    </div>
                                   </td>
 
                                   {/* 3. Source Toggle (Vendor vs Stock) */}
@@ -1486,9 +1568,9 @@ export function OrdersView({ initialOrderId, initialClientId, onViewChange }: Or
                                     )}
                                   </td>
 
-                                  {/* 11. Delete Custom Row */}
+                                  {/* 11. Delete Row Action */}
                                   <td className="py-2 px-2 text-center">
-                                    {alloc.sort_order > 10 && canPerform('manage_orders') && (
+                                    {isAllocationDeletable(alloc, allocations) && canPerform('manage_orders') && order.status !== 'completed' && (
                                       <button
                                         type="button"
                                         disabled={isReceived}

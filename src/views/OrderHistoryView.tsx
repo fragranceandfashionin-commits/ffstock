@@ -39,6 +39,7 @@ import type { View } from '@/lib/types';
 import type { NavigationContext } from '@/components/AppShell';
 import { getErrorMessage, formatDate } from '@/lib/utils';
 import { useAuth } from '@/lib/auth';
+import { sortAllocations } from './orders/orderBomUtils';
 
 export type OrderHistoryViewProps = {
   initialClientId?: string;
@@ -277,7 +278,7 @@ export function OrderHistoryView({ initialClientId, onViewChange }: OrderHistory
               </tr>
             </thead>
             <tbody>
-              {printOrder.material_allocations?.map((alloc, idx) => (
+              {sortAllocations(printOrder.material_allocations ?? []).map((alloc, idx) => (
                 <tr key={alloc.id} className="border-b border-slate-200">
                   <td className="p-2 border-r border-slate-200 text-center font-mono">{idx + 1}</td>
                   <td className="p-2 border-r border-slate-200 font-semibold">{alloc.component_name}</td>
@@ -586,7 +587,7 @@ export function OrderHistoryView({ initialClientId, onViewChange }: OrderHistory
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {allocations.map((alloc, idx) => (
+                          {sortAllocations(allocations).map((alloc, idx) => (
                             <tr key={alloc.id}>
                               <td className="py-2 px-3 text-center text-slate-400 font-mono">
                                 {idx + 1}

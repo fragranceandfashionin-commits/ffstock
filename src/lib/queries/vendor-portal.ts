@@ -336,6 +336,7 @@ export async function fetchRecentlyReceivedAllocations(
 export async function deleteAllocation(id: string): Promise<void> {
   const { error } = await supabase.from('material_allocations').delete().eq('id', id);
   if (error) throw error;
+  invalidateCache('clients');
 }
 
 export async function addAllocationRow(payload: {
@@ -343,6 +344,11 @@ export async function addAllocationRow(payload: {
   component_name: string;
   sort_order?: number;
   source?: 'vendor' | 'stock';
+  qty?: number;
+  description?: string | null;
+  location?: string | null;
+  stock_item_id?: string | null;
+  vendor_id?: string | null;
 }): Promise<MaterialAllocation> {
   const { data, error } = await supabase
     .from('material_allocations')
@@ -352,10 +358,16 @@ export async function addAllocationRow(payload: {
       sort_order: payload.sort_order ?? 99,
       source: payload.source || 'vendor',
       status: 'pending',
+      qty: payload.qty ?? 0,
+      description: payload.description?.trim() || null,
+      location: payload.location?.trim() || 'Raw Stock Bay A',
+      stock_item_id: payload.stock_item_id || null,
+      vendor_id: payload.vendor_id || null,
     })
     .select()
     .single();
   if (error) throw error;
+  invalidateCache('clients');
   return data as MaterialAllocation;
 }
 

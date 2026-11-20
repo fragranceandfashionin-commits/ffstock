@@ -32,3 +32,43 @@ export function getSpecificationText(alloc: MaterialAllocation): string {
   }
   return (alloc.description || '').trim();
 }
+
+/**
+ * Deterministic compound comparator for Bill of Materials (BOM) allocations.
+ * Groups duplicate component lines contiguously under their parent component
+ * by sort_order ascending, breaking ties deterministically with created_at ascending.
+ */
+export function sortAllocations(allocations: MaterialAllocation[]): MaterialAllocation[] {
+  return [...allocations].sort((a, b) => {
+    if (a.sort_order !== b.sort_order) {
+      return a.sort_order - b.sort_order;
+    }
+    const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+    return timeA - timeB;
+  });
+}
+
+/**
+ * Evaluates whether a BOM component line is eligible for deletion.
+ * - Received allocations cannot be deleted (must revert to pending first).
+ * - Ad-hoc custom components (sort_order > 10) can be deleted if pending.
+ * - Duplicated canonical components (count > 1 for same component_name) can be deleted if pending.
+ * - Solitary base canonical components (count === 1) are protected from accidental deletion.
+ */
+export function isAllocationDeletable(
+  alloc: MaterialAllocation,
+  allAllocations: MaterialAllocation[]
+): boolean {
+  if (alloc.status === 'received') return false;
+
+  // Custom rows (sort_order > 10) are always deletable when pending
+  if (alloc.sort_order > 10) return true;
+
+  // For canonical rows, allow deletion only if there is more than one row with this component_name
+  const duplicateCount = allAllocations.filter(
+    (a) => a.component_name.toLowerCase().trim() === alloc.component_name.toLowerCase().trim()
+  ).length;
+
+  return duplicateCount > 1;
+}
